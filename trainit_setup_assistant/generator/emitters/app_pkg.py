@@ -81,6 +81,19 @@ class AppEmitter(Emitter):
                           'app/mock_gripper_action_server.py.j2',
                           gripper_action=gripper_action)
 
+        # --- README.md (TEMPLATE): how to build/run per mode + where to tune DOF ---
+        # Emitted for the MVP scene-loader flow; the from-scratch/golden path is kept
+        # byte-stable (no README) until the golden is regenerated.
+        if robot.base_moveit_config_path:
+            ctx.render_to(f'{pkg}/README.md', 'app/README.md.j2',
+                          robot_name=robot.robot_name, app_type=app.type.value,
+                          app_package=pkg,
+                          moveit_config_package=project.bundle.moveit_config_package,
+                          description_package=project.bundle.description_package,
+                          tree_filename=template.tree_filename(project),
+                          default_mode=dep.default_mode,
+                          default_planner_mode=app.global_planner_mode.value)
+
         # --- Groot2 project (GENERATE metadata) ---
         groot_name = f'{robot.robot_name}_{app.type.value}'
         btproj_text = ctx.render('app/btproj.j2',

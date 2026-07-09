@@ -129,3 +129,25 @@ class Payload(BaseModel):
 class SceneSpec(BaseModel):
     objects: List[SceneObject] = Field(default_factory=list)
     payload: Optional[Payload] = None
+    # --- scene-loader (scene_manager_node) runtime params ---
+    # The gripper-close signal that triggers attaching grasp_target objects to the tool.
+    gripper_cmd_topic: str = '/isaac_gripper_cmd'
+    attach_link: str = 'tcp'                    # tool link grasp targets attach to
+    # links near the tool allowed to touch an attached object (self-collision relief).
+    touch_links: List[str] = Field(default_factory=lambda: ['tcp'])
+    # default planning-collision check for held objects (per-move nodes override it).
+    attached_collision_check: bool = False
+    # 0 = load once (re-asserting every tick churns the scene, disrupting Plan&Execute).
+    force_republish_hz: float = 0.0
+
+    def grasp_target_ids(self) -> List[str]:
+        """Ids of dynamic objects the gripper grasps (attach_object_ids)."""
+        return [o.id for o in self.objects if o.is_grasp_target()]
+
+    def release_policy(self):
+        """The freeze|gravity policy for released objects (first grasp target; freeze)."""
+        from .enums import ReleasePolicy
+        for o in self.objects:
+            if o.is_grasp_target():
+                return o.release_policy
+        return ReleasePolicy.FREEZE

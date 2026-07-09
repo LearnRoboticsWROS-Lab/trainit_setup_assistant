@@ -88,16 +88,28 @@ class PickAndPlace(ApplicationTemplate):
         out.append(f'      <Log message="{label}: start"/>')
         out.append('')
 
-        for obj in project.scene.objects:
-            if obj.is_planning_collision():
-                out.append(
-                    f'      <AddCollisionObject id="{obj.id}" frame="{obj.frame}" '
-                    f'dims="{{{scene_dims_key(obj.id)}}}" '
-                    f'position="{{{scene_pos_key(obj.id)}}}"/>'
-                )
-        out.append('')
+        # When a scene loader is used (Step 2 base config -> scene_manager_node loads
+        # config/scene.yaml at startup), the obstacles are already in the planning
+        # scene — the tree must NOT re-add them. Otherwise (from-scratch path) add the
+        # static/actuated collision objects in the tree as before.
+        uses_scene_loader = bool(project.robot.base_moveit_config_path)
+        if not uses_scene_loader:
+            for obj in project.scene.objects:
+                if obj.is_planning_collision():
+                    out.append(
+                        f'      <AddCollisionObject id="{obj.id}" frame="{obj.frame}" '
+                        f'dims="{{{scene_dims_key(obj.id)}}}" '
+                        f'position="{{{scene_pos_key(obj.id)}}}"/>'
+                    )
+            out.append('')
 
         for wp_name in seq:
+            # per-move planning-collision check for held objects (SetBool service): ON
+            # before a transfer that must route the payload around the static meshes.
+            seg = app.segment_for(wp_name)
+            if seg is not None and seg.attached_collision_check is not None:
+                val = 'true' if seg.attached_collision_check else 'false'
+                out.append(f'      <SetAttachedCollisionCheck value="{val}"/>')
             out.append(f'      <MoveWaypoint waypoint="{wp_name}"/>')
             for action in app.actions_at(wp_name):
                 out.append('      ' + self._render_action(action, project))
@@ -120,6 +132,13 @@ class PickAndPlace(ApplicationTemplate):
         if action.kind is ToolActionKind.GRASP:
             return '<CloseGripper/>'
         if action.kind is ToolActionKind.RELEASE:
+            # with a scene loader (Isaac flow), tell the manipulation adapter what the
+            # released object does (freeze|gravity) BEFORE opening the grip. Without one
+            # (from-scratch path) a plain OpenGripper — no Isaac adapter to signal.
+            if project.robot.base_moveit_config_path:
+                policy = project.scene.release_policy().value
+                return (f'<SetReleasePolicy policy="{policy}"/>\n'
+                        f'      <OpenGripper/>')
             return '<OpenGripper/>'
         if action.kind is ToolActionKind.ATTACH:
             offset = _semicolon(payload.attach_offset) if payload else '0;0;0'

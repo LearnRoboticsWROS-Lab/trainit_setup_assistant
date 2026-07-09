@@ -3,8 +3,10 @@
 from .enums import (
     AppType,
     GripperKind,
+    IsaacGraspMethod,
     MotionType,
     PlannerId,
+    ReleasePolicy,
     SceneObjectCategory,
     SceneObjectSource,
     ShapeType,
@@ -68,6 +70,8 @@ __all__ = [
     'SceneObjectSource',
     'SceneObjectCategory',
     'ShapeType',
+    'ReleasePolicy',
+    'IsaacGraspMethod',
     'WaypointRole',
     'ToolActionKind',
     # io

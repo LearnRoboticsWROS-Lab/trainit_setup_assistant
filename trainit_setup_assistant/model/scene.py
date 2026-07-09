@@ -16,7 +16,13 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from .enums import SceneObjectCategory, SceneObjectSource, ShapeType
+from .enums import (
+    IsaacGraspMethod,
+    ReleasePolicy,
+    SceneObjectCategory,
+    SceneObjectSource,
+    ShapeType,
+)
 
 
 class SceneObject(BaseModel):
@@ -24,6 +30,9 @@ class SceneObject(BaseModel):
     source: SceneObjectSource = SceneObjectSource.PRIMITIVE
     shape: ShapeType = ShapeType.BOX
     dims: List[float] = Field(default_factory=lambda: [0.1, 0.1, 0.1])  # box: [x,y,z]
+    # package:// STL when shape is MESH (loaded by scene_manager_node; not AABB'd).
+    mesh_resource: Optional[str] = None
+    scale: List[float] = Field(default_factory=lambda: [1.0, 1.0, 1.0])  # mesh scale
     frame: str = 'base_link'
     position: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
     orientation: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0, 1.0])
@@ -31,6 +40,21 @@ class SceneObject(BaseModel):
     category: SceneObjectCategory = SceneObjectCategory.STATIC
     dynamic: bool = False    # True => manipulated => excluded from collision planning
     collision: bool = True   # static & collision => emitted as AddCollisionObject
+    # --- per-dynamic-object attributes (meaningful only when category is DYNAMIC) ---
+    # grasp_target: the gripper grasps THIS object -> it attaches to the tool link on
+    #   close (AttachedCollisionObject in RViz; scene_manager_node attach_object_ids).
+    #   A dynamic object that is NOT a grasp target (e.g. the crate) is collision-
+    #   allowed but never attached.
+    grasp_target: bool = False
+    # release_policy: Isaac behaviour when the grip opens (freeze | gravity; never float).
+    release_policy: ReleasePolicy = ReleasePolicy.FREEZE
+    # isaac_grasp_method: which Isaac physics realises the grasp (metadata; the Script
+    #   Node itself is hand-authored in the *_isaac package).
+    isaac_grasp_method: IsaacGraspMethod = IsaacGraspMethod.FIXED_JOINT
+    # touchable_collision_ids: static/actuated mesh ids this held object MAY contact
+    #   while grasped (e.g. the prewash mobile part) -> the ACM leaves those pairs
+    #   allowed even when attached_collision_check is ON.
+    touchable_collision_ids: List[str] = Field(default_factory=list)
 
     @model_validator(mode='before')
     @classmethod
@@ -64,8 +88,16 @@ class SceneObject(BaseModel):
         """True => URDF station moved by an adapter (checked collision today)."""
         return self.category is SceneObjectCategory.ACTUATED
 
+    def is_grasp_target(self) -> bool:
+        """True => dynamic object the gripper grasps (attaches to the tool on close)."""
+        return self.is_dynamic() and self.grasp_target
+
     def is_box(self) -> bool:
         return self.shape is ShapeType.BOX
+
+    def is_mesh(self) -> bool:
+        """True => a package:// mesh loaded by the scene loader (not AABB'd in the tree)."""
+        return self.shape is ShapeType.MESH
 
     def aabb_dims(self) -> list:
         """Box [x,y,z] for the engine (box-only). Non-box shapes -> their AABB.

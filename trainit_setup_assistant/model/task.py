@@ -39,6 +39,12 @@ class MotionSegment(BaseModel):
     speed: int = Field(default=50, ge=1, le=100)
     aux: Optional[List[float]] = None          # circ only: auxiliary point [x,y,z]
     aux_is_center: bool = False                # circ only
+    # Per-move planning-collision check for GRASPED objects: when the gripper holds
+    # dynamic objects, ON => they are checked vs the static/actuated meshes (the planner
+    # routes the held payload around them, e.g. into the prewash); OFF => transparent.
+    # None => inherit the current runtime state (scene default). Emitted as a
+    # SetAttachedCollisionCheck BT node before this move when not None.
+    attached_collision_check: Optional[bool] = None
 
 
 class ToolAction(BaseModel):

@@ -162,5 +162,44 @@ def test_import_classify_assigns_dynamic():
         assert by['machine'].category is SceneObjectCategory.STATIC     # default
 
 
+# ---- MVP v1: mesh objects + per-dynamic attributes + per-move flag ----
+def test_mesh_object_and_dynamic_attributes_roundtrip():
+    from trainit_setup_assistant.model import (
+        IsaacGraspMethod, ReleasePolicy, SceneObject,
+    )
+    # a grasp-target bottle: dynamic mesh that attaches, freezes on release
+    bottle = SceneObject(id='bottle_0', shape='mesh',
+                         mesh_resource='package://p/bottle.stl', category='dynamic',
+                         grasp_target=True, release_policy='freeze',
+                         touchable_collision_ids=['prewash_station'])
+    assert bottle.is_mesh() and bottle.is_dynamic() and bottle.is_grasp_target()
+    assert not bottle.is_box()
+    assert bottle.release_policy is ReleasePolicy.FREEZE
+    assert bottle.isaac_grasp_method is IsaacGraspMethod.FIXED_JOINT   # default
+    assert bottle.touchable_collision_ids == ['prewash_station']
+    assert SceneObject.model_validate(bottle.model_dump(mode='json')) == bottle
+
+    # the crate: dynamic (collision-allowed) but NOT a grasp target -> never attached
+    crate = SceneObject(id='crate', shape='mesh',
+                        mesh_resource='package://p/crate.stl', category='dynamic')
+    assert crate.is_dynamic() and not crate.is_grasp_target()
+
+    # a static mesh (machine) is a CHECKED collision object
+    machine = SceneObject(id='big1500', shape='mesh',
+                          mesh_resource='package://p/machine.stl', category='static')
+    assert machine.is_planning_collision() and not machine.is_dynamic()
+
+
+def test_segment_attached_collision_check_flag():
+    from trainit_setup_assistant.model import MotionSegment
+    on = MotionSegment(to_waypoint='approach_prewash', attached_collision_check=True)
+    off = MotionSegment(to_waypoint='pick', attached_collision_check=False)
+    default = MotionSegment(to_waypoint='home')
+    assert on.attached_collision_check is True
+    assert off.attached_collision_check is False
+    assert default.attached_collision_check is None   # inherit runtime state
+    assert MotionSegment.model_validate(on.model_dump()) == on
+
+
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))

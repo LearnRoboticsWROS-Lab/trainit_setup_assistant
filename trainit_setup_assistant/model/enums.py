@@ -65,12 +65,20 @@ class SceneObjectSource(StrEnum):
 
 
 class ShapeType(StrEnum):
-    """Primitive shape. The engine plans BOX only today; others are emitted as AABB."""
+    """Collision shape.
+
+    The scene loader (``scene_manager_node``) plans ``box``/``sphere``/``cylinder``
+    AND ``mesh`` (``package://…stl`` via ``createMeshFromResource``). The in-tree
+    ``AddCollisionObject`` BT node is BOX-only, so non-box primitives added *in the
+    tree* are emitted as their AABB; ``mesh`` objects go through the scene loader
+    (``scene.yaml``), not the tree.
+    """
 
     BOX = 'box'
     SPHERE = 'sphere'
     CYLINDER = 'cylinder'
     CONE = 'cone'
+    MESH = 'mesh'      # package:// STL, loaded by scene_manager_node (not AABB'd)
 
 
 class SceneObjectCategory(StrEnum):
@@ -92,6 +100,32 @@ class SceneObjectCategory(StrEnum):
     STATIC = 'static'
     ACTUATED = 'actuated'
     DYNAMIC = 'dynamic'
+
+
+class ReleasePolicy(StrEnum):
+    """What a grasped dynamic object does in Isaac when the grip is released.
+
+    FREEZE  : the object stays immobile where it is (kinematic) — models a second
+              actuator (e.g. a PLC-driven clamp) taking over without simulating it.
+    GRAVITY : the object becomes dynamic and falls under gravity.
+    (There is no FLOAT: leaving a body gravity-free in mid-air is physically absurd.)
+    """
+
+    FREEZE = 'freeze'
+    GRAVITY = 'gravity'
+
+
+class IsaacGraspMethod(StrEnum):
+    """Which Isaac-side physics realises the grasp (metadata; the actual Script Node
+    lives hand-authored in the ``*_isaac`` package — see the generalized adapter).
+
+    FIXED_JOINT    : one rigid FixedJoint per object EE<->object (v14) — deterministic,
+                     no oscillation; the method that stabilised the 20 bottles.
+    SURFACE_GRIPPER : IsaacSurfaceGripper suction with N attachment points (compliant).
+    """
+
+    FIXED_JOINT = 'fixed_joint'
+    SURFACE_GRIPPER = 'surface_gripper'
 
 
 class WaypointRole(StrEnum):

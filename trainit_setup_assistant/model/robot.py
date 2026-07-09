@@ -174,3 +174,10 @@ class RobotSpec(BaseModel):
     disable_collisions: Optional[List[DisableCollisionSpec]] = None
     # Alternative fallback: a ready-made SRDF supplied by the user (skips SRDF gen).
     source_srdf: Optional[str] = None
+    # The hand-made BASE moveit_config (adaptation-sprint deliverable) that already
+    # provides the mock/isaac/real bringup + bridge wiring. When set, the standalone
+    # scene+planner emitter COPIES this package's config/ verbatim (preserving the
+    # tuned mode-switch + SRDF waypoints) instead of templating from the model, so the
+    # generated intermediate/bundle config inherits real/isaac/mock for free.
+    base_moveit_config_package: Optional[str] = None   # ROS pkg name, e.g. fr30_eef_moveit_config
+    base_moveit_config_path: Optional[str] = None      # abs path to that package (src or share)

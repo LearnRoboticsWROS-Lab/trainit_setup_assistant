@@ -301,5 +301,76 @@ def test_wizard_app_pages_build_app(qapp):
         assert '<CloseGripper/>' in tree and 'AttachObject' in tree
 
 
+FR30_BASE = ('/home/fra/BIG1500_tending_nesting/src/big1500_digital_twin/'
+             'fr30_eef_moveit_config')
+
+
+@pytest.mark.skipif(not os.path.isdir(FR30_BASE), reason='fr30_eef base not present')
+def test_wizard_mvp_flow_offscreen(qapp):
+    """Phase 4b: drive the MVP wizard — base config -> scene (mesh + grasp target) ->
+    waypoints (per-move attached-check) -> generate a bundle with the flag nodes."""
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    wiz = SetupWizard(ctrl)
+
+    # Step 2: base config (bootstraps + auto-configures the robot)
+    wiz.base_page.project_name.setText('big1500')
+    wiz.base_page.base_pkg.setText('fr30_eef_moveit_config')
+    wiz.base_page.base_path.setText(FR30_BASE)
+    assert wiz.base_page.validatePage()
+    assert ctrl.project.robot.robot_name == 'fr30_eef'
+    assert 'pre_pick20' in ctrl.robot_summary()['named_states']
+
+    # Step 1/8: scene — a static mesh + a dynamic grasp-target mesh
+    sp = wiz.scene_page
+    sp.obj_id.setText('bottle_0_0')
+    sp.shape.setCurrentText('mesh')
+    sp.mesh_resource.setText('package://big1500_isaac/meshes/dynamic/bottle_50cl.stl')
+    sp.position.setText('0.5, 0.2, 0.7')
+    sp.category.setCurrentText('dynamic')
+    sp.grasp_target.setChecked(True)
+    sp.release_policy.setCurrentText('freeze')
+    sp.add_object()
+    bottle = next(o for o in ctrl.project.scene.objects if o.id == 'bottle_0_0')
+    assert bottle.is_mesh() and bottle.is_grasp_target()
+
+    # Step 7: application
+    wiz.application_page.app_type.setCurrentText('pick_and_place')
+    wiz.application_page.planner.setCurrentText('pilz')
+    wiz.application_page.payload_id.setText('')          # no payload -> no attach action
+    assert wiz.application_page.validatePage()
+
+    # Step 8: waypoints (named SRDF states) with a per-move attached-check ON
+    wp = wiz.waypoints_page
+    for name, acc in [('pick_20', 'off'), ('approach_prewash', 'on')]:
+        wp.move_name.setText(name)
+        wp.target_mode.setCurrentText('named')
+        wp.named.setText(name)
+        wp.motion.setCurrentText('free')
+        wp.move_planner.setCurrentText('ompl')
+        wp.attached_check.setCurrentText(acc)
+        if name == 'pick_20':
+            wp.tool_cbs['grasp'].setChecked(True)
+        else:
+            wp.tool_cbs['grasp'].setChecked(False)
+            wp.tool_cbs['release'].setChecked(True)
+        wp.add_move()
+    seg = ctrl.project.application.segment_for('approach_prewash')
+    assert seg.attached_collision_check is True
+
+    # Step 9: generate the bundle (generate_page derives bundle names from the project
+    # name via BundleSpec.from_prefix -> app='big1500', config='big1500_moveit_config')
+    with tempfile.TemporaryDirectory() as tmp:
+        wiz.generate_page.initializePage()
+        wiz.generate_page.project_name.setText('big1500')
+        wiz.generate_page.output_dir.setText(tmp)
+        wiz.generate_page.generate()
+        tree = open(os.path.join(tmp, 'big1500', 'bt_trees', 'pick_place.xml')).read()
+        assert '<SetAttachedCollisionCheck value="true"/>' in tree
+        assert '<SetReleasePolicy policy="freeze"/>' in tree
+        assert os.path.isfile(os.path.join(
+            tmp, 'big1500_moveit_config', 'config', 'fr30_eef.srdf'))
+
+
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))

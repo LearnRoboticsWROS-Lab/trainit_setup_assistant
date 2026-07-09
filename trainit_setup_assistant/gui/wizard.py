@@ -389,10 +389,14 @@ class ScenePage(QWizardPage):
         self.obj_id = QLineEdit('table')
         form.addRow('Object id', self.obj_id)
         self.shape = QComboBox()
-        self.shape.addItems(['box', 'sphere', 'cylinder', 'cone'])
+        self.shape.addItems(['box', 'sphere', 'cylinder', 'cone', 'mesh'])
         form.addRow('Shape', self.shape)
         self.dims = QLineEdit('2.0, 2.0, 0.10')
         form.addRow('Dims (box x,y,z | sphere r | cyl/cone r,h)', self.dims)
+        # mesh objects carry a package:// STL loaded by the scene loader (not AABB'd)
+        self.mesh_resource = QLineEdit()
+        self.mesh_resource.setPlaceholderText('shape=mesh: package://<pkg>/meshes/…stl')
+        form.addRow('Mesh resource (mesh)', self.mesh_resource)
         self.position = QLineEdit('0.0, 0.0, -0.08')
         form.addRow('Position (x,y,z)', self.position)
         # cell role: static | actuated (URDF, adapter-driven) | dynamic (manipulated)
@@ -400,6 +404,13 @@ class ScenePage(QWizardPage):
         self.category.addItems(['static', 'actuated', 'dynamic'])
         self.category.currentTextChanged.connect(self._category_changed)
         form.addRow('Category', self.category)
+        # dynamic-object grasp handling (Step 8): does the gripper grasp THIS object
+        # (attach on close), and what does it do on release (freeze | gravity)?
+        self.grasp_target = QCheckBox('grasp target (attaches to the tool on gripper close)')
+        form.addRow('Grasp', self.grasp_target)
+        self.release_policy = QComboBox()
+        self.release_policy.addItems(['freeze', 'gravity'])
+        form.addRow('On release (Isaac)', self.release_policy)
         # USD import alignment: the robot's prim path in the USD, so cell-world coords
         # become base-relative. Blank => auto-detect by robot name.
         self.usd_base_prim = QLineEdit()
@@ -440,10 +451,13 @@ class ScenePage(QWizardPage):
         self.obj_id.setText(obj.id)
         self.shape.setCurrentText(obj.shape.value)
         self.dims.setText(', '.join(str(d) for d in obj.dims))
+        self.mesh_resource.setText(obj.mesh_resource or '')
         self.position.setText(', '.join(str(p) for p in obj.position))
         self.category.blockSignals(True)       # don't fire _category_changed on populate
         self.category.setCurrentText(obj.category.value)
         self.category.blockSignals(False)
+        self.grasp_target.setChecked(obj.grasp_target)
+        self.release_policy.setCurrentText(obj.release_policy.value)
 
     def _category_changed(self, category):  # pragma: no cover - needs a display
         """Changing the category applies immediately to the object named in the form."""
@@ -464,13 +478,19 @@ class ScenePage(QWizardPage):
         oid = self.obj_id.text().strip()
         if not oid:
             return
+        shape = self.shape.currentText()
         try:
-            dims = _parse_floats(self.dims.text())
+            dims = _parse_floats(self.dims.text()) if self.dims.text().strip() else [0.1, 0.1, 0.1]
             position = _parse_floats(self.position.text())
         except ValueError:
             return
-        self.ctrl.add_scene_object(oid, dims, position, shape=self.shape.currentText(),
-                                   category=self.category.currentText())
+        cat = self.category.currentText()
+        is_dyn = (cat == 'dynamic')
+        self.ctrl.add_scene_object(
+            oid, dims, position, shape=shape, category=cat,
+            mesh_resource=(self.mesh_resource.text().strip() or None) if shape == 'mesh' else None,
+            grasp_target=(is_dyn and self.grasp_target.isChecked()),
+            release_policy=self.release_policy.currentText())
         self._refresh()
 
     def remove_selected(self):
@@ -572,6 +592,12 @@ class WaypointsPage(QWizardPage):
         self.role.addItems(['generic', 'home', 'pre_pick', 'pick', 'post_pick',
                             'pre_place', 'place', 'post_place'])
         form.addRow('Role', self.role)
+        # per-move planning-collision check for GRASPED objects: ON before a transfer
+        # that must route the held payload around the static meshes (e.g. into the
+        # prewash); OFF near the pick (payload on the belt); inherit = leave as-is.
+        self.attached_check = QComboBox()
+        self.attached_check.addItems(['inherit', 'on', 'off'])
+        form.addRow('Attached collision check', self.attached_check)
         # CIRC only: an auxiliary point (a point on the arc, or the circle centre)
         self.aux = QLineEdit()
         self.aux.setPlaceholderText('circ only: x, y, z')
@@ -608,10 +634,12 @@ class WaypointsPage(QWizardPage):
         name = self.move_name.text().strip()
         if not name:
             return
+        acc = {'inherit': None, 'on': True, 'off': False}[self.attached_check.currentText()]
         kwargs = dict(name=name, motion=self.motion.currentText(),
                       planner=self.move_planner.currentText() or None,
                       speed=self.speed.value(), role=self.role.currentText(),
-                      allowed_start_tolerance=self.start_tol.value())
+                      allowed_start_tolerance=self.start_tol.value(),
+                      attached_collision_check=acc)
         try:
             if self.target_mode.currentText() == 'named':
                 kwargs['named'] = self.named.text().strip()
@@ -642,23 +670,193 @@ class WaypointsPage(QWizardPage):
         return True
 
 
+class BaseConfigPage(QWizardPage):
+    """MVP entry (Steps 1-2): start a project + load the hand-made BASE moveit_config,
+    which auto-configures the robot (group/frames/named-states/gripper/controllers) and
+    switches generation to the standalone copy-base flow."""
+
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('Step 2 — Project & base MoveIt config')
+        self.setSubTitle('Open an existing project.yaml, OR load your hand-made base '
+                         'moveit_config (the adaptation-sprint deliverable). The base '
+                         'gives the robot, SRDF waypoints, controllers and the '
+                         'mock/isaac/real bring-up — all extracted automatically.')
+        form = QFormLayout(self)
+        self.project_file = QLineEdit()
+        pbrowse = QPushButton('Browse…')
+        pbrowse.clicked.connect(self._browse_project)
+        prow = QHBoxLayout(); prow.addWidget(self.project_file); prow.addWidget(pbrowse)
+        form.addRow('Open project.yaml', prow)
+        self.project_name = QLineEdit('big1500')
+        form.addRow('— or new — Project name', self.project_name)
+        self.base_pkg = QLineEdit('fr30_eef_moveit_config')
+        form.addRow('Base moveit_config package', self.base_pkg)
+        self.base_path = QLineEdit()
+        bbrowse = QPushButton('Browse…')
+        bbrowse.clicked.connect(self._browse_base)
+        brow = QHBoxLayout(); brow.addWidget(self.base_path); brow.addWidget(bbrowse)
+        form.addRow('Base package path', brow)
+        self.summary = QLabel('')
+        self.summary.setWordWrap(True)
+        form.addRow('Loaded', self.summary)
+
+    def _browse_project(self):  # pragma: no cover - needs a display
+        path, _ = QFileDialog.getOpenFileName(self, 'Open project.yaml', '', 'project (*.yaml *.yml)')
+        if path:
+            self.project_file.setText(path)
+
+    def _browse_base(self):  # pragma: no cover - needs a display
+        path = QFileDialog.getExistingDirectory(self, 'Base moveit_config package dir')
+        if path:
+            self.base_path.setText(path)
+
+    def validatePage(self) -> bool:
+        try:
+            if self.project_file.text().strip():
+                self.ctrl.open_project(_expand_path(self.project_file.text()))
+            else:
+                self.ctrl.new_blank_project(self.project_name.text().strip() or 'robot_app')
+                info = self.ctrl.load_base_moveit_config(
+                    self.base_pkg.text().strip(), _expand_path(self.base_path.text()))
+                self.summary.setText(
+                    f"{info['robot_name']}: group={info['group']}, "
+                    f"named states={len(info['named_states'])}, "
+                    f"arm={info['arm_controller']}, gripper={info['gripper_controller']}")
+                return True
+        except Exception as exc:  # noqa: BLE001
+            self.summary.setText(f'ERROR: {exc}')
+            return False
+        s = self.ctrl.robot_summary()
+        self.summary.setText(f"opened project: {s['robot_name']} group={s['group']}")
+        return True
+
+
+class GenerateConfigPage(QWizardPage):
+    """Step 3-4: generate the intermediate scene+planner config (to configure against a
+    faithful RViz) and show the build snippet."""
+
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('Step 3-4 — Generate scene+planner config')
+        self.setSubTitle('Emit <robot>_scene_loader_moveit_config (base + planners + '
+                         'scene.yaml), then build it. Configure the application against it.')
+        form = QFormLayout(self)
+        self.out_dir = QLineEdit()
+        browse = QPushButton('Browse…')
+        browse.clicked.connect(self._browse)
+        row = QHBoxLayout(); row.addWidget(self.out_dir); row.addWidget(browse)
+        form.addRow('Output dir (your src/)', row)
+        self.pkg_name = QLineEdit()
+        form.addRow('Config package name', self.pkg_name)
+        gen = QPushButton('Generate scene+planner config')
+        gen.clicked.connect(self.generate)
+        form.addRow(gen)
+        self.result = QTextEdit(); self.result.setReadOnly(True)
+        form.addRow('Result', self.result)
+
+    def initializePage(self):
+        try:
+            self.pkg_name.setText(self.ctrl.scene_loader_package_name())
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _browse(self):  # pragma: no cover - needs a display
+        path = QFileDialog.getExistingDirectory(self, 'Output directory (src/)')
+        if path:
+            self.out_dir.setText(path)
+
+    def generate(self):
+        out = _expand_path(self.out_dir.text())
+        pkg = self.pkg_name.text().strip() or None
+        if not out:
+            self.result.setPlainText('ERROR: set an output directory (your ros2_ws/src)')
+            return
+        try:
+            manifest = self.ctrl.generate_scene_loader_config(out, pkg)
+        except Exception as exc:  # noqa: BLE001
+            self.result.setPlainText(f'ERROR: {exc}')
+            return
+        pkg = pkg or self.ctrl.scene_loader_package_name()
+        snippet = self.ctrl.build_snippet(pkg, ws_root=os.path.dirname(out.rstrip('/')) or '<ros2_ws>')
+        lines = [f"Generated {manifest.as_dict()['file_count']} files -> {out}/{pkg}", '',
+                 'Build it, then bring it up to configure the application:', snippet]
+        for w in manifest.as_dict().get('warnings', []):
+            lines.append(f'  warn: {w}')
+        self.result.setPlainText('\n'.join(lines))
+
+    def validatePage(self) -> bool:
+        return True
+
+
+class ModeBringupPage(QWizardPage):
+    """Step 5-6: choose the mode and show the guided bring-up procedure."""
+
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('Step 5-6 — Mode & bring-up')
+        self.setSubTitle('Pick how you will run, then follow the procedure to bring up '
+                         'the cell and (later) run the generated application.')
+        form = QFormLayout(self)
+        self.mode = QComboBox()
+        self.mode.addItems(['isaac', 'mock', 'real'])
+        self.mode.currentTextChanged.connect(self._refresh)
+        form.addRow('Mode', self.mode)
+        self.usd_path = QLineEdit()
+        self.usd_path.setPlaceholderText('isaac: path to your cell .usd (optional)')
+        form.addRow('USD scene (isaac)', self.usd_path)
+        self.procedure = QTextEdit(); self.procedure.setReadOnly(True)
+        form.addRow('Procedure', self.procedure)
+
+    def initializePage(self):
+        self._refresh()
+
+    def _refresh(self, *_):
+        try:
+            cfg = self.ctrl.scene_loader_package_name()
+            app = self.ctrl.project.bundle.app_package
+        except Exception:  # noqa: BLE001
+            cfg, app = '<config>', '<app>'
+        proc = self.ctrl.bringup_procedure(
+            self.mode.currentText(), cfg, app_package=app,
+            usd_path=self.usd_path.text().strip() or None)
+        self.procedure.setPlainText(proc)
+
+    def validatePage(self) -> bool:
+        try:
+            self.ctrl.set_mode(self.mode.currentText())
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+
+
 class SetupWizard(QWizard):
     def __init__(self, controller: Optional[AssistantController] = None):
         super().__init__()
         self.controller = controller or AssistantController()
         self._live = None
         self.setWindowTitle('TrainIt Setup Assistant')
-        self.load_page = LoadRobotPage(self.controller)
-        self.group_page = GroupFramesPage(self.controller)
-        self.controllers_page = ControllersPage(self.controller)
-        self.states_page = NamedStatesPage(self.controller)
+        # MVP entry: load the hand-made base config (auto-configures the robot).
+        self.base_page = BaseConfigPage(self.controller)
+        self.gen_config_page = GenerateConfigPage(self.controller)
+        self.mode_page = ModeBringupPage(self.controller)
         self.scene_page = ScenePage(self.controller)
         self.application_page = ApplicationPage(self.controller)
         self.waypoints_page = WaypointsPage(self.controller)
         self.generate_page = GeneratePage(self.controller)
-        for page in (self.load_page, self.group_page, self.controllers_page,
-                     self.states_page, self.scene_page,
-                     self.application_page, self.waypoints_page, self.generate_page):
+        # From-scratch / advanced pages: constructed (used by the CLI + tests, and as
+        # manual overrides of the base-derived values), not in the default MVP flow.
+        self.load_page = LoadRobotPage(self.controller)
+        self.group_page = GroupFramesPage(self.controller)
+        self.controllers_page = ControllersPage(self.controller)
+        self.states_page = NamedStatesPage(self.controller)
+        # The two-phase MVP flow (Phase A: build the faithful env; Phase B: the app).
+        for page in (self.base_page, self.scene_page, self.gen_config_page,
+                     self.mode_page, self.application_page, self.waypoints_page,
+                     self.generate_page):
             self.addPage(page)
         self._scene_pub = None
 

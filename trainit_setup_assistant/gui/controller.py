@@ -59,6 +59,22 @@ class AssistantController:
         self.project = load_project(path)
         return self.project
 
+    def new_blank_project(self, project_name: str = 'robot_app') -> CanonicalProject:
+        """Bootstrap a minimal project (MVP entry): the robot is then configured by
+        ``load_base_moveit_config`` and the scene/application by later steps."""
+        from ..model import (
+            ApplicationSpec, DeploymentSpec, DescriptionSource, PlanningGroupSpec,
+            ProjectMeta, RobotSpec, SceneSpec)
+        robot = RobotSpec(
+            robot_name='robot',
+            description=DescriptionSource(urdf_dir='.', top_xacro='robot.urdf.xacro'),
+            planning_group=PlanningGroupSpec(name='manipulator'))
+        self.project = CanonicalProject(
+            project_name=project_name, bundle=BundleSpec.from_prefix(project_name),
+            meta=ProjectMeta(), robot=robot, scene=SceneSpec(),
+            application=ApplicationSpec(), deployment=DeploymentSpec())
+        return self.project
+
     def save(self, path) -> Path:
         return save_project(self._require(), path)
 

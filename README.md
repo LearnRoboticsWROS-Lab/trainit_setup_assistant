@@ -1,220 +1,94 @@
-# TrainIt Setup Assistant
+# TrainIt Setup Assistant (TSA)
 
-A GUI + headless generator that turns a robot + a configured application into a
-buildable ROS 2 bundle (`*_description` + `*_moveit_config` + `*_app`) for the
-TrainIt Motion Runtime — like the MoveIt Setup Assistant, but for the whole
-**application layer**. Robot/framework-agnostic: everything is driven by the loaded
-robot and the user's choices (nothing hardcoded to `fr3wml`).
+Configure a robotic **manipulation application** against a faithful RViz/MoveIt
+environment and generate a **self-contained ROS 2 bundle** that runs on the TrainIt
+Motion Runtime (TMR) with one command — in **mock**, **isaac**, or **real**.
 
-## Status
+Think "MoveIt Setup Assistant, but for the whole application layer": waypoints, motions,
+planner choice, and dynamic-object handling → a Behaviour-Tree app you can watch run
+immediately. Robot- and cell-agnostic; nothing is hardcoded to a specific robot.
 
-| Milestone | What | State |
-|-----------|------|-------|
-| M0 | package skeleton + `CanonicalProject` model + `*_description` emitter | ✅ done |
-| M1 | `*_moveit_config` emitter (SRDF + all config yamls + xacros) | ✅ done |
-| M2 | self-collision matrix as project data | ✅ done |
-| M3 | `*_app` emitter: `bt_params.yaml` + BT tree + launch + groot2 | ✅ done |
-| M4 | verification: generated bundle == golden `fr3wml_app` (**32/32**) | ✅ done |
-| M5 | robot auto-detection + `robot_loader` + `setup_assistant.launch.py` (live RViz gizmo) | ✅ done |
-| M6 | Qt wizard (load robot → group → named states → generate) + live capture | ✅ done |
-| M7 | waypoint capture + per-segment motion wizard (PTP/LIN/CIRC, planner, speed) | ✅ done |
-| M8 | scene primitives (box/sphere/cyl/cone → collision objects, static/dynamic) | ✅ done |
-| M9 | USD scene importer (pxr → AABB collision objects) | ✅ done |
-
-The **whole MVP is complete and verified** (21 tests; the headless generator reproduces
-the hand-coded `fr3wml_app` 32/32; the Qt wizard is offscreen-tested end-to-end; the
-robot auto-detection passed an 8-archetype adversarial review). The generated bundle
-`colcon build`s and bring-ups cleanly (`move_group` + controllers + bridges).
-
-## Architecture (single source of truth)
-
-```
-gui/ (RViz + Qt, M6+)  ──edits──▶  model/CanonicalProject (project.yaml)  ──reads──▶  generator/
-                                                                                         │
-                                                                          *_description + *_moveit_config + *_app
-```
-
-The GUI only edits the project; the generator only reads it. `trainit_generate`
-(headless) is the contract test that keeps them decoupled — a future web GUI can
-replace `gui/` by emitting the same `project.yaml`.
+> The headline product target is **camera-driven bin-picking with learned policies**.
+> This MVP ships **blind pick-and-place** end-to-end; vision, PLC actuation and policies
+> are architecture seams (present, not yet active). A course is included.
 
 ---
 
-# Testing the checkpoint (M0–M4)
+## What the TSA does — and doesn't
 
-**Prerequisite — nothing to clone.** Everything the generated bundle needs
-(`trainit_motion_runtime`, `fr3wml_isaac`, `fairino_gripper`, `fairino_bridge`) is
-already in your `~/fr5_ws`. You do **not** need a new workspace or to clone
-`frcobot_ros2` / the fairino bridges. Just make sure the assistant is built:
+The TSA automates the **application layer**. It does **not** build your digital twin —
+that is expert work (the *Adaptation Sprint*, a separate service):
+
+| You/the Adaptation Sprint build (once, by hand) | The TSA generates (per application) |
+|---|---|
+| The **Isaac scene** (`<cell>_isaac`): robot+EE URDF, static/actuated meshes, physics, Action Graph, the grasp-physics Script Node, spawn/drive scripts | The **scene+planner MoveIt config** (mock/isaac/real + OMPL/Pilz/CHOMP + the cell obstacles) |
+| The **base MoveIt config** (`<robot>_moveit_config`) with the mock/isaac/real bring-up + action-namespace parity | The **application**: waypoints, motions, planner, dynamic-object management |
+| The **vendor bridges** (arm + gripper) for `real` | A **BT bundle** that runs on the TMR with one command + a README |
+
+The boundary is deliberate: the twin needs Isaac/URDF/controller expertise; the
+application is what you iterate on and ship.
+
+## Prerequisites (in your `src/`)
+
+```
+<ros2_ws>/src/
+├── <cell>_isaac/              # your Isaac scene + assets + grasp-physics Script Node   (Adaptation Sprint)
+├── <robot>_moveit_config/     # hand-made base: mock/isaac/real bring-up + bridges       (Adaptation Sprint)
+├── <vendor>_bridge/           # real arm + gripper bridges (only for mode:=real)         (Adaptation Sprint)
+├── trainit_motion_runtime/    # the engine (BT runtime + scene loader)   — clone; keep versions bound
+└── trainit_setup_assistant/   # this package                             — clone; keep versions bound
+```
+
+`trainit_setup_assistant` and `trainit_motion_runtime` **ship together** — always use
+matching (committed) versions.
 
 ```bash
-cd ~/fr5_ws
+cd <ros2_ws>
 source /opt/ros/humble/setup.bash
-colcon build --packages-select trainit_setup_assistant --symlink-install
+colcon build --packages-select trainit_motion_runtime trainit_setup_assistant --symlink-install
 source install/setup.bash
 ```
 
-> All commands below use **absolute paths** (`~/fr5_ws/...`) so they work from any
-> directory. (The earlier error was just a relative path run from the wrong folder.)
+## The flow (wizard, 9 steps)
 
-## Test 1 — prove it EQUALS the golden `fr3wml_app` (no robot needed, ~5 s)
+**Phase A — build a faithful configuration environment**
+1. **Load the USD scene** — preview robot+EE+objects; missing/cloud assets are flagged
+   (load a local `.usd` or skip). Objects are classified (static / actuated / dynamic).
+   Test the cell's Isaac grasp adapter here (see `resources/isaac/`).
+2. **Load the base MoveIt config** — the assistant reads its group/frames/controllers.
+3. **Generate the scene+planner config** — a standalone copy of the base + planners +
+   `scene.yaml`. Pick an output path/name.
+4. **Build snippet** — `colcon build … && source install/setup.bash`.
+5. **Choose the mode** — mock | isaac | real.
+6. **Guided bring-up** — the exact commands for your mode (open Isaac → Play → launch …).
 
-This is the strongest correctness check: generate the bundle and diff it against the
-hand-coded `fr3wml_app`, then build it.
+**Phase B — configure the application**
+7. **Choose the application type** — *pick-and-place* (blind). Others are on the roadmap.
+8. **Configure it** — capture waypoint poses from RViz, motion type + planner + speed per
+   move, and the **dynamic-object management**: which objects the gripper grasps, per-move
+   attached-collision-check, freeze/gravity on release.
+9. **Generate the bundle** — `<robot>_trainit_config` + `<robot>_app` + `<robot>_description`
+   + a README. Build it and run — one command brings up the cell, one runs the app.
 
-```bash
-ros2 run trainit_setup_assistant trainit_verify \
-  ~/fr5_ws/src/fr3wml_digital_twin/trainit_setup_assistant/examples/fr3wml_project.yaml \
-  --golden ~/fr5_ws/src/fr3wml_digital_twin/fr3wml_app --build
-```
-
-**Expected — you should see:**
-```
-  OK  [byte] description/urdf/...            (meshes + xacros byte-identical)
-  OK  [yaml] moveit_config/config/...        (kinematics, limits, controllers, ompl, pilz)
-  OK  [srdf] moveit_config/config/fr3wml.srdf
-  OK  [yaml] app/config/bt_params.yaml       (waypoints + DOF identical)
-  OK  [tree] app/bt_trees/pick_place.xml     (node sequence identical)
-32/32 checks passed
-
-EQUIVALENCE: PASS
-building generated bundle...
-BUILD: PASS
-```
-
-Run the unit + golden tests too:
-```bash
-cd ~/fr5_ws/src/fr3wml_digital_twin/trainit_setup_assistant
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=$PWD:$PYTHONPATH python3 -m pytest test/ -q
-# expected: 7 passed
-```
-
-## Test 2 — actually RUN the generated bundle in mock mode (no Isaac, no hardware)
-
-Generate the 3 packages into your workspace (different names from `fr3wml_app`, so they
-coexist with the golden), build them, and run the same pick-and-place driven by the BT.
+## Running a generated bundle
 
 ```bash
-# 1) generate into the workspace
-ros2 run trainit_setup_assistant trainit_generate \
-  ~/fr5_ws/src/fr3wml_digital_twin/trainit_setup_assistant/examples/fr3wml_project.yaml \
-  -o ~/fr5_ws/src/trainit_generated --force
-
-# 2) build the 3 generated packages
-cd ~/fr5_ws
-colcon build --packages-select \
-  fr3wml_app_trainit_config_description \
-  fr3wml_app_trainit_config_moveit_config \
-  fr3wml_app_trainit_config
-source install/setup.bash
+# terminal 1 — cell (move_group + planners + scene + controllers/bridges + RViz)
+ros2 launch <robot>_trainit_config bringup.launch.py mode:=isaac     # or mock | real
+# terminal 2 — the application (Behaviour Tree)
+ros2 launch <robot>_app trainit_bt.launch.py planner_mode:=pilz      # or ompl | ompl_chomp
 ```
+Every degree of freedom is data: waypoints/planner/speed in `<robot>_app/config/bt_params.yaml`,
+obstacles + dynamic-object flags in `<robot>_trainit_config/config/scene.yaml`. See the
+generated bundle's own `README.md`.
 
-**Terminal A — bring-up (mock):**
-```bash
-cd ~/fr5_ws && source install/setup.bash
-ros2 launch fr3wml_app_trainit_config bringup.launch.py mode:=mock
-```
-You should see, and RViz should open with the FR3WML robot:
-```
-[move_group] Loading robot model 'fr3wml'...
-[spawner] Configured and activated joint_state_broadcaster
-[controller_manager] Configuring controller 'moveit_joint_controller'
-[isaac_suction_bridge] Isaac suction bridge ready.
-[joint_state_merger_suction] JointStateMerger ready
-[fairino_suction_action_server] Ready. Action: /suctioncup_controller/gripper_command
-```
+## CLIs (headless)
 
-**Terminal B — run the Behavior Tree:**
-```bash
-cd ~/fr5_ws && source install/setup.bash
-ros2 launch fr3wml_app_trainit_config trainit_bt.launch.py planner_mode:=pilz
-```
-The robot executes, in RViz, the same cycle as `fr3wml_app`:
-`home → pre_pick → pick → (suction ON) → post_pick → pre_place → place → (suction OFF) → post_place → home`.
-Try `planner_mode:=ompl` and `:=ompl_chomp` too. (Groot2 live monitor on port 1667 if libzmq is present.)
+- `trainit_generate <project.yaml> -o <dir>` — generate the bundle (pure; no ROS needed).
+- `trainit_verify <project.yaml> --golden <dir> [--build]` — equivalence + optional build.
+- `trainit_setup_assistant` — the Qt wizard.
 
-## Test 3 — run it in Isaac (full digital twin)
+## For maintainers
 
-Identical to how you run `fr3wml_app`: start Isaac and press **PLAY** first, then:
-```bash
-# Terminal A
-ros2 launch fr3wml_app_trainit_config bringup.launch.py mode:=isaac
-# Terminal B
-ros2 launch fr3wml_app_trainit_config trainit_bt.launch.py planner_mode:=pilz
-```
-
-## Cleanup (optional)
-
-```bash
-rm -rf ~/fr5_ws/src/trainit_generated
-cd ~/fr5_ws && colcon build   # or just leave the generated packages alongside fr3wml_app
-```
-
-## Optional — isolated overlay workspace
-
-If you prefer not to add packages to `~/fr5_ws/src`, use a separate overlay that reuses
-`~/fr5_ws` as the underlay (still nothing to clone):
-```bash
-mkdir -p ~/trainit_test_ws/src && cd ~/trainit_test_ws
-ros2 run trainit_setup_assistant trainit_generate \
-  ~/fr5_ws/src/fr3wml_digital_twin/trainit_setup_assistant/examples/fr3wml_project.yaml \
-  -o src/trainit_generated --force
-source /opt/ros/humble/setup.bash
-source ~/fr5_ws/install/setup.bash      # underlay: engine + bridges
-colcon build
-source install/setup.bash
-ros2 launch fr3wml_app_trainit_config bringup.launch.py mode:=mock
-```
-
----
-
-# Using the GUI Setup Assistant (M5–M9)
-
-The wizard edits a project; the **live RViz gizmo** comes from a real `move_group`. Flow:
-
-```bash
-cd ~/fr5_ws && source install/setup.bash
-
-# 1) Launch the wizard: Load robot xacro (auto-detects group/frames/EEF) →
-#    confirm group → capture named states → scene (primitives or Import USD) →
-#    application + payload → waypoints (capture pose / named state; per move pick
-#    PTP/LIN/CIRC + planner + speed) → Generate.
-ros2 run trainit_setup_assistant trainit_setup_assistant     # Qt wizard
-
-# 2) To MOVE THE END-EFFECTOR WITH THE GIZMO while configuring, run the live session
-#    against a generated+built moveit_config (the gizmo = MoveIt MotionPlanning marker,
-#    real collision-aware IK). First Generate a bootstrap bundle from the wizard (or
-#    trainit_generate), colcon build it, then:
-ros2 launch trainit_setup_assistant setup_assistant.launch.py \
-    moveit_config_package:=<robot>_app_moveit_config robot_name:=<robot>
-#    The wizard's "Capture pose (live)" / "Capture current (live)" buttons read the
-#    end-effector pose / joint values from this session.
-```
-
-Headless generation works without the GUI: build a `project.yaml` (or auto-draft one
-from a robot xacro via `load_robot_spec`) and run `trainit_generate`.
-
-## CLIs
-
-- `trainit_generate <project.yaml> -o <dir>` — generate the bundle (pure, no ROS needed).
-- `trainit_verify <project.yaml> --golden <dir> [--build]` — equivalence (auto-detects
-  the golden's package names by role) + optional colcon build.
-- `trainit_compute_collisions <project.yaml> [--write]` — compute `robot.disable_collisions`
-  via `collisions_updater` (needs ROS; see note below).
-- `trainit_setup_assistant` — the Qt Setup Assistant wizard.
-
-## Note: the self-collision matrix
-
-`collisions_updater` reliably hangs at DDS init when spawned head-/TTY-less, so the
-self-collision matrix is treated as **project data** (`robot.disable_collisions`),
-computed once and stored in `project.yaml`. Generation never spawns it. The FR3WML
-example carries the matrix (identical to the golden's 13 pairs).
-
-## Beyond the MVP
-
-The architecture seams are in place for: more application templates (gluing,
-follow-path, waypoint-replay, CNC — add an `applications/*.py`); a web GUI (swap `gui/`,
-reuse the controller + generator); vendor-native motion adapters; and non-box collision
-primitives once the engine's `planning_scene_manager` supports them (today they are
-emitted as their AABB with a manifest warning). See the plan at
-`~/.claude/plans/ora-voglio-creare-l-urdf-generic-petal.md`.
+See **`ARCHITECTURE.md`** for the internals (the three-config model, the emitters, the BT
+vocabulary, the generalizable/sim-specific boundary) and the development roadmap.

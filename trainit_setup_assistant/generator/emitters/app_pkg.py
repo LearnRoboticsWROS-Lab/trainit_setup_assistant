@@ -29,12 +29,15 @@ class AppEmitter(Emitter):
         for problem in template.validate(project):
             ctx.manifest.warn(f'application: {problem}')
 
-        # the engine plans BOX collisions only: non-box primitives are emitted as AABB
-        for obj in project.scene.objects:
-            if obj.is_planning_collision() and not obj.is_box():
-                ctx.manifest.warn(
-                    f'scene object "{obj.id}" is {obj.shape.value}; engine is box-only '
-                    f'-> emitted as its AABB {obj.aabb_dims()}')
+        # In-tree AddCollisionObject is BOX-only, so a non-box object added in the tree
+        # is emitted as its AABB. This ONLY applies to the from-scratch path; with a
+        # scene loader (base set) the obstacles come from scene.yaml as real meshes.
+        if not robot.base_moveit_config_path:
+            for obj in project.scene.objects:
+                if obj.is_planning_collision() and not obj.is_box():
+                    ctx.manifest.warn(
+                        f'scene object "{obj.id}" is {obj.shape.value}; engine is box-only '
+                        f'-> emitted as its AABB {obj.aabb_dims()}')
 
         # --- bt_params.yaml (GENERATE from the task graph) ---
         bt_ctx = build_bt_params_context(project)

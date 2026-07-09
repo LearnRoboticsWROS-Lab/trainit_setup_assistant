@@ -28,8 +28,10 @@ from ..model import (
 from ..model.enums import (
     AppType,
     GripperKind,
+    IsaacGraspMethod,
     MotionType,
     PlannerId,
+    ReleasePolicy,
     SceneObjectCategory,
     SceneObjectSource,
     ShapeType,
@@ -130,6 +132,86 @@ class AssistantController:
         if derive_bundle:
             p.bundle = BundleSpec.from_prefix(name)
 
+    # ---- Step 2: load the hand-made BASE moveit_config ----
+    def load_base_moveit_config(self, package: str, path) -> dict:
+        """Point at the hand-made base config AND auto-configure the project from it.
+
+        Sets ``robot.base_moveit_config_*`` (which switches generation to the standalone
+        copy-base flow) and extracts the group/frames/named-states/gripper/controllers +
+        the self-collision matrix from the base's SRDF + moveit_controllers.yaml, so the
+        user doesn't re-type what the adaptation-sprint deliverable already declares.
+        """
+        from ..robotmodel.srdf_reader import read_srdf
+        p = self._require()
+        base = Path(path)
+        config = base / 'config'
+        srdfs = sorted(config.glob('*.srdf'))
+        if not srdfs:
+            raise FileNotFoundError(f'no .srdf found in {config}')
+        info = read_srdf(srdfs[0].read_text())
+
+        p.robot.robot_name = info.robot_name
+        p.robot.base_moveit_config_package = package
+        p.robot.base_moveit_config_path = str(base)
+
+        arm = info.arm_group()
+        if arm:
+            p.robot.planning_group.name = arm.name
+            if arm.chain and arm.chain[0]:
+                self.set_frames(arm.chain[0], arm.chain[1])
+            if arm.joints:
+                p.robot.planning_group.joints = arm.joints
+            p.robot.named_states = [
+                NamedState(name=s.name, group=s.group, joint_values=s.joint_values)
+                for s in info.states_for(arm.name)]
+
+        if info.end_effectors:
+            ee = info.end_effectors[0]
+            g = p.robot.gripper
+            g.eef_group_name, g.eef_name, g.eef_parent_link = ee.group, ee.name, ee.parent_link
+            if g.kind is GripperKind.NONE:
+                g.kind = GripperKind.SUCTION
+            ee_grp = info.group(ee.group)
+            if ee_grp and ee_grp.joints:
+                g.command_joint = ee_grp.joints[0]
+            for s in info.states_for(ee.group):        # open/closed group_states
+                low = s.name.lower()
+                if 'open' in low:
+                    g.open_state = s.name
+                elif 'close' in low:
+                    g.closed_state = s.name
+
+        self._load_controllers_from_base(config)
+        try:
+            self.import_collision_matrix_from_srdf(srdfs[0])
+        except Exception:
+            pass
+        return {
+            'robot_name': info.robot_name,
+            'group': arm.name if arm else None,
+            'named_states': [s.name for s in (info.states_for(arm.name) if arm else [])],
+            'gripper_controller': p.robot.gripper.controller_name,
+            'arm_controller': p.robot.arm_controller.name,
+        }
+
+    def _load_controllers_from_base(self, config_dir: Path) -> None:
+        import yaml
+        f = config_dir / 'moveit_controllers.yaml'
+        if not f.is_file():
+            return
+        data = yaml.safe_load(f.read_text()) or {}
+        mgr = data.get('moveit_simple_controller_manager', {})
+        p = self._require()
+        for n in mgr.get('controller_names', []):
+            c = mgr.get(n, {}) or {}
+            ctype = c.get('type', '')
+            if ctype == 'FollowJointTrajectory':
+                p.robot.arm_controller.name = n
+                p.robot.arm_controller.action_ns = c.get('action_ns', 'follow_joint_trajectory')
+            elif ctype == 'GripperCommand':
+                p.robot.gripper.controller_name = n
+                p.robot.gripper.action_ns = c.get('action_ns', 'gripper_command')
+
     # ---- named states (S2) ----
     def add_named_state(self, name: str, joint_values: Dict[str, float],
                         group: Optional[str] = None) -> None:
@@ -182,7 +264,8 @@ class AssistantController:
                  motion: str = 'free', planner: Optional[str] = None,
                  speed: int = 50, role: str = 'generic',
                  aux=None, aux_is_center: bool = False,
-                 allowed_start_tolerance: float = 0.1) -> None:
+                 allowed_start_tolerance: float = 0.1,
+                 attached_collision_check: Optional[bool] = None) -> None:
         """Define a waypoint + its incoming motion segment and append it to the tree.
 
         TCP target if ``position`` is given; else a joint target (``named``/``joints``).
@@ -191,6 +274,9 @@ class AssistantController:
 
         ``allowed_start_tolerance`` (rad, per waypoint): start-state drift tolerated
         before the move to this waypoint executes (0.0 disables the check).
+        ``attached_collision_check`` (per-move): when the gripper holds objects,
+        True => the planner routes the held payload around the static meshes; False =>
+        transparent; None => inherit the current runtime state.
         """
         app = self._require().application
         wtype = WaypointType.TCP if position is not None else WaypointType.JOINT
@@ -205,7 +291,8 @@ class AssistantController:
         seg = MotionSegment(
             to_waypoint=name, motion=MotionType(motion),
             planner=PlannerId(planner) if planner else None, speed=speed,
-            aux=list(aux) if aux is not None else None, aux_is_center=aux_is_center)
+            aux=list(aux) if aux is not None else None, aux_is_center=aux_is_center,
+            attached_collision_check=attached_collision_check)
         app.segments = [s for s in app.segments if s.to_waypoint != name] + [seg]
         app.sequence.append(name)
 
@@ -231,7 +318,11 @@ class AssistantController:
     def add_scene_object(self, obj_id: str, dims, position, *, shape: str = 'box',
                          frame: Optional[str] = None, dynamic: bool = False,
                          collision: bool = True, orientation=(0.0, 0.0, 0.0, 1.0),
-                         source: str = 'primitive', category: Optional[str] = None) -> None:
+                         source: str = 'primitive', category: Optional[str] = None,
+                         mesh_resource: Optional[str] = None, scale=(1.0, 1.0, 1.0),
+                         grasp_target: bool = False, release_policy: str = 'freeze',
+                         isaac_grasp_method: str = 'fixed_joint',
+                         touchable_collision_ids=None) -> None:
         p = self._require()
         # category (static|actuated|dynamic) is authoritative when given; otherwise
         # fall back to the legacy `dynamic` flag (category is inferred from it).
@@ -240,8 +331,12 @@ class AssistantController:
             kw = dict(category=SceneObjectCategory(category))
         p.scene.objects = [o for o in p.scene.objects if o.id != obj_id] + [SceneObject(
             id=obj_id, source=SceneObjectSource(source), shape=ShapeType(shape),
-            dims=list(dims), frame=frame or p.robot.base_frame,
-            position=list(position), orientation=list(orientation), **kw)]
+            dims=list(dims), mesh_resource=mesh_resource, scale=list(scale),
+            frame=frame or p.robot.base_frame,
+            position=list(position), orientation=list(orientation),
+            grasp_target=grasp_target, release_policy=ReleasePolicy(release_policy),
+            isaac_grasp_method=IsaacGraspMethod(isaac_grasp_method),
+            touchable_collision_ids=list(touchable_collision_ids or []), **kw)]
 
     def set_object_category(self, obj_id: str, category: str) -> None:
         """Re-classify an existing object (static | actuated | dynamic)."""
@@ -252,6 +347,37 @@ class AssistantController:
                 o.category = cat
                 o.dynamic = cat is SceneObjectCategory.DYNAMIC  # keep the flag in sync
                 break
+
+    def set_object_grasp(self, obj_id: str, *, grasp_target: Optional[bool] = None,
+                         release_policy: Optional[str] = None,
+                         isaac_grasp_method: Optional[str] = None,
+                         touchable_collision_ids=None) -> None:
+        """Step 8: set the dynamic-object grasp attributes (attach on close, freeze/
+        gravity on release, Isaac method, touchable meshes)."""
+        for o in self._require().scene.objects:
+            if o.id == obj_id:
+                if grasp_target is not None:
+                    o.grasp_target = bool(grasp_target)
+                if release_policy is not None:
+                    o.release_policy = ReleasePolicy(release_policy)
+                if isaac_grasp_method is not None:
+                    o.isaac_grasp_method = IsaacGraspMethod(isaac_grasp_method)
+                if touchable_collision_ids is not None:
+                    o.touchable_collision_ids = list(touchable_collision_ids)
+                break
+
+    def set_scene_loader_params(self, *, gripper_cmd_topic=None, attach_link=None,
+                                touch_links=None, attached_collision_check=None) -> None:
+        """Scene-loader (scene_manager_node) params emitted into scene.yaml."""
+        s = self._require().scene
+        if gripper_cmd_topic is not None:
+            s.gripper_cmd_topic = gripper_cmd_topic
+        if attach_link is not None:
+            s.attach_link = attach_link
+        if touch_links is not None:
+            s.touch_links = list(touch_links)
+        if attached_collision_check is not None:
+            s.attached_collision_check = bool(attached_collision_check)
 
     def import_usd_scene(self, usd_path, dynamic: bool = False, replace: bool = False,
                          base_prim: Optional[str] = None, category=None,
@@ -293,6 +419,53 @@ class AssistantController:
 
     def generate(self, output_dir) -> GenerationManifest:
         return Orchestrator().generate(self._require(), output_dir)
+
+    # ---- Step 3: generate the intermediate scene+planner config (for RViz config) ----
+    def scene_loader_package_name(self) -> str:
+        """The intermediate config package name (``<robot>_scene_loader_moveit_config``)."""
+        return f'{self._require().robot.robot_name}_scene_loader_moveit_config'
+
+    def generate_scene_loader_config(self, output_dir, package_name=None) -> GenerationManifest:
+        """Step 3: emit ONLY the standalone scene+planner config (same emitter as the
+        bundle's ``_trainit_config``, so what you configure == what ships)."""
+        from ..generator.orchestrator import generate_scene_loader_config
+        pkg = package_name or self.scene_loader_package_name()
+        return generate_scene_loader_config(self._require(), output_dir, pkg)
+
+    # ---- Step 5/6: mode + guided bring-up ----
+    def set_mode(self, mode: str) -> None:
+        """Step 5: the mode the user will configure/run in (mock | isaac | real)."""
+        if mode not in ('mock', 'isaac', 'real'):
+            raise ValueError(f"mode must be mock|isaac|real, got {mode!r}")
+        self._require().deployment.default_mode = mode
+
+    def build_snippet(self, package: str, ws_root: str = '<ros2_ws>') -> str:
+        """Step 4: the terminal snippet to build+source a generated package."""
+        return (f'cd {ws_root}\n'
+                f'colcon build --packages-select {package}\n'
+                f'source install/setup.bash')
+
+    def bringup_procedure(self, mode: str, config_package: str,
+                          app_package: Optional[str] = None,
+                          usd_path: Optional[str] = None,
+                          ws_root: str = '<ros2_ws>') -> str:
+        """Step 6: the guided procedure to bring up the cell + run the app for a mode."""
+        src = f'cd {ws_root} && source /opt/ros/humble/setup.bash && source install/setup.bash'
+        steps: List[str] = []
+        if mode == 'isaac':
+            steps.append('1) Open Isaac Sim, load your USD scene'
+                         + (f'\n     ({usd_path})' if usd_path else '')
+                         + ', run the spawn + grasp-adapter scripts, then press PLAY.')
+        steps.append(f'{len(steps) + 1}) Terminal A — bring up the cell:\n'
+                     f'     {src}\n'
+                     f'     ros2 launch {config_package} bringup.launch.py mode:={mode}')
+        if app_package:
+            steps.append(f'{len(steps) + 1}) Terminal B — run the application:\n'
+                         f'     {src}\n'
+                         f'     ros2 launch {app_package} trainit_bt.launch.py'
+                         + (' use_sim_time:=false' if mode != 'isaac' else '')
+                         + ' planner_mode:=pilz')
+        return '\n'.join(steps)
 
     # ---- helpers ----
     def has_gripper(self) -> bool:

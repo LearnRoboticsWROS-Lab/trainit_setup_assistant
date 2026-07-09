@@ -1,0 +1,10 @@
+# Robot-specific OMPL group settings (the generic OMPL pipeline is provided by
+# trainit_motion_runtime; build_move_group_params() overlays this at launch time).
+{{ group_name }}:
+  default_planner_config: {{ ompl.default_planner_config }}
+  planner_configs:
+{% for cfg in ompl.planner_configs %}
+    - {{ cfg }}
+{% endfor %}
+  projection_evaluator: {{ ompl.projection_evaluator }}
+  longest_valid_segment_fraction: {{ ompl.longest_valid_segment_fraction | fmtnum }}

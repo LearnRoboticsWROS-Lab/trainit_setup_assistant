@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>trainit_setup_assistant</name>
+  <version>0.0.0</version>
+  <description>TrainIt Setup Assistant — a GUI + headless generator that produces a
+    robot application bundle (description + moveit_config + app) for the TrainIt Motion
+    Runtime, the way the MoveIt Setup Assistant produces a moveit_config. Robot- and
+    framework-agnostic: everything is driven by the loaded robot and the user's choices.</description>
+  <maintainer email="ros.master.ai@gmail.com">fra</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- Runtime: the assistant tooling (model/generator are pure-python; the live
+       session + GUI need ROS + MoveIt). pxr (USD) is pip-local, imported lazily. -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>srdfdom</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>moveit_setup_assistant</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python_qt_binding</exec_depend>
+  <exec_depend>trainit_motion_runtime</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-jinja2</exec_depend>
+  <exec_depend>python3-pydantic</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

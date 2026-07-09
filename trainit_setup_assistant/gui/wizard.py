@@ -1,0 +1,684 @@
+"""The RViz-native Setup Assistant wizard (Qt).
+
+A thin QWizard over :class:`AssistantController`: each page reads its widgets and pushes
+into the controller on ``validatePage()``. Kept logic-light so it is drivable headless
+(``QT_QPA_PLATFORM=offscreen``) and so a future web GUI can reuse the controller.
+
+M6 pages: Load Robot (S0), Group/Frames (S1), Named States (S2), Generate (S6).
+Scene (S3) and Waypoints (S4/S5) pages are added in M7/M8.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Dict, Optional
+
+from python_qt_binding.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QPushButton,
+    QSpinBox,
+    QTextEdit,
+    QVBoxLayout,
+    QWizard,
+    QWizardPage,
+)
+
+from .controller import AssistantController
+
+
+def _parse_joint_csv(text: str) -> Dict[str, float]:
+    """Parse 'j1=0, j2=-1.08, ...' into {joint: value}."""
+    out: Dict[str, float] = {}
+    for tok in text.replace('\n', ',').split(','):
+        tok = tok.strip()
+        if not tok:
+            continue
+        key, _, val = tok.partition('=')
+        out[key.strip()] = float(val.strip())
+    return out
+
+
+def _parse_floats(text: str) -> list:
+    return [float(t.strip()) for t in text.replace(' ', '').split(',') if t.strip()]
+
+
+def _expand_path(text: str) -> str:
+    """Expand ~ and $VARS in a user-typed path (Qt line edits don't do this)."""
+    return os.path.expanduser(os.path.expandvars(text.strip()))
+
+
+class LoadRobotPage(QWizardPage):
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('S0 — Load robot')
+        self.setSubTitle('Open an existing project.yaml (keeps its collision matrix + cell '
+                         'bridges), OR load a robot xacro fresh (group/frames auto-detected).')
+        form = QFormLayout(self)
+        # Option 1: open an existing complete project (recommended to start from a
+        # working base — carries the self-collision matrix + deployment bridges).
+        self.project_file = QLineEdit()
+        pbrowse = QPushButton('Browse…')
+        pbrowse.clicked.connect(self._browse_project)
+        prow = QHBoxLayout()
+        prow.addWidget(self.project_file)
+        prow.addWidget(pbrowse)
+        form.addRow('Open project.yaml', prow)
+        # Option 2: load a robot xacro fresh (a bootstrap; you must add the collision
+        # matrix + cell bridges separately).
+        self.xacro = QLineEdit()
+        browse = QPushButton('Browse…')
+        browse.clicked.connect(self._browse)
+        row = QHBoxLayout()
+        row.addWidget(self.xacro)
+        row.addWidget(browse)
+        form.addRow('— or — Robot xacro', row)
+        self.robot_name = QLineEdit()
+        form.addRow('Robot name (optional)', self.robot_name)
+        self.group_name = QLineEdit()
+        form.addRow('Group name (optional)', self.group_name)
+        self.meshes = QLineEdit()
+        form.addRow('Meshes dir (optional)', self.meshes)
+        self.summary = QLabel('')
+        self.summary.setWordWrap(True)
+        form.addRow('Detected', self.summary)
+
+    def _browse(self):  # pragma: no cover - needs a display
+        path, _ = QFileDialog.getOpenFileName(self, 'Select robot xacro', '',
+                                              'xacro/urdf (*.xacro *.urdf)')
+        if path:
+            self.xacro.setText(path)
+
+    def _browse_project(self):  # pragma: no cover - needs a display
+        path, _ = QFileDialog.getOpenFileName(self, 'Open project.yaml', '',
+                                              'project (*.yaml *.yml)')
+        if path:
+            self.project_file.setText(path)
+
+    def validatePage(self) -> bool:
+        try:
+            if self.project_file.text().strip():
+                self.ctrl.open_project(_expand_path(self.project_file.text()))
+            else:
+                self.ctrl.new_from_robot(
+                    _expand_path(self.xacro.text()),
+                    robot_name=self.robot_name.text().strip() or None,
+                    group_name=self.group_name.text().strip() or None,
+                    meshes_dir=(_expand_path(self.meshes.text())
+                                if self.meshes.text().strip() else None),
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.summary.setText(f'ERROR: {exc}')
+            return False
+        s = self.ctrl.robot_summary()
+        matrix = 'yes' if (self.ctrl.project.robot.disable_collisions) else 'MISSING (bootstrap)'
+        self.summary.setText(
+            f"{s['robot_name']}: base={s['base_frame']} tip={s['tip_link']} "
+            f"joints={s['arm_joints']} gripper={s['gripper_kind']} | collision-matrix: {matrix}")
+        return True
+
+
+class GroupFramesPage(QWizardPage):
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('S1 — Group & frames')
+        self.setSubTitle('Confirm or edit the planning group and frames.')
+        form = QFormLayout(self)
+        self.base = QLineEdit()
+        self.tip = QLineEdit()
+        self.group = QLineEdit()
+        self.joints = QLineEdit()
+        form.addRow('Base frame', self.base)
+        form.addRow('Tip link', self.tip)
+        form.addRow('Group name', self.group)
+        form.addRow('Arm joints (csv)', self.joints)
+        # Self-collision matrix: import it from an existing SRDF (e.g. one made by the
+        # real MoveIt Setup Assistant). Needed for a fresh bootstrap to plan correctly.
+        self.matrix_status = QLabel('')
+        form.addRow('Collision matrix', self.matrix_status)
+        mbtn = QPushButton('Import collision matrix from SRDF…')
+        mbtn.clicked.connect(self._import_matrix)
+        form.addRow('', mbtn)
+
+    def initializePage(self) -> None:
+        s = self.ctrl.robot_summary()
+        self.base.setText(s['base_frame'])
+        self.tip.setText(s['tip_link'])
+        self.group.setText(s['group'])
+        self.joints.setText(', '.join(s['arm_joints']))
+        self._update_matrix_status()
+
+    def _update_matrix_status(self) -> None:
+        n = len(self.ctrl.project.robot.disable_collisions or [])
+        self.matrix_status.setText(f'{n} pairs' if n else 'MISSING — planning will fail '
+                                   '(import from an SRDF, e.g. MoveIt Setup Assistant)')
+
+    def _import_matrix(self):  # pragma: no cover - file dialog needs a display
+        path, _ = QFileDialog.getOpenFileName(self, 'Import collision matrix from SRDF',
+                                              '', 'SRDF (*.srdf *.xml)')
+        if not path:
+            return
+        try:
+            self.ctrl.import_collision_matrix_from_srdf(_expand_path(path))
+        except Exception as exc:  # noqa: BLE001
+            self.matrix_status.setText(f'import failed: {exc}')
+            return
+        self._update_matrix_status()
+
+    def validatePage(self) -> bool:
+        joints = [j.strip() for j in self.joints.text().split(',') if j.strip()]
+        if not joints:
+            return False
+        self.ctrl.set_frames(self.base.text().strip(), self.tip.text().strip())
+        self.ctrl.set_group(self.group.text().strip(), joints)
+        return True
+
+
+class ControllersPage(QWizardPage):
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('S2 — Controllers')
+        self.setSubTitle('The robot controllers (ros2_control + MoveIt). Defaults match the '
+                         'TrainIt runtime — edit only if your robot uses different names.')
+        form = QFormLayout(self)
+        self.arm_name = QLineEdit()
+        self.arm_type = QLineEdit()
+        self.arm_action_ns = QLineEdit()
+        self.arm_update_rate = QSpinBox()
+        self.arm_update_rate.setRange(1, 2000)
+        self.arm_cmd_if = QLineEdit()
+        self.arm_state_if = QLineEdit()
+        form.addRow('Arm controller name', self.arm_name)
+        form.addRow('Arm controller type', self.arm_type)
+        form.addRow('Arm action ns', self.arm_action_ns)
+        form.addRow('Update rate (Hz)', self.arm_update_rate)
+        form.addRow('Command interfaces (csv)', self.arm_cmd_if)
+        form.addRow('State interfaces (csv)', self.arm_state_if)
+        self.grip_label = QLabel('')
+        form.addRow('Gripper kind', self.grip_label)
+        self.grip_name = QLineEdit()
+        self.grip_type = QLineEdit()
+        self.grip_action_ns = QLineEdit()
+        form.addRow('Gripper controller name', self.grip_name)
+        form.addRow('Gripper controller type', self.grip_type)
+        form.addRow('Gripper action ns', self.grip_action_ns)
+
+    def initializePage(self) -> None:
+        arm = self.ctrl.project.robot.arm_controller
+        self.arm_name.setText(arm.name)
+        self.arm_type.setText(arm.type)
+        self.arm_action_ns.setText(arm.action_ns)
+        self.arm_update_rate.setValue(arm.update_rate)
+        self.arm_cmd_if.setText(', '.join(arm.command_interfaces))
+        self.arm_state_if.setText(', '.join(arm.state_interfaces))
+        grip = self.ctrl.project.robot.gripper
+        self.grip_label.setText(grip.kind.value)
+        self.grip_name.setText(grip.controller_name or '')
+        self.grip_type.setText(grip.controller_type)
+        self.grip_action_ns.setText(grip.action_ns)
+
+    def validatePage(self) -> bool:
+        self.ctrl.set_arm_controller(
+            name=self.arm_name.text().strip(),
+            ctrl_type=self.arm_type.text().strip(),
+            action_ns=self.arm_action_ns.text().strip(),
+            update_rate=self.arm_update_rate.value(),
+            command_interfaces=[s.strip() for s in self.arm_cmd_if.text().split(',') if s.strip()],
+            state_interfaces=[s.strip() for s in self.arm_state_if.text().split(',') if s.strip()])
+        self.ctrl.set_gripper_controller(
+            controller_name=self.grip_name.text().strip(),
+            controller_type=self.grip_type.text().strip(),
+            action_ns=self.grip_action_ns.text().strip())
+        return True
+
+
+class NamedStatesPage(QWizardPage):
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('S3 — Named states')
+        self.setSubTitle('Capture named joint configurations (e.g. home). '
+                         'Live capture reads /joint_states; offline, type the values.')
+        layout = QVBoxLayout(self)
+        self.list = QListWidget()
+        layout.addWidget(self.list)
+        form = QFormLayout()
+        self.state_name = QLineEdit()
+        self.state_joints = QLineEdit()
+        form.addRow('Name', self.state_name)
+        form.addRow('Joints (j1=0, j2=-1.08, …)', self.state_joints)
+        layout.addLayout(form)
+        btns = QHBoxLayout()
+        capture = QPushButton('Capture current (live)')
+        capture.clicked.connect(self.capture_live)
+        add = QPushButton('Add / update')
+        add.clicked.connect(self.add_state)
+        remove = QPushButton('Remove selected')
+        remove.clicked.connect(self.remove_selected)
+        btns.addWidget(capture)
+        btns.addWidget(add)
+        btns.addWidget(remove)
+        layout.addLayout(btns)
+
+    def capture_live(self) -> None:  # pragma: no cover - needs a live ROS session
+        """Read the current arm joint values from the running config session."""
+        joints = self.ctrl.robot_summary()['arm_joints']
+        try:
+            values = self.wizard().live_capture().current_joint_values(joints)
+        except Exception as exc:  # noqa: BLE001
+            self.state_joints.setText(f'# capture failed: {exc}')
+            return
+        self.state_joints.setText(', '.join(f'{k}={v:.4f}' for k, v in values.items()))
+
+    def initializePage(self) -> None:
+        self._refresh()
+
+    def _refresh(self) -> None:
+        self.list.clear()
+        for name in self.ctrl.robot_summary()['named_states']:
+            self.list.addItem(name)
+
+    def add_state(self) -> None:
+        name = self.state_name.text().strip()
+        if not name:
+            return
+        try:
+            joints = _parse_joint_csv(self.state_joints.text())
+        except ValueError:
+            return
+        self.ctrl.add_named_state(name, joints)
+        self._refresh()
+
+    def remove_selected(self) -> None:
+        item = self.list.currentItem()
+        if item:
+            self.ctrl.remove_named_state(item.text())
+            self._refresh()
+
+    def validatePage(self) -> bool:
+        return True  # named states are optional
+
+
+class GeneratePage(QWizardPage):
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('S7 — Generate')
+        self.setSubTitle('Name the bundle and generate the 3 packages.')
+        form = QFormLayout(self)
+        self.project_name = QLineEdit()
+        form.addRow('Project / bundle name', self.project_name)
+        self.output_dir = QLineEdit()
+        browse = QPushButton('Browse…')
+        browse.clicked.connect(self._browse)
+        row = QHBoxLayout()
+        row.addWidget(self.output_dir)
+        row.addWidget(browse)
+        form.addRow('Output dir', row)
+        gen = QPushButton('Generate')
+        gen.clicked.connect(self.generate)
+        form.addRow(gen)
+        self.result = QTextEdit()
+        self.result.setReadOnly(True)
+        form.addRow('Result', self.result)
+
+    def initializePage(self) -> None:
+        self.project_name.setText(self.ctrl.robot_summary()['robot_name'] + '_app')
+
+    def _browse(self):  # pragma: no cover - needs a display
+        path = QFileDialog.getExistingDirectory(self, 'Output directory')
+        if path:
+            self.output_dir.setText(path)
+
+    def generate(self) -> None:
+        name = self.project_name.text().strip()
+        if name:
+            self.ctrl.set_project_name(name)
+        problems = self.ctrl.validate()
+        out_dir = _expand_path(self.output_dir.text())
+        if not out_dir:
+            self.result.setPlainText('ERROR: please set an output directory')
+            return
+        try:
+            manifest = self.ctrl.generate(out_dir)
+        except Exception as exc:  # noqa: BLE001
+            self.result.setPlainText(f'ERROR: {exc}')
+            return
+        info = manifest.as_dict()
+        lines = [f"Generated {info['file_count']} files into {out_dir}"]
+        # also persist the project so you can REOPEN it (e.g. to capture poses with the
+        # gizmo after building this bootstrap) — the two-pass workflow.
+        try:
+            proj_path = os.path.join(out_dir, 'project.yaml')
+            self.ctrl.save(proj_path)
+            lines.append(f'Saved project.yaml -> {proj_path} (reopen to continue)')
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f'(could not save project.yaml: {exc})')
+        if problems:
+            lines.append('Validation notes:')
+            lines += [f'  - {p}' for p in problems]
+        self.result.setPlainText('\n'.join(lines))
+
+
+class ScenePage(QWizardPage):
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('S4 — Scene')
+        self.setSubTitle('Load the cell and classify each object: '
+                         'static (fixed structure, e.g. BW-0080) and actuated (URDF '
+                         'station moved by an adapter, e.g. prewash/belt) are CHECKED '
+                         'collisions the robot avoids; dynamic (bottles, crate) are shown '
+                         'but collision-ALLOWED with everything (touched by the gripper). '
+                         'Engine plans BOX only — others are emitted as their AABB.')
+        layout = QVBoxLayout(self)
+        self.list = QListWidget()
+        self.list.itemClicked.connect(self._on_select)
+        layout.addWidget(self.list)
+        form = QFormLayout()
+        self.obj_id = QLineEdit('table')
+        form.addRow('Object id', self.obj_id)
+        self.shape = QComboBox()
+        self.shape.addItems(['box', 'sphere', 'cylinder', 'cone'])
+        form.addRow('Shape', self.shape)
+        self.dims = QLineEdit('2.0, 2.0, 0.10')
+        form.addRow('Dims (box x,y,z | sphere r | cyl/cone r,h)', self.dims)
+        self.position = QLineEdit('0.0, 0.0, -0.08')
+        form.addRow('Position (x,y,z)', self.position)
+        # cell role: static | actuated (URDF, adapter-driven) | dynamic (manipulated)
+        self.category = QComboBox()
+        self.category.addItems(['static', 'actuated', 'dynamic'])
+        self.category.currentTextChanged.connect(self._category_changed)
+        form.addRow('Category', self.category)
+        # USD import alignment: the robot's prim path in the USD, so cell-world coords
+        # become base-relative. Blank => auto-detect by robot name.
+        self.usd_base_prim = QLineEdit()
+        self.usd_base_prim.setPlaceholderText('auto (e.g. /fr3wml_suction)')
+        form.addRow('USD robot base prim', self.usd_base_prim)
+        layout.addLayout(form)
+        btns = QHBoxLayout()
+        add = QPushButton('Add / update object')
+        add.clicked.connect(self.add_object)
+        remove = QPushButton('Remove selected')
+        remove.clicked.connect(self.remove_selected)
+        usd = QPushButton('Import USD…')
+        usd.clicked.connect(self.import_usd)
+        preview = QPushButton('Preview in RViz (live)')
+        preview.clicked.connect(self.preview_live)
+        for b in (add, remove, usd, preview):
+            btns.addWidget(b)
+        layout.addLayout(btns)
+
+    def import_usd(self):  # pragma: no cover - file dialog needs a display
+        path, _ = QFileDialog.getOpenFileName(self, 'Import USD scene', '',
+                                              'USD (*.usd *.usda *.usdc)')
+        if not path:
+            return
+        base = self.usd_base_prim.text().strip() or None
+        try:
+            self.ctrl.import_usd_scene(_expand_path(path), base_prim=base)
+        except Exception:  # noqa: BLE001
+            pass
+        self._refresh()
+
+    def _on_select(self, item):  # pragma: no cover - needs a display
+        """Populate the form from a selected object so it can be edited / re-flagged."""
+        oid = item.text().split(' ')[0]
+        obj = next((o for o in self.ctrl.project.scene.objects if o.id == oid), None)
+        if obj is None:
+            return
+        self.obj_id.setText(obj.id)
+        self.shape.setCurrentText(obj.shape.value)
+        self.dims.setText(', '.join(str(d) for d in obj.dims))
+        self.position.setText(', '.join(str(p) for p in obj.position))
+        self.category.blockSignals(True)       # don't fire _category_changed on populate
+        self.category.setCurrentText(obj.category.value)
+        self.category.blockSignals(False)
+
+    def _category_changed(self, category):  # pragma: no cover - needs a display
+        """Changing the category applies immediately to the object named in the form."""
+        oid = self.obj_id.text().strip()
+        if any(o.id == oid for o in self.ctrl.project.scene.objects):
+            self.ctrl.set_object_category(oid, category)
+            self._refresh()
+
+    def initializePage(self):
+        self._refresh()
+
+    def _refresh(self):
+        self.list.clear()
+        for o in self.ctrl.project.scene.objects:
+            self.list.addItem(f'{o.id} [{o.shape.value}, {o.category.value}]')
+
+    def add_object(self):
+        oid = self.obj_id.text().strip()
+        if not oid:
+            return
+        try:
+            dims = _parse_floats(self.dims.text())
+            position = _parse_floats(self.position.text())
+        except ValueError:
+            return
+        self.ctrl.add_scene_object(oid, dims, position, shape=self.shape.currentText(),
+                                   category=self.category.currentText())
+        self._refresh()
+
+    def remove_selected(self):
+        item = self.list.currentItem()
+        if item:
+            oid = item.text().split(' ')[0]
+            self.ctrl.project.scene.objects = [
+                o for o in self.ctrl.project.scene.objects if o.id != oid]
+            self._refresh()
+
+    def preview_live(self):  # pragma: no cover - needs a live ROS session
+        try:
+            self.wizard().planning_scene().publish_scene(self.ctrl.project.scene)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def validatePage(self) -> bool:
+        return True
+
+
+class ApplicationPage(QWizardPage):
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('S5 — Application')
+        self.setSubTitle('Choose the application and the manipulated payload.')
+        form = QFormLayout(self)
+        self.app_type = QComboBox()
+        self.app_type.addItems(['pick_and_place'])  # more templates land later
+        form.addRow('Application', self.app_type)
+        self.planner = QComboBox()
+        self.planner.addItems(['pilz', 'ompl', 'ompl_chomp'])
+        form.addRow('Global planner', self.planner)
+        self.payload_id = QLineEdit('cube')
+        form.addRow('Payload id', self.payload_id)
+        self.payload_dims = QLineEdit('0.02, 0.02, 0.02')
+        form.addRow('Payload dims (x,y,z)', self.payload_dims)
+        self.payload_offset = QLineEdit('0, 0, 0.01')
+        form.addRow('Attach offset (x,y,z)', self.payload_offset)
+
+    def validatePage(self) -> bool:
+        self.ctrl.set_application(self.app_type.currentText(), self.planner.currentText())
+        pid = self.payload_id.text().strip()
+        if pid:
+            try:
+                self.ctrl.set_payload(pid, _parse_floats(self.payload_dims.text()),
+                                      attach_offset=_parse_floats(self.payload_offset.text()))
+            except ValueError:
+                return False
+        return True
+
+
+class WaypointsPage(QWizardPage):
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('S6 — Waypoints & motions')
+        self.setSubTitle('Capture poses with the RViz gizmo (or pick a named state); '
+                         'for each, choose how to get there (motion / planner / speed).')
+        layout = QVBoxLayout(self)
+        self.seq = QListWidget()
+        layout.addWidget(self.seq)
+        form = QFormLayout()
+        self.move_name = QLineEdit()
+        form.addRow('Move name', self.move_name)
+        self.target_mode = QComboBox()
+        self.target_mode.addItems(['tcp', 'named'])
+        form.addRow('Target', self.target_mode)
+        self.pos = QLineEdit()
+        self.quat = QLineEdit('0, 0, 0, 1')
+        cap = QPushButton('Capture pose (live)')
+        cap.clicked.connect(self.capture_pose)
+        posrow = QHBoxLayout()
+        posrow.addWidget(self.pos)
+        posrow.addWidget(cap)
+        form.addRow('Position (x,y,z)', posrow)
+        form.addRow('Orientation (qx,qy,qz,qw)', self.quat)
+        self.named = QLineEdit()
+        form.addRow('Named state (if target=named)', self.named)
+        self.motion = QComboBox()
+        self.motion.addItems(['ptp', 'lin', 'circ', 'free'])
+        form.addRow('Motion', self.motion)
+        self.move_planner = QComboBox()
+        self.move_planner.addItems(['', 'pilz', 'ompl', 'ompl_chomp'])
+        form.addRow('Planner (blank=global)', self.move_planner)
+        self.speed = QSpinBox()
+        self.speed.setRange(1, 100)
+        self.speed.setValue(50)
+        form.addRow('Speed %', self.speed)
+        # per-waypoint start-state tolerance (rad); 0.0 disables the check. Bump it for
+        # tight-space moves where the reported start state drifts (e.g. into the prewash).
+        self.start_tol = QDoubleSpinBox()
+        self.start_tol.setRange(0.0, 3.1416)
+        self.start_tol.setSingleStep(0.01)
+        self.start_tol.setDecimals(3)
+        self.start_tol.setValue(0.1)
+        form.addRow('Allowed start tol (rad)', self.start_tol)
+        self.role = QComboBox()
+        self.role.addItems(['generic', 'home', 'pre_pick', 'pick', 'post_pick',
+                            'pre_place', 'place', 'post_place'])
+        form.addRow('Role', self.role)
+        # CIRC only: an auxiliary point (a point on the arc, or the circle centre)
+        self.aux = QLineEdit()
+        self.aux.setPlaceholderText('circ only: x, y, z')
+        form.addRow('Aux point (circ)', self.aux)
+        self.aux_is_center = QCheckBox('aux is the circle centre (else a point on the arc)')
+        form.addRow('', self.aux_is_center)
+        layout.addLayout(form)
+        # tool actions to fire AT this move
+        self.tool_cbs = {k: QCheckBox(k) for k in ('grasp', 'release', 'attach', 'detach')}
+        trow = QHBoxLayout()
+        for cb in self.tool_cbs.values():
+            trow.addWidget(cb)
+        self.payload_ref = QLineEdit('cube')
+        trow.addWidget(QLabel('payload:'))
+        trow.addWidget(self.payload_ref)
+        layout.addLayout(trow)
+        addbtn = QPushButton('Add move to sequence')
+        addbtn.clicked.connect(self.add_move)
+        layout.addWidget(addbtn)
+
+    def capture_pose(self):  # pragma: no cover - needs a live ROS session
+        s = self.ctrl.robot_summary()
+        try:
+            pos, quat = self.wizard().live_capture().current_pose(
+                s['base_frame'], s['tip_link'])
+        except Exception as exc:  # noqa: BLE001
+            self.pos.setText(f'# capture failed: {exc}')
+            return
+        self.pos.setText(', '.join(f'{v:.4f}' for v in pos))
+        self.quat.setText(', '.join(f'{v:.4f}' for v in quat))
+        self.target_mode.setCurrentText('tcp')
+
+    def add_move(self):
+        name = self.move_name.text().strip()
+        if not name:
+            return
+        kwargs = dict(name=name, motion=self.motion.currentText(),
+                      planner=self.move_planner.currentText() or None,
+                      speed=self.speed.value(), role=self.role.currentText(),
+                      allowed_start_tolerance=self.start_tol.value())
+        try:
+            if self.target_mode.currentText() == 'named':
+                kwargs['named'] = self.named.text().strip()
+            else:
+                kwargs['position'] = _parse_floats(self.pos.text())
+                kwargs['orientation'] = _parse_floats(self.quat.text())
+            if self.motion.currentText() == 'circ' and self.aux.text().strip():
+                kwargs['aux'] = _parse_floats(self.aux.text())
+                kwargs['aux_is_center'] = self.aux_is_center.isChecked()
+        except ValueError:
+            return
+        if self.motion.currentText() == 'circ' and not kwargs.get('aux'):
+            self.seq.addItem(f'(skipped {name}: CIRC needs an aux point)')
+            return
+        self.ctrl.add_move(**kwargs)
+        for kind, cb in self.tool_cbs.items():
+            if cb.isChecked():
+                ref = self.payload_ref.text().strip() or None if kind in ('attach', 'detach') else None
+                self.ctrl.add_tool_action(name, kind, ref)
+        self._refresh()
+
+    def _refresh(self):
+        self.seq.clear()
+        for n in self.ctrl.project.application.sequence:
+            self.seq.addItem(n)
+
+    def validatePage(self) -> bool:
+        return True
+
+
+class SetupWizard(QWizard):
+    def __init__(self, controller: Optional[AssistantController] = None):
+        super().__init__()
+        self.controller = controller or AssistantController()
+        self._live = None
+        self.setWindowTitle('TrainIt Setup Assistant')
+        self.load_page = LoadRobotPage(self.controller)
+        self.group_page = GroupFramesPage(self.controller)
+        self.controllers_page = ControllersPage(self.controller)
+        self.states_page = NamedStatesPage(self.controller)
+        self.scene_page = ScenePage(self.controller)
+        self.application_page = ApplicationPage(self.controller)
+        self.waypoints_page = WaypointsPage(self.controller)
+        self.generate_page = GeneratePage(self.controller)
+        for page in (self.load_page, self.group_page, self.controllers_page,
+                     self.states_page, self.scene_page,
+                     self.application_page, self.waypoints_page, self.generate_page):
+            self.addPage(page)
+        self._scene_pub = None
+
+    def live_capture(self):  # pragma: no cover - needs a live ROS session
+        """Lazily create the shared LiveCapture reader for the running session."""
+        if self._live is None:
+            from ..livesession import LiveCapture
+            self._live = LiveCapture()
+        return self._live
+
+    def planning_scene(self):  # pragma: no cover - needs a live ROS session
+        """Lazily create the planning-scene publisher for live preview."""
+        if self._scene_pub is None:
+            from ..livesession import PlanningScenePublisher
+            self._scene_pub = PlanningScenePublisher()
+        return self._scene_pub
+
+    def closeEvent(self, event):  # pragma: no cover - GUI lifecycle
+        if self._live is not None:
+            self._live.close()
+        if self._scene_pub is not None:
+            self._scene_pub.close()
+        super().closeEvent(event)

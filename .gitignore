@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+
+# colcon / ament
+build/
+install/
+log/
+
+# editor
+.vscode/
+*.swp

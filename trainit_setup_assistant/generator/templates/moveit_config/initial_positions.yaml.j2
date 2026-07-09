@@ -1,0 +1,5 @@
+# Default initial positions for the ros2_control fake/isaac system.
+initial_positions:
+{% for joint, value in initial_positions.items() %}
+  {{ joint }}: {{ value | fmtnum }}
+{% endfor %}

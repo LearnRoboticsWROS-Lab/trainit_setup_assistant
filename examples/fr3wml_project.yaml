@@ -1,0 +1,174 @@
+# Reference project describing the FR3WML golden bundle (fr3wml_app).
+# `trainit_generate examples/fr3wml_project.yaml -o /tmp/out` must reproduce a bundle
+# equivalent to fr3wml_app. NOTE: description paths are absolute (machine-specific);
+# point them at wherever the robot's description package lives.
+schema_version: 1
+project_name: fr3wml_app_trainit_config
+
+bundle:
+  description_package: fr3wml_app_trainit_config_description
+  moveit_config_package: fr3wml_app_trainit_config_moveit_config
+  app_package: fr3wml_app_trainit_config
+
+meta:
+  maintainer_name: fra
+  maintainer_email: ros.master.ai@gmail.com
+  license: Apache-2.0
+  version: 0.0.0
+
+robot:
+  robot_name: fr3wml
+  description:
+    urdf_dir: /home/fra/fr5_ws/src/fr3wml_digital_twin/fr3wml_app/fr3wml_description/urdf
+    top_xacro: fr3wml_suction.urdf.xacro
+    meshes_dir: /home/fra/fr5_ws/src/fr3wml_digital_twin/fr3wml_app/fr3wml_description/meshes
+  base_frame: base_link
+  tip_link: tcp
+  planning_group:
+    name: fr3wml
+    base_link: base_link
+    tip_link: tcp
+    joints: [j1, j2, j3, j4, j5, j6]
+  gripper:
+    kind: suction
+    eef_group_name: SuctionCup
+    eef_name: suction
+    eef_parent_link: tcp
+    command_joint: suctioncup_joint
+    controller_name: suctioncup_controller
+    controller_type: GripperCommand
+    action_ns: gripper_command
+    grasp_action: close
+    release_action: open
+    open_state: 'off'
+    closed_state: 'on'
+  named_states:
+    - {name: zero, group: fr3wml, joint_values: {j1: 0.0, j2: 0.0, j3: 0.0, j4: 0.0, j5: 0.0, j6: 0.0}}
+    - {name: up, group: fr3wml, joint_values: {j1: 0.0, j2: -1.57, j3: 0.0, j4: -1.57, j5: 0.0, j6: 0.0}}
+    - {name: home, group: fr3wml, joint_values: {j1: 0.0, j2: -2.0602, j3: 1.2497, j4: -1.6214, j5: -1.57, j6: 0.0}}
+    - {name: home2, group: fr3wml, joint_values: {j1: 0.0, j2: -1.0814, j3: -1.62, j4: -1.57, j5: 1.57, j6: 0.0}}
+    - {name: 'off', group: SuctionCup, joint_values: {suctioncup_joint: 0.0}}
+    - {name: 'on', group: SuctionCup, joint_values: {suctioncup_joint: 1.0}}
+  kinematics:
+    solver: kdl_kinematics_plugin/KDLKinematicsPlugin
+    search_resolution: 0.005
+    timeout: 0.005
+  joint_limits:
+    default_velocity_scaling_factor: 0.1
+    default_acceleration_scaling_factor: 0.1
+    per_joint:
+      j1: {has_velocity_limits: true, max_velocity: 3.15, has_acceleration_limits: true, max_acceleration: 5.0}
+      j2: {has_velocity_limits: true, max_velocity: 3.15, has_acceleration_limits: true, max_acceleration: 5.0}
+      j3: {has_velocity_limits: true, max_velocity: 3.15, has_acceleration_limits: true, max_acceleration: 5.0}
+      j4: {has_velocity_limits: true, max_velocity: 3.2, has_acceleration_limits: true, max_acceleration: 5.0}
+      j5: {has_velocity_limits: true, max_velocity: 3.2, has_acceleration_limits: true, max_acceleration: 5.0}
+      j6: {has_velocity_limits: true, max_velocity: 3.2, has_acceleration_limits: true, max_acceleration: 5.0}
+      suctioncup_joint: {has_velocity_limits: false, max_velocity: 0.0, has_acceleration_limits: false, max_acceleration: 0.0}
+  ompl:
+    default_planner_config: RRTConnectkConfigDefault
+    planner_configs:
+      - RRTConnectkConfigDefault
+      - RRTkConfigDefault
+      - RRTstarkConfigDefault
+      - PRMkConfigDefault
+      - PRMstarkConfigDefault
+      - ESTkConfigDefault
+      - KPIECEkConfigDefault
+      - BKPIECEkConfigDefault
+      - LBKPIECEkConfigDefault
+    projection_evaluator: joints(j1,j2)
+    longest_valid_segment_fraction: 0.005
+  pilz_cartesian_limits:
+    max_trans_vel: 1.0
+    max_trans_acc: 2.25
+    max_trans_dec: -5.0
+    max_rot_vel: 1.57
+  initial_positions: {j1: 0.0, j2: 0.0, j3: 0.0, j4: 0.0, j5: 0.0, j6: 0.0, suctioncup_joint: 0.0}
+  arm_controller:
+    name: moveit_joint_controller
+    type: joint_trajectory_controller/JointTrajectoryController
+    action_ns: follow_joint_trajectory
+    update_rate: 100
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+  # Self-collision matrix (project data). Computed once by collisions_updater
+  # (identical to the golden fr3wml.srdf). The generator consumes this verbatim;
+  # it never spawns a planning process. Re-compute with trainit_compute_collisions.
+  disable_collisions:
+    - {link1: base_link, link2: shoulder_Link, reason: Adjacent}
+    - {link1: forearm_Link, link2: shoulder_Link, reason: Never}
+    - {link1: forearm_Link, link2: upperarm_Link, reason: Adjacent}
+    - {link1: forearm_Link, link2: wrist1_Link, reason: Adjacent}
+    - {link1: shoulder_Link, link2: upperarm_Link, reason: Adjacent}
+    - {link1: shoulder_Link, link2: wrist1_Link, reason: Never}
+    - {link1: suction_body, link2: wrist1_Link, reason: Never}
+    - {link1: suction_body, link2: wrist2_Link, reason: Never}
+    - {link1: suction_body, link2: wrist3_Link, reason: Adjacent}
+    - {link1: upperarm_Link, link2: wrist1_Link, reason: Never}
+    - {link1: wrist1_Link, link2: wrist2_Link, reason: Adjacent}
+    - {link1: wrist1_Link, link2: wrist3_Link, reason: Never}
+    - {link1: wrist2_Link, link2: wrist3_Link, reason: Adjacent}
+
+scene:
+  objects:
+    - id: table
+      source: primitive
+      shape: box
+      dims: [2.0, 2.0, 0.10]
+      frame: base_link
+      position: [0.0, 0.0, -0.08]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+      dynamic: false
+      collision: true
+  payload:
+    id: cube
+    dims: [0.02, 0.02, 0.02]
+    attach_link: tcp
+    attach_offset: [0.0, 0.0, 0.01]
+
+deployment:
+  modes: [mock, isaac, real]
+  default_mode: isaac
+  arm_joint_states_remap_to: /joint_states_robot
+  bridges:
+    - {package: fr3wml_isaac, executable: isaac_suction_bridge.py, modes: [mock, isaac]}
+    - package: fairino_gripper
+      executable: joint_state_merger
+      name: joint_state_merger_suction
+      modes: [mock, isaac]
+      parameters:
+        - {robot_joint_states_in: /joint_states_robot, gripper_joint_states_in: /suction/joint_states, joint_states_out: /joint_states}
+    - package: fairino_gripper
+      executable: gripper_suction_action_server
+      modes: [mock, isaac]
+      parameters:
+        - {on_service: /suction/on, off_service: /suction/off}
+  real_include:
+    package: fairino_bridge
+    launch_file: bridge_fr3wml_gripper_suction.launch.py
+
+application:
+  type: pick_and_place
+  global_planner_mode: pilz
+  waypoints:
+    - {name: home, type: joint, named: home2, role: home}
+    - {name: pre_pick, type: tcp, position: [0.556, -0.029, 0.167], orientation: [-0.707, 0.707, 0.008, -0.009], role: pre_pick}
+    - {name: pick, type: tcp, position: [0.558, -0.026, 0.024], orientation: [-0.707, 0.707, 0.008, -0.009], role: pick}
+    - {name: post_pick, type: tcp, position: [0.558, -0.026, 0.124], orientation: [-0.707, 0.707, 0.008, -0.009], role: post_pick}
+    - {name: pre_place, type: tcp, position: [0.564, -0.275, 0.248], orientation: [-0.707, 0.707, 0.008, -0.009], role: pre_place}
+    - {name: place, type: tcp, position: [0.558, -0.275, 0.023], orientation: [-0.707, 0.707, 0.008, -0.009], role: place}
+    - {name: post_place, type: tcp, position: [0.558, -0.275, 0.123], orientation: [-0.707, 0.707, 0.008, -0.009], role: post_place}
+  segments:
+    - {to_waypoint: home, motion: ptp, planner: pilz, speed: 80}
+    - {to_waypoint: pre_pick, motion: free, planner: pilz, speed: 60}
+    - {to_waypoint: pick, motion: lin, speed: 30}
+    - {to_waypoint: post_pick, motion: lin, speed: 40}
+    - {to_waypoint: pre_place, motion: free, planner: pilz, speed: 60}
+    - {to_waypoint: place, motion: lin, speed: 30}
+    - {to_waypoint: post_place, motion: lin, speed: 40}
+  tool_actions:
+    - {at_waypoint: pick, kind: grasp}
+    - {at_waypoint: pick, kind: attach, payload_ref: cube}
+    - {at_waypoint: place, kind: release}
+    - {at_waypoint: place, kind: detach, payload_ref: cube}
+  sequence: [home, pre_pick, pick, post_pick, pre_place, place, post_place, home]

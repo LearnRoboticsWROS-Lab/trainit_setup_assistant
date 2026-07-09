@@ -1,0 +1,99 @@
+"""Emit ``*_app``: GENERATE bt_params + the BT tree, TEMPLATE launch + package files.
+
+bt_params.yaml and the BT XML are GENERATED from the task graph (waypoints + scene +
+tool actions); the launch files are TEMPLATED from the robot/deployment; the Groot2
+project is generated metadata.
+"""
+
+from __future__ import annotations
+
+from ...applications import build_bt_params_context, get_application
+from ...model.enums import AppType, GripperKind
+from .base import Emitter, GenContext
+
+
+class AppEmitter(Emitter):
+    def emit(self, project, ctx: GenContext) -> None:
+        app = project.application
+        pkg = project.bundle.app_package
+        robot = project.robot
+        dep = project.deployment
+
+        gripper_present = (robot.gripper.kind is not GripperKind.NONE
+                           and bool(robot.gripper.controller_name))
+        gripper_action = robot.gripper.gripper_action_ns() if gripper_present else ''
+
+        template = get_application(app.type)
+
+        # validation problems are surfaced (do not abort: a partial bundle still helps)
+        for problem in template.validate(project):
+            ctx.manifest.warn(f'application: {problem}')
+
+        # the engine plans BOX collisions only: non-box primitives are emitted as AABB
+        for obj in project.scene.objects:
+            if obj.is_planning_collision() and not obj.is_box():
+                ctx.manifest.warn(
+                    f'scene object "{obj.id}" is {obj.shape.value}; engine is box-only '
+                    f'-> emitted as its AABB {obj.aabb_dims()}')
+
+        # --- bt_params.yaml (GENERATE from the task graph) ---
+        bt_ctx = build_bt_params_context(project)
+        bt_params_text = ctx.render('app/bt_params.yaml.j2', **bt_ctx)
+        ctx.generate_to(f'{pkg}/config/bt_params.yaml', bt_params_text,
+                        source='app/bt_params.yaml.j2')
+
+        # --- BT tree XML (GENERATE by the application template) ---
+        tree_name = template.tree_filename(project)
+        tree_xml = template.build_tree_xml(project)
+        ctx.generate_to(f'{pkg}/bt_trees/{tree_name}', tree_xml,
+                        source=f'application:{app.type.value}')
+
+        # --- launch files (TEMPLATE) ---
+        ctx.render_to(f'{pkg}/launch/trainit_bt.launch.py',
+                      'app/trainit_bt.launch.py.j2',
+                      robot_name=robot.robot_name,
+                      moveit_config_package=project.bundle.moveit_config_package,
+                      app_package=pkg,
+                      tree_filename=tree_name,
+                      default_planner_mode=app.global_planner_mode.value)
+
+        ctx.render_to(f'{pkg}/launch/bringup.launch.py',
+                      'app/bringup.launch.py.j2',
+                      robot_name=robot.robot_name,
+                      moveit_config_package=project.bundle.moveit_config_package,
+                      app_package=pkg,
+                      arm_controller=robot.arm_controller.name,
+                      valid_modes_py=repr(tuple(dep.modes)),
+                      arm_js_remap_to_py=repr(dep.arm_joint_states_remap_to),
+                      bridges_py=repr([b.model_dump() for b in dep.bridges]),
+                      real_include_py=(repr(dep.real_include.model_dump())
+                                       if dep.real_include else 'None'),
+                      default_mode=dep.default_mode,
+                      modes_human=' | '.join(dep.modes),
+                      # mock gripper: run the generated no-op server in mock mode when a
+                      # gripper exists but no cell bridge serves it (empty bridges).
+                      gripper_mock_action_py=(repr(gripper_action)
+                                              if gripper_present else 'None'))
+
+        # --- mock gripper action server (GENERATE, only if the robot has a gripper) ---
+        if gripper_present:
+            ctx.render_to(f'{pkg}/scripts/mock_gripper_action_server.py',
+                          'app/mock_gripper_action_server.py.j2',
+                          gripper_action=gripper_action)
+
+        # --- Groot2 project (GENERATE metadata) ---
+        groot_name = f'{robot.robot_name}_{app.type.value}'
+        btproj_text = ctx.render('app/btproj.j2',
+                                 groot_project_name=groot_name, tree_filename=tree_name)
+        ctx.generate_to(f'{pkg}/groot2/{robot.robot_name}_{app.type.value}.btproj',
+                        btproj_text, source='app/btproj.j2')
+
+        # --- package files (TEMPLATE) ---
+        ctx.render_to(f'{pkg}/package.xml', 'app/package.xml.j2',
+                      package_name=pkg, meta=project.meta, robot_name=robot.robot_name,
+                      app_type=app.type.value,
+                      moveit_config_package=project.bundle.moveit_config_package,
+                      description_package=project.bundle.description_package,
+                      bridge_packages=dep.bridge_packages())
+        ctx.render_to(f'{pkg}/CMakeLists.txt', 'app/CMakeLists.txt.j2',
+                      package_name=pkg, has_gripper_script=gripper_present)

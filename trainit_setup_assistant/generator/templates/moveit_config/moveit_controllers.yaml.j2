@@ -1,0 +1,27 @@
+# MoveIt controller manager — identical across mock / isaac / real.
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+
+moveit_simple_controller_manager:
+  controller_names:
+    - {{ arm.name }}
+{% if gripper_present %}
+    - {{ grip.controller_name }}
+{% endif %}
+
+  {{ arm.name }}:
+    type: FollowJointTrajectory
+    action_ns: {{ arm.action_ns }}
+    default: true
+    joints:
+{% for j in joints %}
+      - {{ j }}
+{% endfor %}
+{% if gripper_present %}
+
+  {{ grip.controller_name }}:
+    type: {{ grip.controller_type }}
+    action_ns: {{ grip.action_ns }}
+    default: true
+    joints:
+      - {{ grip.command_joint }}
+{% endif %}

@@ -246,17 +246,13 @@ def test_wizard_app_pages_build_app(qapp):
     ctrl.open_project(EXAMPLE)          # robot half ready
     ctrl.clear_application()
     ctrl.project.scene.objects = []
-    ctrl.project.scene.payload = None
+    ctrl.set_payload('cube', [0.02, 0.02, 0.02], attach_offset=[0, 0, 0.01])  # scene defines the payload
     wiz = SetupWizard(ctrl)
 
-    # S4 application + payload
+    # S5 application type (planner/payload are no longer here: per-waypoint + scene)
     wiz.application_page.app_type.setCurrentText('pick_and_place')
-    wiz.application_page.planner.setCurrentText('pilz')
-    wiz.application_page.payload_id.setText('cube')
-    wiz.application_page.payload_dims.setText('0.02, 0.02, 0.02')
-    wiz.application_page.payload_offset.setText('0, 0, 0.01')
     assert wiz.application_page.validatePage()
-    assert ctrl.project.scene.payload.id == 'cube'
+    assert ctrl.project.application.type.value == 'pick_and_place'
 
     # S5 waypoints — add home (named) then a pick (tcp) with grasp+attach
     wp = wiz.waypoints_page
@@ -334,10 +330,8 @@ def test_wizard_mvp_flow_offscreen(qapp):
     bottle = next(o for o in ctrl.project.scene.objects if o.id == 'bottle_0_0')
     assert bottle.is_mesh() and bottle.is_grasp_target()
 
-    # Step 7: application
+    # Step 5: application type (planner is per-waypoint; objects come from the scene)
     wiz.application_page.app_type.setCurrentText('pick_and_place')
-    wiz.application_page.planner.setCurrentText('pilz')
-    wiz.application_page.payload_id.setText('')          # no payload -> no attach action
     assert wiz.application_page.validatePage()
 
     # Step 8: waypoints (named SRDF states) with a per-move attached-check ON

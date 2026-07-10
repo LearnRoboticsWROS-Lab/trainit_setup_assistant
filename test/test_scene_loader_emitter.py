@@ -110,5 +110,35 @@ def test_step3_intermediate_config():
         assert os.path.isfile(os.path.join(cfg, 'package.xml'))
 
 
+BASELINE_SCENE = ('/home/fra/BIG1500_tending_nesting/src/big1500_digital_twin/'
+                  'fr30_eef_scene_loader_moveit_config/config/scene.yaml')
+
+
+@pytest.mark.skipif(not (os.path.isdir(BASE) and os.path.isfile(BASELINE_SCENE)),
+                    reason='baseline scene_loader config not present')
+def test_import_scene_yaml_reproduces_baseline():
+    """The acceptance criterion: import the baseline scene.yaml -> generate the config ->
+    its scene.yaml is functionally identical to the hand-made baseline."""
+    import yaml
+    from trainit_setup_assistant.generator.scene_yaml import build_scene_yaml
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    ctrl.load_base_moveit_config('fr30_eef_moveit_config', BASE)
+    n = ctrl.import_scene_yaml(BASELINE_SCENE)
+    assert n == 23
+    got = yaml.safe_load(build_scene_yaml(ctrl.project))['scene_manager_node']['ros__parameters']
+    want = yaml.safe_load(open(BASELINE_SCENE))['scene_manager_node']['ros__parameters']
+    assert got['object_ids'] == want['object_ids']
+    assert got['attach_object_ids'] == want['attach_object_ids']       # only the bottles
+    assert got['touch_links'] == want['touch_links']
+    for oid in want['object_ids']:
+        a, b = got['objects'][oid], want['objects'][oid]
+        assert a['type'] == b['type'] == 'mesh'
+        assert a['mesh_path'] == b['mesh_path']
+        assert a['dynamic'] == b['dynamic']
+        assert [round(x, 4) for x in a['position']] == [round(x, 4) for x in b['position']]
+        assert [round(x, 4) for x in a['orientation']] == [round(x, 4) for x in b['orientation']]
+
+
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))

@@ -313,8 +313,9 @@ class GeneratePage(QWizardPage):
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
-        self.setTitle('S7 — Generate')
-        self.setSubTitle('Name the bundle and generate the 3 packages.')
+        self.setTitle('Step 7 — Generate the bundle')
+        self.setSubTitle('Name the bundle and generate the 3 packages (app + trainit_config '
+                         '+ description). The bundle README has the one-command run.')
         form = QFormLayout(self)
         self.project_name = QLineEdit()
         form.addRow('Project / bundle name', self.project_name)
@@ -374,13 +375,12 @@ class ScenePage(QWizardPage):
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
-        self.setTitle('S4 — Scene')
-        self.setSubTitle('Load the cell and classify each object: '
-                         'static (fixed structure, e.g. BW-0080) and actuated (URDF '
-                         'station moved by an adapter, e.g. prewash/belt) are CHECKED '
-                         'collisions the robot avoids; dynamic (bottles, crate) are shown '
-                         'but collision-ALLOWED with everything (touched by the gripper). '
-                         'Engine plans BOX only — others are emitted as their AABB.')
+        self.setTitle('Step 2 — Cell scene')
+        self.setSubTitle('RECOMMENDED: Import scene.yaml — the mesh cell scene produced by '
+                         'your scene_from_usd.py (base-frame poses + package:// meshes + '
+                         'attach ids already resolved). This reproduces the working baseline. '
+                         '(Import USD gives rough AABB boxes; manual objects are for tweaks.) '
+                         'Categories: static/actuated = CHECKED collision; dynamic = allowed.')
         layout = QVBoxLayout(self)
         self.list = QListWidget()
         self.list.itemClicked.connect(self._on_select)
@@ -418,17 +418,35 @@ class ScenePage(QWizardPage):
         form.addRow('USD robot base prim', self.usd_base_prim)
         layout.addLayout(form)
         btns = QHBoxLayout()
+        scene_yaml = QPushButton('Import scene.yaml ✓')
+        scene_yaml.clicked.connect(self.import_scene_yaml)
         add = QPushButton('Add / update object')
         add.clicked.connect(self.add_object)
         remove = QPushButton('Remove selected')
         remove.clicked.connect(self.remove_selected)
-        usd = QPushButton('Import USD…')
+        usd = QPushButton('Import USD (rough)…')
         usd.clicked.connect(self.import_usd)
         preview = QPushButton('Preview in RViz (live)')
         preview.clicked.connect(self.preview_live)
-        for b in (add, remove, usd, preview):
+        for b in (scene_yaml, add, remove, usd, preview):
             btns.addWidget(b)
         layout.addLayout(btns)
+        self.status = QLabel('')
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+
+    def import_scene_yaml(self):  # pragma: no cover - file dialog needs a display
+        path, _ = QFileDialog.getOpenFileName(self, 'Import scene.yaml (scene_manager_node)',
+                                              '', 'scene (*.yaml *.yml)')
+        if not path:
+            return
+        try:
+            n = self.ctrl.import_scene_yaml(_expand_path(path))
+            self.status.setText(f'Imported {n} objects from scene.yaml (meshes + poses + '
+                                'attach ids) — matches the baseline scene.')
+        except Exception as exc:  # noqa: BLE001
+            self.status.setText(f'import failed: {exc}')
+        self._refresh()
 
     def import_usd(self):  # pragma: no cover - file dialog needs a display
         path, _ = QFileDialog.getOpenFileName(self, 'Import USD scene', '',
@@ -512,34 +530,36 @@ class ScenePage(QWizardPage):
 
 
 class ApplicationPage(QWizardPage):
+    # Every application the TrainIt Motion Runtime can host (only pick_and_place is
+    # wired end-to-end in this MVP; the rest are shown greyed = coming / PRO).
+    APPS = [('pick_and_place', True), ('gluing', False), ('follow_path', False),
+            ('waypoint_replay', False), ('cnc', False)]
+
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
-        self.setTitle('S5 — Application')
-        self.setSubTitle('Choose the application and the manipulated payload.')
+        self.setTitle('Step 5 — Application type')
+        self.setSubTitle('Pick the robotic application. The greyed ones are hosted by the '
+                         'TrainIt Motion Runtime but not yet wired in this MVP (PRO / '
+                         'roadmap). Motion type + planner are chosen PER WAYPOINT in the '
+                         'next step — there is no single global planner. The manipulated '
+                         'objects come from the scene (grasp targets), not from here.')
         form = QFormLayout(self)
         self.app_type = QComboBox()
-        self.app_type.addItems(['pick_and_place'])  # more templates land later
+        for name, enabled in self.APPS:
+            self.app_type.addItem(name if enabled else f'{name}  (coming soon)')
+        model = self.app_type.model()          # grey out the not-yet-available apps
+        for i, (_, enabled) in enumerate(self.APPS):
+            if not enabled:
+                model.item(i).setEnabled(False)
         form.addRow('Application', self.app_type)
-        self.planner = QComboBox()
-        self.planner.addItems(['pilz', 'ompl', 'ompl_chomp'])
-        form.addRow('Global planner', self.planner)
-        self.payload_id = QLineEdit('cube')
-        form.addRow('Payload id', self.payload_id)
-        self.payload_dims = QLineEdit('0.02, 0.02, 0.02')
-        form.addRow('Payload dims (x,y,z)', self.payload_dims)
-        self.payload_offset = QLineEdit('0, 0, 0.01')
-        form.addRow('Attach offset (x,y,z)', self.payload_offset)
 
     def validatePage(self) -> bool:
-        self.ctrl.set_application(self.app_type.currentText(), self.planner.currentText())
-        pid = self.payload_id.text().strip()
-        if pid:
-            try:
-                self.ctrl.set_payload(pid, _parse_floats(self.payload_dims.text()),
-                                      attach_offset=_parse_floats(self.payload_offset.text()))
-            except ValueError:
-                return False
+        name = self.APPS[max(0, self.app_type.currentIndex())][0]
+        if not self.APPS[self.app_type.currentIndex()][1]:
+            name = 'pick_and_place'            # guard: only the available one is set
+        # planner is per-waypoint; keep a sensible fallback for segments that don't set one
+        self.ctrl.set_application(name, 'ompl')
         return True
 
 
@@ -547,9 +567,11 @@ class WaypointsPage(QWizardPage):
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
-        self.setTitle('S6 — Waypoints & motions')
-        self.setSubTitle('Capture poses with the RViz gizmo (or pick a named state); '
-                         'for each, choose how to get there (motion / planner / speed).')
+        self.setTitle('Step 6 — Waypoints, motions & dynamic-object flags')
+        self.setSubTitle('The heart: for each move pick a named SRDF state (or capture a '
+                         'TCP pose with the gizmo) AND choose motion / planner / speed + '
+                         'the per-move attached-collision-check. Add grasp/release where '
+                         'the gripper acts. Re-add a waypoint to re-visit it.')
         layout = QVBoxLayout(self)
         self.seq = QListWidget()
         layout.addWidget(self.seq)
@@ -678,7 +700,7 @@ class BaseConfigPage(QWizardPage):
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
-        self.setTitle('Step 2 — Project & base MoveIt config')
+        self.setTitle('Step 1 — Robot & base config')
         self.setSubTitle('Open an existing project.yaml, OR load your hand-made base '
                          'moveit_config (the adaptation-sprint deliverable). The base '
                          'gives the robot, SRDF waypoints, controllers and the '
@@ -740,7 +762,7 @@ class GenerateConfigPage(QWizardPage):
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
-        self.setTitle('Step 3-4 — Generate scene+planner config')
+        self.setTitle('Step 3 — Generate scene+planner config')
         self.setSubTitle('Emit <robot>_scene_loader_moveit_config (base + planners + '
                          'scene.yaml), then build it. Configure the application against it.')
         form = QFormLayout(self)
@@ -797,9 +819,10 @@ class ModeBringupPage(QWizardPage):
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
-        self.setTitle('Step 5-6 — Mode & bring-up')
-        self.setSubTitle('Pick how you will run, then follow the procedure to bring up '
-                         'the cell and (later) run the generated application.')
+        self.setTitle('Step 4 — Mode & bring-up (for configuration)')
+        self.setSubTitle('Pick how you will run, then follow the procedure to BUILD + bring '
+                         'up the scene+planner config so you can configure the application '
+                         'against RViz. (The application itself is launched only at the end.)')
         form = QFormLayout(self)
         self.mode = QComboBox()
         self.mode.addItems(['isaac', 'mock', 'real'])
@@ -815,14 +838,14 @@ class ModeBringupPage(QWizardPage):
         self._refresh()
 
     def _refresh(self, *_):
-        try:
-            cfg = self.ctrl.scene_loader_package_name()
-            app = self.ctrl.project.bundle.app_package
-        except Exception:  # noqa: BLE001
-            cfg, app = '<config>', '<app>'
+        cfg = self.ctrl.scene_loader_pkg      # the name set at Step 3
+        if not cfg:
+            try:
+                cfg = self.ctrl.scene_loader_package_name()
+            except Exception:  # noqa: BLE001
+                cfg = '<the config you generated at Step 3>'
         proc = self.ctrl.bringup_procedure(
-            self.mode.currentText(), cfg, app_package=app,
-            usd_path=self.usd_path.text().strip() or None)
+            self.mode.currentText(), cfg, usd_path=self.usd_path.text().strip() or None)
         self.procedure.setPlainText(proc)
 
     def validatePage(self) -> bool:

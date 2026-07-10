@@ -45,6 +45,9 @@ from ..robotmodel import bootstrap_project, load_robot_spec
 class AssistantController:
     def __init__(self, project: Optional[CanonicalProject] = None):
         self.project: Optional[CanonicalProject] = project
+        # the scene+planner config package name generated at Step 3 (used by Step 6's
+        # bring-up procedure so it names the package the user actually created).
+        self.scene_loader_pkg: Optional[str] = None
 
     # ---- project lifecycle ----
     def new_from_robot(self, xacro_path, robot_name=None, group_name=None,
@@ -395,6 +398,61 @@ class AssistantController:
         if attached_collision_check is not None:
             s.attached_collision_check = bool(attached_collision_check)
 
+    def import_scene_yaml(self, path, replace: bool = True) -> int:
+        """Load the cell scene from a scene_manager_node ``scene.yaml`` (the output of
+        the adaptation-sprint's ``scene_from_usd.py``). This is the RELIABLE path: the
+        meshes + base-frame poses are already resolved, so the generated config matches
+        the hand-made baseline. Populates the SceneObjects (mesh/box/cyl/sphere, category
+        from ``dynamic``, grasp_target from ``attach_object_ids``) + the scene-loader
+        params. Returns the object count.
+        """
+        import yaml
+        data = yaml.safe_load(Path(path).read_text()) or {}
+        params = None
+        for v in data.values():
+            if isinstance(v, dict) and 'ros__parameters' in v:
+                params = v['ros__parameters']
+                break
+        if params is None:
+            raise ValueError('not a scene_manager_node scene.yaml (no ros__parameters)')
+        p = self._require()
+        if replace:
+            p.scene.objects = []
+        objects = params.get('objects', {}) or {}
+        order = params.get('object_ids') or list(objects.keys())
+        attach_ids = set(params.get('attach_object_ids', []) or [])
+        for oid in order:
+            o = objects.get(oid, {}) or {}
+            typ = o.get('type', 'box')
+            cat = 'dynamic' if bool(o.get('dynamic', False)) else 'static'
+            pos = o.get('position', [0.0, 0.0, 0.0])
+            quat = o.get('orientation', [0.0, 0.0, 0.0, 1.0])
+            grasp = oid in attach_ids
+            if typ == 'mesh':
+                self.add_scene_object(oid, [1.0, 1.0, 1.0], pos, shape='mesh',
+                                      mesh_resource=o.get('mesh_path', ''),
+                                      scale=o.get('scale', [1.0, 1.0, 1.0]),
+                                      orientation=quat, category=cat, grasp_target=grasp,
+                                      source='usd')
+            elif typ == 'cylinder':
+                self.add_scene_object(oid, [o.get('radius', 0.05), o.get('height', 0.1)],
+                                      pos, shape='cylinder', orientation=quat,
+                                      category=cat, grasp_target=grasp)
+            elif typ == 'sphere':
+                self.add_scene_object(oid, [o.get('radius', 0.05)], pos, shape='sphere',
+                                      orientation=quat, category=cat, grasp_target=grasp)
+            else:  # box
+                self.add_scene_object(oid, o.get('size', [0.1, 0.1, 0.1]), pos, shape='box',
+                                      orientation=quat, category=cat, grasp_target=grasp)
+        self.set_scene_loader_params(
+            gripper_cmd_topic=params.get('gripper_cmd_topic'),
+            attach_link=params.get('attach_link'),
+            touch_links=params.get('touch_links'),
+            attached_collision_check=params.get('attached_collision_check'))
+        if 'force_republish_hz' in params:
+            p.scene.force_republish_hz = float(params['force_republish_hz'])
+        return len(order)
+
     def import_usd_scene(self, usd_path, dynamic: bool = False, replace: bool = False,
                          base_prim: Optional[str] = None, category=None,
                          classify=None) -> int:
@@ -446,6 +504,7 @@ class AssistantController:
         bundle's ``_trainit_config``, so what you configure == what ships)."""
         from ..generator.orchestrator import generate_scene_loader_config
         pkg = package_name or self.scene_loader_package_name()
+        self.scene_loader_pkg = pkg          # remember it for Step 6's bring-up procedure
         return generate_scene_loader_config(self._require(), output_dir, pkg)
 
     # ---- Step 5/6: mode + guided bring-up ----
@@ -462,25 +521,30 @@ class AssistantController:
                 f'source install/setup.bash')
 
     def bringup_procedure(self, mode: str, config_package: str,
-                          app_package: Optional[str] = None,
                           usd_path: Optional[str] = None,
                           ws_root: str = '<ros2_ws>') -> str:
-        """Step 6: the guided procedure to bring up the cell + run the app for a mode."""
-        src = f'cd {ws_root} && source /opt/ros/humble/setup.bash && source install/setup.bash'
+        """Step 6: the guided procedure to BUILD + bring up the scene+planner config so
+        the application can be configured against a faithful RViz. The application itself
+        is launched later (Step 7 generates it; the bundle README has the run command)."""
         steps: List[str] = []
+        n = 1
         if mode == 'isaac':
-            steps.append('1) Open Isaac Sim, load your USD scene'
+            steps.append(f'{n}) Open Isaac Sim, load your USD scene'
                          + (f'\n     ({usd_path})' if usd_path else '')
                          + ', run the spawn + grasp-adapter scripts, then press PLAY.')
-        steps.append(f'{len(steps) + 1}) Terminal A — bring up the cell:\n'
-                     f'     {src}\n'
+            n += 1
+        steps.append(f'{n}) Build the scene+planner config you generated at Step 3:\n'
+                     f'     cd {ws_root} && source /opt/ros/humble/setup.bash\n'
+                     f'     colcon build --packages-select {config_package}\n'
+                     f'     source install/setup.bash')
+        n += 1
+        steps.append(f'{n}) Bring up the cell (move_group + planners + scene + RViz):\n'
+                     f'     cd {ws_root} && source /opt/ros/humble/setup.bash && source install/setup.bash\n'
                      f'     ros2 launch {config_package} bringup.launch.py mode:={mode}')
-        if app_package:
-            steps.append(f'{len(steps) + 1}) Terminal B — run the application:\n'
-                         f'     {src}\n'
-                         f'     ros2 launch {app_package} trainit_bt.launch.py'
-                         + (' use_sim_time:=false' if mode != 'isaac' else '')
-                         + ' planner_mode:=pilz')
+        n += 1
+        steps.append(f'{n}) Now configure the application (next steps) against this RViz. '
+                     'The application is launched only AFTER you generate the bundle '
+                     '(its README has the run command).')
         return '\n'.join(steps)
 
     # ---- helpers ----

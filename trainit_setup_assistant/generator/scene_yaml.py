@@ -15,8 +15,10 @@ from ..model.enums import ShapeType
 
 
 def _num(v) -> str:
-    f = float(v)
-    return str(int(f)) if f == int(f) else repr(round(f, 6))
+    # ALWAYS a float literal (0.0, 1.0, 0.5813) — scene_manager_node declares position/
+    # orientation/scale/force_republish_hz as DOUBLE; emitting an int (0) would make ROS2
+    # type the param as integer -> a type mismatch that can break scene loading.
+    return repr(round(float(v), 6))
 
 
 def _nums(vals) -> str:

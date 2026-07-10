@@ -366,5 +366,45 @@ def test_wizard_mvp_flow_offscreen(qapp):
             tmp, 'big1500_moveit_config', 'config', 'fr30_eef.srdf'))
 
 
+USD_SCENE = ('/home/fra/BIG1500_tending_nesting/src/big1500_digital_twin/big1500_isaac/'
+             'usd/scenes/big1500_tending_nesting_prewash.usd')
+
+
+@pytest.mark.skipif(not (os.path.isdir(FR30_BASE) and os.path.isfile(USD_SCENE)),
+                    reason='fr30 base or USD not present')
+def test_wizard_usd_mapping_builds_baseline_scene(qapp):
+    """Step 2 from the USD: load USD -> auto-suggested mesh mapping table -> apply ->
+    the scene reproduces the baseline (23 mesh objects, bottles as grasp targets)."""
+    try:
+        from trainit_setup_assistant.importers.usd_scene import usd_available
+    except Exception:
+        pytest.skip('usd_scene import failed')
+    if not usd_available():
+        pytest.skip('pxr / usd-core not available')
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    wiz = SetupWizard(ctrl)
+    wiz.base_page.project_name.setText('big1500')
+    wiz.base_page.base_pkg.setText('fr30_eef_moveit_config')
+    wiz.base_page.base_path.setText(FR30_BASE)
+    assert wiz.base_page.validatePage()
+
+    sp = wiz.scene_page
+    sp.usd_path.setText(USD_SCENE)
+    sp.mesh_pkg.setText('big1500_isaac')
+    sp.load_usd_mapping()
+    # table filled; bottles + crate + prewash + belt auto-suggested; BW_0080_context off
+    assert sp.map_table.rowCount() >= 4
+    groups = {sp.map_table.item(i, 1).text().split()[0] for i in range(sp.map_table.rowCount())}
+    assert {'bottle', 'crate', 'prewash_station', 'belt_conveyor'} <= groups
+    sp.apply_usd_mapping_table()
+    ids = {o.id for o in ctrl.project.scene.objects}
+    assert 'bottle_0_0' in ids and 'crate_00' in ids and 'prewash_station' in ids
+    assert len(ctrl.project.scene.objects) == 23        # BW_0080_context excluded
+    bottle = next(o for o in ctrl.project.scene.objects if o.id == 'bottle_0_0')
+    assert bottle.is_mesh() and bottle.is_grasp_target()
+    assert bottle.mesh_resource.endswith('dynamic/bottle_50cl.stl')
+
+
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))

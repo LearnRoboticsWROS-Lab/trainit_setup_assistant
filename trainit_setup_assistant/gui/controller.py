@@ -48,6 +48,8 @@ class AssistantController:
         # the scene+planner config package name generated at Step 3 (used by Step 6's
         # bring-up procedure so it names the package the user actually created).
         self.scene_loader_pkg: Optional[str] = None
+        # cell prims + poses read from the USD (held between import and apply).
+        self._usd_prims: List[dict] = []
 
     # ---- project lifecycle ----
     def new_from_robot(self, xacro_path, robot_name=None, group_name=None,
@@ -452,6 +454,44 @@ class AssistantController:
         if 'force_republish_hz' in params:
             p.scene.force_republish_hz = float(params['force_republish_hz'])
         return len(order)
+
+    def import_usd_cell(self, usd_path, mesh_pkg: str, base_prim: Optional[str] = None) -> list:
+        """Step 2 (recommended): read the cell prims from the USD (base-aligned poses,
+        which reproduce the baseline) and AUTO-SUGGEST a collision mesh per group by
+        scanning ``<mesh_pkg>/meshes``. Returns the editable group rules; the per-prim
+        poses are held for :meth:`apply_usd_mapping`."""
+        from ..importers.usd_scene import read_cell_prims, build_group_rules
+        p = self._require()
+        if base_prim is None:
+            base_prim = f'/World/{p.robot.robot_name}/{p.robot.base_frame}'
+        self._usd_prims = read_cell_prims(usd_path, base_prim=base_prim,
+                                          robot_hint=p.robot.robot_name)
+        return build_group_rules(self._usd_prims, mesh_pkg,
+                                 hint_path=p.robot.base_moveit_config_path)
+
+    def apply_usd_mapping(self, rules, replace: bool = True) -> int:
+        """Build the scene from the held USD prims + the (edited) group rules: one mesh
+        SceneObject per included prim (pose from the USD, mesh/category/grasp from its
+        group rule). Returns the object count."""
+        p = self._require()
+        by_group = {r['group']: r for r in rules}
+        if replace:
+            p.scene.objects = []
+        included = [(pr, by_group[pr['group']]) for pr in self._usd_prims
+                    if by_group.get(pr['group']) and by_group[pr['group']].get('include')]
+
+        def _is_grasp(r):
+            return bool(r.get('grasp')) and r.get('category') == 'dynamic'
+        # non-grasp objects (structure/crate) first, grasp targets last — the baseline
+        # convention. sorted() is stable, so USD order is preserved within each bucket.
+        included.sort(key=lambda pr_r: _is_grasp(pr_r[1]))
+        for pr, r in included:
+            cat = r.get('category', 'static')
+            self.add_scene_object(
+                pr['name'], [1.0, 1.0, 1.0], pr['position'], shape='mesh',
+                mesh_resource=r.get('mesh', ''), orientation=pr['orientation'],
+                category=cat, grasp_target=_is_grasp(r), source='usd')
+        return len(included)
 
     def import_usd_scene(self, usd_path, dynamic: bool = False, replace: bool = False,
                          base_prim: Optional[str] = None, category=None,

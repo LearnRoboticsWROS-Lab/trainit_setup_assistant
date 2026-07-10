@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 from typing import Dict, Optional
 
+from python_qt_binding.QtCore import Qt
 from python_qt_binding.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -20,11 +21,14 @@ from python_qt_binding.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
     QPushButton,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWizard,
@@ -375,13 +379,44 @@ class ScenePage(QWizardPage):
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
-        self.setTitle('Step 2 — Cell scene')
-        self.setSubTitle('RECOMMENDED: Import scene.yaml — the mesh cell scene produced by '
-                         'your scene_from_usd.py (base-frame poses + package:// meshes + '
-                         'attach ids already resolved). This reproduces the working baseline. '
-                         '(Import USD gives rough AABB boxes; manual objects are for tweaks.) '
-                         'Categories: static/actuated = CHECKED collision; dynamic = allowed.')
+        self.setTitle('Step 2 — Cell scene (from the USD)')
+        self.setSubTitle('Load the USD + the mesh package: the TSA reads the cell prims + '
+                         'base-frame poses and AUTO-SUGGESTS a collision mesh per group '
+                         '(scanning <pkg>/meshes). Review the small table (category / grasp / '
+                         'mesh), then "Apply mapping". static/actuated = CHECKED collision; '
+                         'dynamic = allowed; grasp targets attach to the tool on close.')
         layout = QVBoxLayout(self)
+
+        # --- USD import + auto-suggested mesh mapping (the recommended path) ---
+        usd_form = QFormLayout()
+        self.usd_path = QLineEdit()
+        ubrowse = QPushButton('Browse…')
+        ubrowse.clicked.connect(self._browse_usd)
+        urow = QHBoxLayout(); urow.addWidget(self.usd_path); urow.addWidget(ubrowse)
+        usd_form.addRow('USD scene', urow)
+        self.mesh_pkg = QLineEdit()
+        self.mesh_pkg.setPlaceholderText('mesh package, e.g. big1500_isaac')
+        usd_form.addRow('Mesh package', self.mesh_pkg)
+        # scene-loader attach param (not in the USD): links near the tool allowed to
+        # touch a grasped object (self-collision relief). BIG1500: end_effector, tcp, wrist3_link.
+        self.touch_links = QLineEdit('tcp')
+        usd_form.addRow('Tool touch links (csv)', self.touch_links)
+        load_usd = QPushButton('Load USD → auto-suggest meshes')
+        load_usd.clicked.connect(self.load_usd_mapping)
+        usd_form.addRow(load_usd)
+        layout.addLayout(usd_form)
+        # the mapping table: one row per prim GROUP (bottle_* collapses to one row)
+        self._rules = []
+        self.map_table = QTableWidget(0, 5)
+        self.map_table.setHorizontalHeaderLabels(
+            ['include', 'group (count)', 'category', 'grasp', 'mesh resource'])
+        self.map_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        layout.addWidget(self.map_table)
+        apply_map = QPushButton('Apply mapping → build scene')
+        apply_map.clicked.connect(self.apply_usd_mapping_table)
+        layout.addWidget(apply_map)
+
+        layout.addWidget(QLabel('— resulting scene objects (edit individually below) —'))
         self.list = QListWidget()
         self.list.itemClicked.connect(self._on_select)
         layout.addWidget(self.list)
@@ -411,24 +446,17 @@ class ScenePage(QWizardPage):
         self.release_policy = QComboBox()
         self.release_policy.addItems(['freeze', 'gravity'])
         form.addRow('On release (Isaac)', self.release_policy)
-        # USD import alignment: the robot's prim path in the USD, so cell-world coords
-        # become base-relative. Blank => auto-detect by robot name.
-        self.usd_base_prim = QLineEdit()
-        self.usd_base_prim.setPlaceholderText('auto (e.g. /fr3wml_suction)')
-        form.addRow('USD robot base prim', self.usd_base_prim)
         layout.addLayout(form)
         btns = QHBoxLayout()
-        scene_yaml = QPushButton('Import scene.yaml ✓')
-        scene_yaml.clicked.connect(self.import_scene_yaml)
         add = QPushButton('Add / update object')
         add.clicked.connect(self.add_object)
         remove = QPushButton('Remove selected')
         remove.clicked.connect(self.remove_selected)
-        usd = QPushButton('Import USD (rough)…')
-        usd.clicked.connect(self.import_usd)
+        scene_yaml = QPushButton('Import scene.yaml (alt)')
+        scene_yaml.clicked.connect(self.import_scene_yaml)
         preview = QPushButton('Preview in RViz (live)')
         preview.clicked.connect(self.preview_live)
-        for b in (scene_yaml, add, remove, usd, preview):
+        for b in (add, remove, scene_yaml, preview):
             btns.addWidget(b)
         layout.addLayout(btns)
         self.status = QLabel('')
@@ -448,16 +476,69 @@ class ScenePage(QWizardPage):
             self.status.setText(f'import failed: {exc}')
         self._refresh()
 
-    def import_usd(self):  # pragma: no cover - file dialog needs a display
-        path, _ = QFileDialog.getOpenFileName(self, 'Import USD scene', '',
+    def _browse_usd(self):  # pragma: no cover - needs a display
+        path, _ = QFileDialog.getOpenFileName(self, 'Load USD scene', '',
                                               'USD (*.usd *.usda *.usdc)')
-        if not path:
+        if path:
+            self.usd_path.setText(path)
+
+    def load_usd_mapping(self):
+        usd = _expand_path(self.usd_path.text())
+        pkg = self.mesh_pkg.text().strip()
+        if not usd or not pkg:
+            self.status.setText('set the USD path + mesh package first')
             return
-        base = self.usd_base_prim.text().strip() or None
         try:
-            self.ctrl.import_usd_scene(_expand_path(path), base_prim=base)
-        except Exception:  # noqa: BLE001
-            pass
+            self._rules = self.ctrl.import_usd_cell(usd, pkg)
+        except Exception as exc:  # noqa: BLE001
+            self.status.setText(f'USD load failed: {exc}')
+            return
+        self._fill_table(self._rules)
+        self.status.setText(f'{len(self._rules)} prim groups (meshes auto-suggested from '
+                            f'{pkg}/meshes) — review, then "Apply mapping".')
+
+    def _fill_table(self, rules):
+        self.map_table.setRowCount(len(rules))
+        for i, r in enumerate(rules):
+            inc = QTableWidgetItem()
+            inc.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            inc.setCheckState(Qt.Checked if r['include'] else Qt.Unchecked)
+            self.map_table.setItem(i, 0, inc)
+            g = QTableWidgetItem(f"{r['group']}  (x{r['count']})")
+            g.setFlags(Qt.ItemIsEnabled)
+            self.map_table.setItem(i, 1, g)
+            cat = QComboBox()
+            cat.addItems(['static', 'actuated', 'dynamic'])
+            cat.setCurrentText(r['category'])
+            self.map_table.setCellWidget(i, 2, cat)
+            gr = QTableWidgetItem()
+            gr.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            gr.setCheckState(Qt.Checked if r['grasp'] else Qt.Unchecked)
+            self.map_table.setItem(i, 3, gr)
+            self.map_table.setItem(i, 4, QTableWidgetItem(r['mesh']))
+
+    def _read_table(self):
+        rules = []
+        for i, base in enumerate(self._rules):
+            r = dict(base)
+            r['include'] = self.map_table.item(i, 0).checkState() == Qt.Checked
+            cat = self.map_table.cellWidget(i, 2)
+            r['category'] = cat.currentText() if cat else r['category']
+            r['grasp'] = self.map_table.item(i, 3).checkState() == Qt.Checked
+            r['mesh'] = self.map_table.item(i, 4).text().strip()
+            rules.append(r)
+        return rules
+
+    def apply_usd_mapping_table(self):
+        if not self._rules:
+            self.status.setText('load a USD first')
+            return
+        try:
+            n = self.ctrl.apply_usd_mapping(self._read_table())
+        except Exception as exc:  # noqa: BLE001
+            self.status.setText(f'apply failed: {exc}')
+            return
+        self.status.setText(f'built {n} scene objects from the USD (poses = baseline).')
         self._refresh()
 
     def _on_select(self, item):  # pragma: no cover - needs a display
@@ -526,6 +607,9 @@ class ScenePage(QWizardPage):
             pass
 
     def validatePage(self) -> bool:
+        tl = [s.strip() for s in self.touch_links.text().split(',') if s.strip()]
+        if tl:
+            self.ctrl.set_scene_loader_params(touch_links=tl)
         return True
 
 

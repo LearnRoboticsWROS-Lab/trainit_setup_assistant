@@ -34,9 +34,8 @@
   <exec_depend>rviz2</exec_depend>
 
   <!-- connector packages: cell geometry ($(find …) in the URDF) + vendor/sim bridges -->
-{%- for p in bridge_packages %}
-  <exec_depend>{{ p }}</exec_depend>
-{%- endfor %}
+{% for p in bridge_packages %}  <exec_depend>{{ p }}</exec_depend>
+{% endfor %}
 
   <export>
     <build_type>ament_cmake</build_type>

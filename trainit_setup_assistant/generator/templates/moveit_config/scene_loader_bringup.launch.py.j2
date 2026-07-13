@@ -82,20 +82,24 @@ def launch_setup(context, *args, **kwargs):
         nodes.append(spawners[0])
         for prev, nxt in zip(spawners, spawners[1:]):
             nodes.append(RegisterEventHandler(OnProcessExit(target_action=prev, on_exit=[nxt])))
-        for b in BRIDGES:
-            if mode in b.get("modes", ["mock", "isaac"]):
-                node_kwargs = {"name": b["name"]} if b.get("name") else {}
-                nodes.append(Node(
-                    package=b["package"], executable=b["executable"], output="screen",
-                    parameters=[dict(p) for p in b.get("parameters", [])] + [common],
-                    remappings=[tuple(r) for r in b.get("remappings", [])], **node_kwargs))
-    else:  # real
+    else:  # real: no ros2_control — the vendor bridges impersonate the same action names
         if REAL_INCLUDE:
-            nodes.append(LogInfo(msg=f"[{ROBOT_NAME} scene_loader] mode=real: launching hardware bridge"))
+            nodes.append(LogInfo(msg=f"[{ROBOT_NAME} scene_loader] mode=real: launching hardware bringup"))
             nodes.append(IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(os.path.join(
                     get_package_share_directory(REAL_INCLUDE["package"]),
                     "launch", REAL_INCLUDE["launch_file"]))))
+
+    # Cell bridges (captured from the base bring-up): the gripper bridge, the joint-state
+    # merger (so /joint_states carries the gripper joint -> complete TF), and, in real,
+    # the vendor drivers. Each runs in the modes it declares.
+    for b in BRIDGES:
+        if mode in b.get("modes", ["mock", "isaac"]):
+            node_kwargs = {"name": b["name"]} if b.get("name") else {}
+            nodes.append(Node(
+                package=b["package"], executable=b["executable"], output="screen",
+                parameters=[dict(p) for p in b.get("parameters", [])] + [common],
+                remappings=[tuple(r) for r in b.get("remappings", [])], **node_kwargs))
 
     # scene loader: injects the USD obstacles (config/scene.yaml) into the planning scene.
     nodes.append(Node(

@@ -203,6 +203,7 @@ class AssistantController:
                     g.closed_state = s.name
 
         self._load_controllers_from_base(config)
+        self._load_deployment_from_base(base)
         try:
             self.import_collision_matrix_from_srdf(srdfs[0])
         except Exception:
@@ -214,6 +215,33 @@ class AssistantController:
             'gripper_controller': p.robot.gripper.controller_name,
             'arm_controller': p.robot.arm_controller.name,
         }
+
+    def _load_deployment_from_base(self, base: Path) -> None:
+        """Capture the CELL BRING-UP WIRING from the base's launch file: the vendor/sim
+        bridges (gripper bridge, joint-state merger, real drivers) + where the arm's
+        /joint_states is remapped. Without these the generated config's /joint_states
+        misses the gripper joint -> incomplete TF -> the robot flickers in RViz.
+        """
+        from ..model import LaunchNodeSpec
+        from ..robotmodel.launch_reader import read_bringup
+        launches = sorted((base / 'launch').glob('bringup*.launch.py'))
+        if not launches:
+            return
+        try:
+            info = read_bringup(launches[0])
+        except Exception:  # noqa: BLE001
+            return
+        p = self._require()
+        if info.get('arm_joint_states_remap_to'):
+            p.deployment.arm_joint_states_remap_to = info['arm_joint_states_remap_to']
+        bridges = []
+        for b in info.get('bridges', []):
+            try:
+                bridges.append(LaunchNodeSpec(**b))
+            except Exception:  # noqa: BLE001
+                continue
+        if bridges:
+            p.deployment.bridges = bridges
 
     def _load_controllers_from_base(self, config_dir: Path) -> None:
         import yaml

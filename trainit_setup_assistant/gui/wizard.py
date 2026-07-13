@@ -785,10 +785,8 @@ class BaseConfigPage(QWizardPage):
         super().__init__()
         self.ctrl = ctrl
         self.setTitle('Step 1 — Robot & base config')
-        self.setSubTitle('Open an existing project.yaml, OR load your hand-made base '
-                         'moveit_config (the adaptation-sprint deliverable). The base '
-                         'gives the robot, SRDF waypoints, controllers and the '
-                         'mock/isaac/real bring-up — all extracted automatically.')
+        self.setSubTitle('Load your hand-made base moveit_config: robot, SRDF waypoints, '
+                         'controllers and the mock/isaac/real bridges are read from it.')
         form = QFormLayout(self)
         self.project_file = QLineEdit()
         pbrowse = QPushButton('Browse…')

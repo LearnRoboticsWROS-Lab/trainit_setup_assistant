@@ -488,20 +488,35 @@ class AssistantController:
         which reproduce the baseline) and AUTO-SUGGEST a collision mesh per group by
         scanning ``<mesh_pkg>/meshes``. Returns the editable group rules; the per-prim
         poses are held for :meth:`apply_usd_mapping`."""
-        from ..importers.usd_scene import read_cell_prims, build_group_rules
+        from ..importers.usd_scene import build_group_rules, read_cell_prims, scan_meshes
         p = self._require()
         if base_prim is None:
             base_prim = f'/World/{p.robot.robot_name}/{p.robot.base_frame}'
         self._usd_prims = read_cell_prims(usd_path, base_prim=base_prim,
                                           robot_hint=p.robot.robot_name)
+        # surfaced to the user: if the mesh dir is not found every suggestion is empty,
+        # which would build a scene the loader cannot render.
+        self.mesh_scan = scan_meshes(mesh_pkg, p.robot.base_moveit_config_path)
         return build_group_rules(self._usd_prims, mesh_pkg,
                                  hint_path=p.robot.base_moveit_config_path)
 
     def apply_usd_mapping(self, rules, replace: bool = True) -> int:
         """Build the scene from the held USD prims + the (edited) group rules: one mesh
         SceneObject per included prim (pose from the USD, mesh/category/grasp from its
-        group rule). Returns the object count."""
+        group rule). Returns the object count.
+
+        REFUSES groups that are included but have NO mesh: they would be emitted with an
+        empty ``mesh_path`` and the scene loader could not render them (a silently broken
+        scene). Raises ValueError naming the offending groups.
+        """
         p = self._require()
+        broken = [r['group'] for r in rules
+                  if r.get('include') and not str(r.get('mesh', '')).strip()]
+        if broken:
+            raise ValueError(
+                'these included groups have NO mesh resource: ' + ', '.join(broken) +
+                '. Either set a package:// mesh for them, or un-tick "include". '
+                '(A wrong/empty "Mesh package" makes every suggestion empty.)')
         by_group = {r['group']: r for r in rules}
         if replace:
             p.scene.objects = []

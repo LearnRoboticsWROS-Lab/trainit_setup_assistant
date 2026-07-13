@@ -50,6 +50,16 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
             ctx.manifest.warn(f'scene_loader emitter: base config dir not found: {base_config}')
             return
 
+        # Safety net: a mesh object with no mesh_resource is emitted with an empty
+        # mesh_path and the scene loader cannot render it — a silently invisible scene.
+        empty = [o.id for o in project.scene.objects
+                 if o.is_mesh() and not (o.mesh_resource or '').strip()]
+        if empty:
+            ctx.manifest.warn(
+                f'{len(empty)} mesh scene object(s) have an EMPTY mesh_resource '
+                f'({", ".join(empty[:5])}{"…" if len(empty) > 5 else ""}): the scene '
+                f'loader cannot render them. Fix the mesh mapping (Step 2).')
+
         # 1) COPY the base config/ verbatim (preserves the tuned mode-switch + SRDF).
         ctx.copy_tree(base_config, f'{pkg}/config')
 

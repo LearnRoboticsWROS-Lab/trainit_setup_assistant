@@ -494,8 +494,18 @@ class ScenePage(QWizardPage):
             self.status.setText(f'USD load failed: {exc}')
             return
         self._fill_table(self._rules)
-        self.status.setText(f'{len(self._rules)} prim groups (meshes auto-suggested from '
-                            f'{pkg}/meshes) — review, then "Apply mapping".')
+        scan = getattr(self.ctrl, 'mesh_scan', {}) or {}
+        mdir, stls = scan.get('dir'), scan.get('stls', [])
+        matched = sum(1 for r in self._rules if r['mesh'])
+        if not mdir or not stls:
+            self.status.setText(
+                f'⚠ NO MESHES FOUND for package "{pkg}" — every suggestion is EMPTY, so the '
+                f'scene would not render. Check the Mesh package name (it must be the ROS '
+                f'package that ships meshes/, e.g. big1500_isaac).')
+        else:
+            self.status.setText(
+                f'{len(self._rules)} prim groups · scanned {mdir} ({len(stls)} STLs) · '
+                f'{matched}/{len(self._rules)} groups matched a mesh — review, then "Apply mapping".')
 
     def _fill_table(self, rules):
         self.map_table.setRowCount(len(rules))

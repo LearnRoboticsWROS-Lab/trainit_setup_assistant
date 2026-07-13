@@ -107,10 +107,10 @@ def read_cell_prims(usd_path: str, base_prim: Optional[str] = None,
     return out
 
 
-def build_group_rules(prims: List[dict], mesh_pkg: str,
-                      hint_path: Optional[str] = None) -> List[dict]:
-    """Group the prims and auto-suggest a rule per group: mesh (scanned), category
-    (heuristic), grasp, include. The user edits these in the wizard table."""
+def scan_meshes(mesh_pkg: str, hint_path: Optional[str] = None) -> dict:
+    """Find <mesh_pkg>/meshes and list its STLs. -> {'dir': str|None, 'stls': [...]}.
+    Reported to the user: a missing dir silently yields empty mesh paths, which builds a
+    scene the loader cannot render — so this must be surfaced, not swallowed."""
     meshes_dir = _resolve_meshes_dir(mesh_pkg, hint_path)
     stls: List[str] = []
     if meshes_dir:
@@ -118,6 +118,14 @@ def build_group_rules(prims: List[dict], mesh_pkg: str,
             for f in files:
                 if f.lower().endswith('.stl'):
                     stls.append(os.path.relpath(os.path.join(dp, f), meshes_dir))
+    return {'dir': meshes_dir, 'stls': sorted(stls)}
+
+
+def build_group_rules(prims: List[dict], mesh_pkg: str,
+                      hint_path: Optional[str] = None) -> List[dict]:
+    """Group the prims and auto-suggest a rule per group: mesh (scanned), category
+    (heuristic), grasp, include. The user edits these in the wizard table."""
+    stls = scan_meshes(mesh_pkg, hint_path)['stls']
     groups: Dict[str, int] = {}
     for pr in prims:
         groups[pr['group']] = groups.get(pr['group'], 0) + 1

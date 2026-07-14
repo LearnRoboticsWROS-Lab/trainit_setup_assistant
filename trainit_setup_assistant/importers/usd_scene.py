@@ -80,6 +80,9 @@ def read_cell_prims(usd_path: str, base_prim: Optional[str] = None,
         if len(parts) >= 2:
             robot_root = '/' + '/'.join(parts[:2])   # /World/<robot>
 
+    # local-frame extents, so a primitive collision shape can be derived per prim
+    bbox = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+
     out: List[dict] = []
     for p in world.GetChildren():
         path = p.GetPath().pathString
@@ -98,11 +101,20 @@ def read_cell_prims(usd_path: str, base_prim: Optional[str] = None,
         t = M.ExtractTranslation()
         q = M.ExtractRotationQuat()
         im = q.GetImaginary()
+        dims = [0.1, 0.1, 0.1]
+        try:
+            rng = bbox.ComputeUntransformedBound(p).ComputeAlignedRange()
+            if not rng.IsEmpty():
+                s = rng.GetSize()
+                dims = [round(abs(s[0]), 4), round(abs(s[1]), 4), round(abs(s[2]), 4)]
+        except Exception:  # noqa: BLE001
+            pass
         out.append({
             'name': p.GetName(),
             'group': group_key(p.GetName()),
             'position': [round(t[0], 4), round(t[1], 4), round(t[2], 4)],
             'orientation': [round(im[0], 4), round(im[1], 4), round(im[2], 4), round(q.GetReal(), 4)],
+            'dims': dims,          # local AABB (x,y,z) -> primitive collision shape
         })
     return out
 
@@ -130,16 +142,35 @@ def build_group_rules(prims: List[dict], mesh_pkg: str,
     for pr in prims:
         groups[pr['group']] = groups.get(pr['group'], 0) + 1
 
+    # representative local dims per group (all instances of a group share the asset)
+    dims_of: Dict[str, list] = {}
+    for pr in prims:
+        dims_of.setdefault(pr['group'], pr.get('dims', [0.1, 0.1, 0.1]))
+
     rules: List[dict] = []
     for g, count in groups.items():
         mesh_rel = suggest_mesh(g, stls)
         is_dynamic = any(h in g.lower() for h in _DYNAMIC_HINTS)
+        grasp = 'bottle' in g.lower()
+        d = dims_of.get(g, [0.1, 0.1, 0.1])
+        # COLLISION SHAPE. A grasped object becomes an AttachedCollisionObject: its BVH is
+        # rebuilt/transformed with the robot on EVERY state update, so a full visual mesh
+        # (a 10k-triangle bottle x20 = 200k) makes IK and RViz crawl. Grasp targets
+        # therefore default to a cheap PRIMITIVE sized from the USD extents; everything
+        # else keeps its mesh (built once, static in the world).
+        if grasp:
+            round_ish = max(d[0], d[1]) > 0 and abs(d[0] - d[1]) / max(d[0], d[1]) < 0.25
+            shape = 'cylinder' if round_ish else 'box'
+        else:
+            shape = 'mesh'
         rules.append({
             'group': g,
             'count': count,
+            'shape': shape,
+            'dims': d,
             'mesh': f'package://{mesh_pkg}/meshes/{mesh_rel}' if mesh_rel else '',
             'category': 'dynamic' if is_dynamic else 'static',
-            'grasp': 'bottle' in g.lower(),
+            'grasp': grasp,
             # default-include only groups we found a mesh for (context/machine with no
             # collision STL is left out, matching the baseline).
             'include': bool(mesh_rel),

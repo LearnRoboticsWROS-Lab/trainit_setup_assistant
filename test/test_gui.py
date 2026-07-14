@@ -401,9 +401,16 @@ def test_wizard_usd_mapping_builds_baseline_scene(qapp):
     ids = {o.id for o in ctrl.project.scene.objects}
     assert 'bottle_0_0' in ids and 'crate_00' in ids and 'prewash_station' in ids
     assert len(ctrl.project.scene.objects) == 23        # BW_0080_context excluded
+    # grasp targets default to a CHEAP PRIMITIVE: attached to the tool, a full visual
+    # mesh (10k tri x20) would make collision-aware IK and RViz crawl.
     bottle = next(o for o in ctrl.project.scene.objects if o.id == 'bottle_0_0')
-    assert bottle.is_mesh() and bottle.is_grasp_target()
-    assert bottle.mesh_resource.endswith('dynamic/bottle_50cl.stl')
+    assert bottle.is_grasp_target()
+    assert bottle.shape.value == 'cylinder'
+    assert bottle.dims == [0.0334, 0.2445]              # radius, height from USD extents
+    # non-grasped structure keeps its collision mesh (built once, static in the world)
+    prewash = next(o for o in ctrl.project.scene.objects if o.id == 'prewash_station')
+    assert prewash.is_mesh()
+    assert prewash.mesh_resource.endswith('prewash_station/base_collision.stl')
 
 
 if __name__ == '__main__':

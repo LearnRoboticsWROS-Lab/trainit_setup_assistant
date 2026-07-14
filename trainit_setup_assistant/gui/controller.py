@@ -532,12 +532,14 @@ class AssistantController:
         """
         p = self._require()
         broken = [r['group'] for r in rules
-                  if r.get('include') and not str(r.get('mesh', '')).strip()]
+                  if r.get('include') and r.get('shape', 'mesh') == 'mesh'
+                  and not str(r.get('mesh', '')).strip()]
         if broken:
             raise ValueError(
-                'these included groups have NO mesh resource: ' + ', '.join(broken) +
-                '. Either set a package:// mesh for them, or un-tick "include". '
-                '(A wrong/empty "Mesh package" makes every suggestion empty.)')
+                'these included groups use shape=mesh but have NO mesh resource: ' +
+                ', '.join(broken) + '. Set a package:// mesh, pick a primitive shape, or '
+                'un-tick "include". (A wrong/empty "Mesh package" makes every suggestion '
+                'empty.)')
         by_group = {r['group']: r for r in rules}
         if replace:
             p.scene.objects = []
@@ -551,9 +553,20 @@ class AssistantController:
         included.sort(key=lambda pr_r: _is_grasp(pr_r[1]))
         for pr, r in included:
             cat = r.get('category', 'static')
+            shape = r.get('shape', 'mesh')
+            d = pr.get('dims') or r.get('dims') or [0.1, 0.1, 0.1]
+            if shape == 'cylinder':          # radius, height from the USD extents
+                dims = [round(max(d[0], d[1]) / 2.0, 4), round(d[2], 4)]
+            elif shape == 'sphere':
+                dims = [round(max(d) / 2.0, 4)]
+            elif shape == 'box':
+                dims = [round(v, 4) for v in d]
+            else:                            # mesh: dims unused
+                dims = [1.0, 1.0, 1.0]
             self.add_scene_object(
-                pr['name'], [1.0, 1.0, 1.0], pr['position'], shape='mesh',
-                mesh_resource=r.get('mesh', ''), orientation=pr['orientation'],
+                pr['name'], dims, pr['position'], shape=shape,
+                mesh_resource=(r.get('mesh', '') if shape == 'mesh' else None),
+                orientation=pr['orientation'],
                 category=cat, grasp_target=_is_grasp(r), source='usd')
         return len(included)
 

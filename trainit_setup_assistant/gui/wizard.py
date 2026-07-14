@@ -407,10 +407,10 @@ class ScenePage(QWizardPage):
         layout.addLayout(usd_form)
         # the mapping table: one row per prim GROUP (bottle_* collapses to one row)
         self._rules = []
-        self.map_table = QTableWidget(0, 5)
+        self.map_table = QTableWidget(0, 6)
         self.map_table.setHorizontalHeaderLabels(
-            ['include', 'group (count)', 'category', 'grasp', 'mesh resource'])
-        self.map_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+            ['include', 'group (count)', 'category', 'grasp', 'collision shape', 'mesh resource'])
+        self.map_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
         layout.addWidget(self.map_table)
         apply_map = QPushButton('Apply mapping → build scene')
         apply_map.clicked.connect(self.apply_usd_mapping_table)
@@ -525,7 +525,13 @@ class ScenePage(QWizardPage):
             gr.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             gr.setCheckState(Qt.Checked if r['grasp'] else Qt.Unchecked)
             self.map_table.setItem(i, 3, gr)
-            self.map_table.setItem(i, 4, QTableWidgetItem(r['mesh']))
+            # collision shape: grasped objects default to a cheap primitive (an attached
+            # 10k-triangle mesh x20 makes IK/RViz crawl); everything else keeps its mesh.
+            sh = QComboBox()
+            sh.addItems(['mesh', 'cylinder', 'box', 'sphere'])
+            sh.setCurrentText(r.get('shape', 'mesh'))
+            self.map_table.setCellWidget(i, 4, sh)
+            self.map_table.setItem(i, 5, QTableWidgetItem(r['mesh']))
 
     def _read_table(self):
         rules = []
@@ -535,7 +541,9 @@ class ScenePage(QWizardPage):
             cat = self.map_table.cellWidget(i, 2)
             r['category'] = cat.currentText() if cat else r['category']
             r['grasp'] = self.map_table.item(i, 3).checkState() == Qt.Checked
-            r['mesh'] = self.map_table.item(i, 4).text().strip()
+            sh = self.map_table.cellWidget(i, 4)
+            r['shape'] = sh.currentText() if sh else r.get('shape', 'mesh')
+            r['mesh'] = self.map_table.item(i, 5).text().strip()
             rules.append(r)
         return rules
 

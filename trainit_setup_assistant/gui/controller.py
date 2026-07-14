@@ -204,6 +204,7 @@ class AssistantController:
 
         self._load_controllers_from_base(config)
         self._load_deployment_from_base(base)
+        self._derive_touch_links(config)
         try:
             self.import_collision_matrix_from_srdf(srdfs[0])
         except Exception:
@@ -215,6 +216,26 @@ class AssistantController:
             'gripper_controller': p.robot.gripper.controller_name,
             'arm_controller': p.robot.arm_controller.name,
         }
+
+    def _derive_touch_links(self, config_dir: Path) -> None:
+        """Derive the scene-loader ``touch_links`` from the robot instead of asking:
+        they are the links NEAREST THE TOOL, which legitimately touch a grasped object
+        (self-collision relief for the AttachedCollisionObject). Taken as the last links
+        of the base_link -> tip_link chain (for the FR30: wrist3_link, end_effector, tcp).
+        """
+        p = self._require()
+        try:
+            from ..robotmodel.kinematic_chain import link_chain, parse_urdf
+            from ..robotmodel.xacro_loader import compile_xacro
+            xacros = sorted(config_dir.glob('*.urdf.xacro'))
+            if not xacros:
+                return
+            robot = parse_urdf(compile_xacro(xacros[0]))
+            links, _joints = link_chain(robot, p.robot.base_frame, p.robot.tip_link)
+            if len(links) >= 2:
+                p.scene.touch_links = links[-3:]
+        except Exception:  # noqa: BLE001 - keep the default; the user can still edit it
+            pass
 
     def _load_deployment_from_base(self, base: Path) -> None:
         """Capture the CELL BRING-UP WIRING from the base's launch file: the vendor/sim

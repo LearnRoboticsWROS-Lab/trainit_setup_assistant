@@ -576,6 +576,11 @@ class ScenePage(QWizardPage):
             self._refresh()
 
     def initializePage(self):
+        # touch_links were derived from the robot chain at Step 1 — show them, don't ask.
+        try:
+            self.touch_links.setText(', '.join(self.ctrl.project.scene.touch_links))
+        except Exception:  # noqa: BLE001
+            pass
         self._refresh()
 
     def _refresh(self):

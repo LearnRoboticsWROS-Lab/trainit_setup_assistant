@@ -394,7 +394,7 @@ class AssistantController:
                          mesh_resource: Optional[str] = None, scale=(1.0, 1.0, 1.0),
                          grasp_target: bool = False, release_policy: str = 'freeze',
                          isaac_grasp_method: str = 'fixed_joint',
-                         touchable_collision_ids=None) -> None:
+                         touchable_collision_ids=None, aabb_center=(0.0, 0.0, 0.0)) -> None:
         p = self._require()
         # category (static|actuated|dynamic) is authoritative when given; otherwise
         # fall back to the legacy `dynamic` flag (category is inferred from it).
@@ -404,6 +404,7 @@ class AssistantController:
         p.scene.objects = [o for o in p.scene.objects if o.id != obj_id] + [SceneObject(
             id=obj_id, source=SceneObjectSource(source), shape=ShapeType(shape),
             dims=list(dims), mesh_resource=mesh_resource, scale=list(scale),
+            aabb_center=list(aabb_center),
             frame=frame or p.robot.base_frame,
             position=list(position), orientation=list(orientation),
             grasp_target=grasp_target, release_policy=ReleasePolicy(release_policy),
@@ -439,7 +440,8 @@ class AssistantController:
                 break
 
     def set_scene_loader_params(self, *, gripper_cmd_topic=None, attach_link=None,
-                                touch_links=None, attached_collision_check=None) -> None:
+                                touch_links=None, attached_collision_check=None,
+                                grasp_attach_mode=None) -> None:
         """Scene-loader (scene_manager_node) params emitted into scene.yaml."""
         s = self._require().scene
         if gripper_cmd_topic is not None:
@@ -450,6 +452,10 @@ class AssistantController:
             s.touch_links = list(touch_links)
         if attached_collision_check is not None:
             s.attached_collision_check = bool(attached_collision_check)
+        if grasp_attach_mode is not None:
+            if grasp_attach_mode not in ('remove', 'attach_box'):
+                raise ValueError("grasp_attach_mode must be 'remove' or 'attach_box'")
+            s.grasp_attach_mode = grasp_attach_mode
 
     def import_scene_yaml(self, path, replace: bool = True) -> int:
         """Load the cell scene from a scene_manager_node ``scene.yaml`` (the output of
@@ -534,14 +540,12 @@ class AssistantController:
         """
         p = self._require()
         broken = [r['group'] for r in rules
-                  if r.get('include') and r.get('shape', 'mesh') == 'mesh'
-                  and not str(r.get('mesh', '')).strip()]
+                  if r.get('include') and not str(r.get('mesh', '')).strip()]
         if broken:
             raise ValueError(
-                'these included groups use shape=mesh but have NO mesh resource: ' +
-                ', '.join(broken) + '. Set a package:// mesh, pick a primitive shape, or '
-                'un-tick "include". (A wrong/empty "Mesh package" makes every suggestion '
-                'empty.)')
+                'these included groups have NO mesh resource: ' + ', '.join(broken) +
+                '. Set a package:// mesh or un-tick "include". (A wrong/empty "Mesh '
+                'package" makes every suggestion empty.)')
         by_group = {r['group']: r for r in rules}
         if replace:
             p.scene.objects = []
@@ -554,26 +558,14 @@ class AssistantController:
         # convention. sorted() is stable, so USD order is preserved within each bucket.
         included.sort(key=lambda pr_r: _is_grasp(pr_r[1]))
         for pr, r in included:
-            cat = r.get('category', 'static')
-            shape = r.get('shape', 'mesh')
-            d = pr.get('dims') or r.get('dims') or [0.1, 0.1, 0.1]
-            is_prim = shape in ('cylinder', 'box', 'sphere')
-            if shape == 'cylinder':          # radius, height from the USD extents
-                dims = [round(max(d[0], d[1]) / 2.0, 4), round(d[2], 4)]
-            elif shape == 'sphere':
-                dims = [round(max(d) / 2.0, 4)]
-            elif shape == 'box':
-                dims = [round(v, 4) for v in d]
-            else:                            # mesh: dims unused
-                dims = [1.0, 1.0, 1.0]
-            # MESH keeps the prim origin (verts relative to it); a centred PRIMITIVE uses
-            # the AABB centre so it doesn't sink below the object's base.
-            pos = (pr.get('center') if is_prim else None) or pr['position']
+            # everything is a MESH at its prim origin; dims carries the local AABB extents
+            # only so a grasped object can attach as its bounding BOX (attach_box mode).
             self.add_scene_object(
-                pr['name'], dims, pos, shape=shape,
-                mesh_resource=(r.get('mesh', '') if shape == 'mesh' else None),
-                orientation=pr['orientation'],
-                category=cat, grasp_target=_is_grasp(r), source='usd')
+                pr['name'], pr.get('dims') or r.get('dims') or [0.1, 0.1, 0.1],
+                pr['position'], shape='mesh', mesh_resource=r.get('mesh', ''),
+                orientation=pr['orientation'], category=r.get('category', 'static'),
+                grasp_target=_is_grasp(r), source='usd',
+                aabb_center=pr.get('local_center') or [0.0, 0.0, 0.0])
         return len(included)
 
     def import_usd_scene(self, usd_path, dynamic: bool = False, replace: bool = False,

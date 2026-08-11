@@ -104,12 +104,15 @@ def read_cell_prims(usd_path: str, base_prim: Optional[str] = None,
         origin = [round(t[0], 4), round(t[1], 4), round(t[2], 4)]
         dims = [0.1, 0.1, 0.1]
         center = list(origin)
+        local_center = [0.0, 0.0, 0.0]
         try:
             rng = bbox.ComputeUntransformedBound(p).ComputeAlignedRange()
             if not rng.IsEmpty():
                 s = rng.GetSize()
                 dims = [round(abs(s[0]), 4), round(abs(s[1]), 4), round(abs(s[2]), 4)]
-                cw = M.Transform(rng.GetMidpoint())   # AABB centre in the base frame
+                mid = rng.GetMidpoint()               # AABB centre in the LOCAL frame
+                local_center = [round(mid[0], 4), round(mid[1], 4), round(mid[2], 4)]
+                cw = M.Transform(mid)                 # AABB centre in the base frame
                 center = [round(cw[0], 4), round(cw[1], 4), round(cw[2], 4)]
         except Exception:  # noqa: BLE001
             pass
@@ -118,10 +121,8 @@ def read_cell_prims(usd_path: str, base_prim: Optional[str] = None,
             'group': group_key(p.GetName()),
             # origin: prim frame origin (base) -> MESH pose (verts are relative to it).
             'position': origin,
-            # centre: AABB centre (base) -> PRIMITIVE pose (MoveIt shapes are centred, so
-            # using the origin would sink a bottle half below its base — the USD bottle
-            # origin sits at the BOTTOM, the cylinder pose is its MIDDLE).
-            'center': center,
+            'center': center,               # AABB centre (base frame)
+            'local_center': local_center,   # AABB centre offset in the object's LOCAL frame
             'orientation': [round(im[0], 4), round(im[1], 4), round(im[2], 4), round(q.GetReal(), 4)],
             'dims': dims,          # local AABB (x,y,z) -> primitive collision shape
         })
@@ -160,26 +161,16 @@ def build_group_rules(prims: List[dict], mesh_pkg: str,
     for g, count in groups.items():
         mesh_rel = suggest_mesh(g, stls)
         is_dynamic = any(h in g.lower() for h in _DYNAMIC_HINTS)
-        grasp = 'bottle' in g.lower()
-        d = dims_of.get(g, [0.1, 0.1, 0.1])
-        # COLLISION SHAPE. A grasped object becomes an AttachedCollisionObject: its BVH is
-        # rebuilt/transformed with the robot on EVERY state update, so a full visual mesh
-        # (a 10k-triangle bottle x20 = 200k) makes IK and RViz crawl. Grasp targets
-        # therefore default to a cheap PRIMITIVE sized from the USD extents; everything
-        # else keeps its mesh (built once, static in the world).
-        if grasp:
-            round_ish = max(d[0], d[1]) > 0 and abs(d[0] - d[1]) / max(d[0], d[1]) < 0.25
-            shape = 'cylinder' if round_ish else 'box'
-        else:
-            shape = 'mesh'
         rules.append({
             'group': g,
             'count': count,
-            'shape': shape,
-            'dims': d,
+            # objects stay MESHES (no per-shape primitive guessing). The local AABB is
+            # kept only so a grasped object can attach as its cheap bounding BOX when the
+            # app opts into attach_box mode.
+            'dims': dims_of.get(g, [0.1, 0.1, 0.1]),
             'mesh': f'package://{mesh_pkg}/meshes/{mesh_rel}' if mesh_rel else '',
             'category': 'dynamic' if is_dynamic else 'static',
-            'grasp': grasp,
+            'grasp': 'bottle' in g.lower(),
             # default-include only groups we found a mesh for (context/machine with no
             # collision STL is left out, matching the baseline).
             'include': bool(mesh_rel),

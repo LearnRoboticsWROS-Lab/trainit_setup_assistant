@@ -33,6 +33,9 @@ class SceneObject(BaseModel):
     # package:// STL when shape is MESH (loaded by scene_manager_node; not AABB'd).
     mesh_resource: Optional[str] = None
     scale: List[float] = Field(default_factory=lambda: [1.0, 1.0, 1.0])  # mesh scale
+    # local-frame AABB centre offset (from the prim origin). Used to place the grasped
+    # object's bounding BOX (attach_box mode) on its centre, not on its base.
+    aabb_center: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
     frame: str = 'base_link'
     position: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
     orientation: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0, 1.0])
@@ -139,6 +142,16 @@ class SceneSpec(BaseModel):
     attached_collision_check: bool = False
     # 0 = load once (re-asserting every tick churns the scene, disrupting Plan&Execute).
     force_republish_hz: float = 0.0
+    # How a grasped object is represented in the MoveIt scene while held (meshes stay
+    # meshes — no per-shape primitive guessing):
+    #   remove     : it DISAPPEARS on grasp and REAPPEARS at the tool pose on release
+    #                (simplest/robust; the real object is seen in Isaac). No payload
+    #                collision-awareness during the transfer.
+    #   attach_box : it attaches to the tool as its AABB BOUNDING BOX (one universal
+    #                rule, cheap, conservative) so attached_collision_check ON/OFF works
+    #                (the planner routes the held payload around obstacles); the mesh
+    #                reappears at the tool pose on release.
+    grasp_attach_mode: str = 'remove'
 
     def grasp_target_ids(self) -> List[str]:
         """Ids of dynamic objects the gripper grasps (attach_object_ids)."""

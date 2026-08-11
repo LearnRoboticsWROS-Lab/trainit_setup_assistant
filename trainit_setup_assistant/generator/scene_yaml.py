@@ -47,6 +47,7 @@ def build_scene_yaml(project: CanonicalProject) -> str:
         f'    attach_link: {scene.attach_link}',
         f'    touch_links: {_strs(scene.touch_links)}',
         f'    attached_collision_check: {"true" if scene.attached_collision_check else "false"}',
+        f'    grasp_attach_mode: {scene.grasp_attach_mode}',
         f'    attach_object_ids: {_strs(scene.grasp_target_ids())}',
         f'    object_ids: {_strs([o.id for o in objs])}',
         '    objects:',
@@ -70,6 +71,11 @@ def build_scene_yaml(project: CanonicalProject) -> str:
         out.append(f'        position: {_nums(o.position)}')
         out.append(f'        orientation: {_nums(o.orientation)}')
         out.append(f'        dynamic: {"true" if o.is_dynamic() else "false"}')
+        # AABB bounding box (extents + local centre offset) used when this grasp target
+        # attaches to the tool as a cheap box (grasp_attach_mode: attach_box).
+        if o.is_grasp_target() and o.is_mesh() and len(o.dims) == 3:
+            out.append(f'        grasp_box: {_nums(o.dims)}')
+            out.append(f'        grasp_box_center: {_nums(o.aabb_center)}')
         # metadata for the future touchable-ACM refinement (scene_manager_node may
         # leave these attached<->static pairs allowed even when the check is ON).
         if o.touchable_collision_ids:

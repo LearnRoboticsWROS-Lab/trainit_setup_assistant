@@ -401,16 +401,16 @@ def test_wizard_usd_mapping_builds_baseline_scene(qapp):
     ids = {o.id for o in ctrl.project.scene.objects}
     assert 'bottle_0_0' in ids and 'crate_00' in ids and 'prewash_station' in ids
     assert len(ctrl.project.scene.objects) == 23        # BW_0080_context excluded
-    # grasp targets default to a CHEAP PRIMITIVE: attached to the tool, a full visual
-    # mesh (10k tri x20) would make collision-aware IK and RViz crawl.
+    # everything stays a MESH (no per-shape primitive guessing); a grasped object is
+    # removed/attached-as-box at RUNTIME, not converted here. dims holds the AABB extents.
     bottle = next(o for o in ctrl.project.scene.objects if o.id == 'bottle_0_0')
-    assert bottle.is_grasp_target()
-    assert bottle.shape.value == 'cylinder'
-    assert bottle.dims == [0.0334, 0.2445]              # radius, height from USD extents
-    # non-grasped structure keeps its collision mesh (built once, static in the world)
+    assert bottle.is_grasp_target() and bottle.is_mesh()
+    assert bottle.mesh_resource.endswith('dynamic/bottle_50cl.stl')
+    assert len(bottle.dims) == 3 and abs(bottle.dims[2] - 0.2445) < 1e-3   # AABB for the box
     prewash = next(o for o in ctrl.project.scene.objects if o.id == 'prewash_station')
     assert prewash.is_mesh()
     assert prewash.mesh_resource.endswith('prewash_station/base_collision.stl')
+    assert ctrl.project.scene.grasp_attach_mode == 'remove'   # default set by the page
 
 
 if __name__ == '__main__':

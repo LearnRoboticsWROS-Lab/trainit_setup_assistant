@@ -101,18 +101,27 @@ def read_cell_prims(usd_path: str, base_prim: Optional[str] = None,
         t = M.ExtractTranslation()
         q = M.ExtractRotationQuat()
         im = q.GetImaginary()
+        origin = [round(t[0], 4), round(t[1], 4), round(t[2], 4)]
         dims = [0.1, 0.1, 0.1]
+        center = list(origin)
         try:
             rng = bbox.ComputeUntransformedBound(p).ComputeAlignedRange()
             if not rng.IsEmpty():
                 s = rng.GetSize()
                 dims = [round(abs(s[0]), 4), round(abs(s[1]), 4), round(abs(s[2]), 4)]
+                cw = M.Transform(rng.GetMidpoint())   # AABB centre in the base frame
+                center = [round(cw[0], 4), round(cw[1], 4), round(cw[2], 4)]
         except Exception:  # noqa: BLE001
             pass
         out.append({
             'name': p.GetName(),
             'group': group_key(p.GetName()),
-            'position': [round(t[0], 4), round(t[1], 4), round(t[2], 4)],
+            # origin: prim frame origin (base) -> MESH pose (verts are relative to it).
+            'position': origin,
+            # centre: AABB centre (base) -> PRIMITIVE pose (MoveIt shapes are centred, so
+            # using the origin would sink a bottle half below its base — the USD bottle
+            # origin sits at the BOTTOM, the cylinder pose is its MIDDLE).
+            'center': center,
             'orientation': [round(im[0], 4), round(im[1], 4), round(im[2], 4), round(q.GetReal(), 4)],
             'dims': dims,          # local AABB (x,y,z) -> primitive collision shape
         })

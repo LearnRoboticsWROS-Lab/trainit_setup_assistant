@@ -901,13 +901,24 @@ class GenerateConfigPage(QWizardPage):
         if not out:
             self.result.setPlainText('ERROR: set an output directory (your ros2_ws/src)')
             return
+        # Overwrite guard: the default name equals a hand-made package would-be name, so a
+        # blind Generate could clobber an existing package. Require an explicit re-click.
+        target = os.path.join(out, pkg or self.ctrl.scene_loader_package_name())
+        if os.path.isdir(target) and getattr(self, '_confirm_overwrite', None) != target:
+            self._confirm_overwrite = target
+            self.result.setPlainText(
+                f'⚠ "{os.path.basename(target)}" ALREADY EXISTS at {out}.\n'
+                f'Generating will OVERWRITE it. If that is intended, click "Generate" '
+                f'again. Otherwise change the "Config package name" first.')
+            return
+        self._confirm_overwrite = None
         try:
             manifest = self.ctrl.generate_scene_loader_config(out, pkg)
         except Exception as exc:  # noqa: BLE001
             self.result.setPlainText(f'ERROR: {exc}')
             return
         pkg = pkg or self.ctrl.scene_loader_package_name()
-        snippet = self.ctrl.build_snippet(pkg, ws_root=os.path.dirname(out.rstrip('/')) or '<ros2_ws>')
+        snippet = self.ctrl.build_snippet(pkg)   # ws_root derived at generate time
         lines = [f"Generated {manifest.as_dict()['file_count']} files -> {out}/{pkg}", '',
                  'Build it, then bring it up to configure the application:', snippet]
         for w in manifest.as_dict().get('warnings', []):

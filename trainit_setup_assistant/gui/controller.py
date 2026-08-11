@@ -8,6 +8,7 @@ named states, edit the scene/application, and generate the bundle. No Qt, no ROS
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -48,6 +49,7 @@ class AssistantController:
         # the scene+planner config package name generated at Step 3 (used by Step 6's
         # bring-up procedure so it names the package the user actually created).
         self.scene_loader_pkg: Optional[str] = None
+        self.workspace_root: Optional[str] = None   # colcon build root (parent of src/)
         # cell prims + poses read from the USD (held between import and apply).
         self._usd_prims: List[dict] = []
 
@@ -555,6 +557,7 @@ class AssistantController:
             cat = r.get('category', 'static')
             shape = r.get('shape', 'mesh')
             d = pr.get('dims') or r.get('dims') or [0.1, 0.1, 0.1]
+            is_prim = shape in ('cylinder', 'box', 'sphere')
             if shape == 'cylinder':          # radius, height from the USD extents
                 dims = [round(max(d[0], d[1]) / 2.0, 4), round(d[2], 4)]
             elif shape == 'sphere':
@@ -563,8 +566,11 @@ class AssistantController:
                 dims = [round(v, 4) for v in d]
             else:                            # mesh: dims unused
                 dims = [1.0, 1.0, 1.0]
+            # MESH keeps the prim origin (verts relative to it); a centred PRIMITIVE uses
+            # the AABB centre so it doesn't sink below the object's base.
+            pos = (pr.get('center') if is_prim else None) or pr['position']
             self.add_scene_object(
-                pr['name'], dims, pr['position'], shape=shape,
+                pr['name'], dims, pos, shape=shape,
                 mesh_resource=(r.get('mesh', '') if shape == 'mesh' else None),
                 orientation=pr['orientation'],
                 category=cat, grasp_target=_is_grasp(r), source='usd')
@@ -622,7 +628,18 @@ class AssistantController:
         from ..generator.orchestrator import generate_scene_loader_config
         pkg = package_name or self.scene_loader_package_name()
         self.scene_loader_pkg = pkg          # remember it for Step 6's bring-up procedure
+        self.workspace_root = self._workspace_root(output_dir)  # colcon build runs HERE
         return generate_scene_loader_config(self._require(), output_dir, pkg)
+
+    @staticmethod
+    def _workspace_root(output_dir) -> str:
+        """The colcon workspace ROOT (the parent of ``src/``) for a package written under
+        ``<ws>/src/...``. colcon build must run there, not in the chosen output dir."""
+        parts = os.path.abspath(str(output_dir)).split(os.sep)
+        if 'src' in parts:
+            root = os.sep.join(parts[:parts.index('src')])
+            return root or os.sep
+        return os.path.abspath(str(output_dir))
 
     # ---- Step 5/6: mode + guided bring-up ----
     def set_mode(self, mode: str) -> None:
@@ -631,18 +648,21 @@ class AssistantController:
             raise ValueError(f"mode must be mock|isaac|real, got {mode!r}")
         self._require().deployment.default_mode = mode
 
-    def build_snippet(self, package: str, ws_root: str = '<ros2_ws>') -> str:
-        """Step 4: the terminal snippet to build+source a generated package."""
+    def build_snippet(self, package: str, ws_root: str = None) -> str:
+        """Step 4: the terminal snippet to build+source a generated package. colcon build
+        runs at the WORKSPACE ROOT (parent of src/), not the output dir."""
+        ws_root = ws_root or self.workspace_root or '<ros2_ws>'
         return (f'cd {ws_root}\n'
                 f'colcon build --packages-select {package}\n'
                 f'source install/setup.bash')
 
     def bringup_procedure(self, mode: str, config_package: str,
                           usd_path: Optional[str] = None,
-                          ws_root: str = '<ros2_ws>') -> str:
+                          ws_root: str = None) -> str:
         """Step 6: the guided procedure to BUILD + bring up the scene+planner config so
         the application can be configured against a faithful RViz. The application itself
         is launched later (Step 7 generates it; the bundle README has the run command)."""
+        ws_root = ws_root or self.workspace_root or '<ros2_ws>'
         steps: List[str] = []
         n = 1
         if mode == 'isaac':

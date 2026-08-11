@@ -133,8 +133,12 @@ def test_import_scene_yaml_reproduces_baseline():
     assert got['touch_links'] == want['touch_links']
     for oid in want['object_ids']:
         a, b = got['objects'][oid], want['objects'][oid]
-        assert a['type'] == b['type'] == 'mesh'
-        assert a['mesh_path'] == b['mesh_path']
+        assert a['type'] == b['type']            # round-trip preserves the shape
+        if a['type'] == 'mesh':
+            assert a['mesh_path'] == b['mesh_path']
+        elif a['type'] == 'cylinder':
+            assert abs(a['radius'] - b['radius']) < 1e-4
+            assert abs(a['height'] - b['height']) < 1e-4
         assert a['dynamic'] == b['dynamic']
         assert [round(x, 4) for x in a['position']] == [round(x, 4) for x in b['position']]
         assert [round(x, 4) for x in a['orientation']] == [round(x, 4) for x in b['orientation']]

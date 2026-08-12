@@ -168,6 +168,15 @@ class AssistantController:
         p = self._require()
         base = Path(path)
         config = base / 'config'
+        # Guard: a GENERATED scene_loader config has config/scene.yaml + a scene_manager_node
+        # bringup. Using it as the base silently drops the real cell bridges (gripper bridge,
+        # joint-state merger) -> the generated package's /softgripper_controller never comes up
+        # ("Action client not connected to action server"). Refuse it with a clear message.
+        if (config / 'scene.yaml').exists():
+            raise ValueError(
+                f"'{base.name}' looks like a GENERATED scene_loader config (config/scene.yaml "
+                f"present), not a hand-made base moveit_config. Point 'Base package path' at "
+                f"your base (e.g. fr30_eef_moveit_config), not a *_scene_loader_moveit_config.")
         srdfs = sorted(config.glob('*.srdf'))
         if not srdfs:
             raise FileNotFoundError(f'no .srdf found in {config}')

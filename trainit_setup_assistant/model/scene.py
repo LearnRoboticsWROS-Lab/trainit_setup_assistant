@@ -151,7 +151,7 @@ class SceneSpec(BaseModel):
     #                rule, cheap, conservative) so attached_collision_check ON/OFF works
     #                (the planner routes the held payload around obstacles); the mesh
     #                reappears at the tool pose on release.
-    grasp_attach_mode: str = 'remove'
+    grasp_attach_mode: str = 'attach_box'   # default: universal AABB cuboid (payload-aware)
 
     def grasp_target_ids(self) -> List[str]:
         """Ids of dynamic objects the gripper grasps (attach_object_ids)."""

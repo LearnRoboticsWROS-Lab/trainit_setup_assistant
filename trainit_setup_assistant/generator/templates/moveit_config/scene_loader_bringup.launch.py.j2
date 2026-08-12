@@ -107,9 +107,19 @@ def launch_setup(context, *args, **kwargs):
         name="scene_manager_node", output="screen", parameters=[scene_config, common]))
 
     if use_rviz:
+        # RViz's MotionPlanning display runs its OWN PlanningSceneMonitor. If it inherits
+        # move_group's publish_planning_scene flags it starts PUBLISHING on
+        # monitored_planning_scene (the very topic it also subscribes to) -> a self-sustaining
+        # echo of stale FULL scenes that resurrects removed/attached objects (grasped bottles
+        # reappear ~1s after grasp). Give RViz a params copy with those flags OFF so only
+        # move_group publishes; RViz just subscribes.
+        rviz_params = dict(params)
+        for _k in ("publish_planning_scene", "publish_geometry_updates",
+                   "publish_state_updates", "publish_transforms_updates"):
+            rviz_params[_k] = False
         nodes.append(Node(
             package="rviz2", executable="rviz2", output="log",
-            arguments=["-d", rviz_config_path], parameters=[params, common]))
+            arguments=["-d", rviz_config_path], parameters=[rviz_params, common]))
     return nodes
 
 

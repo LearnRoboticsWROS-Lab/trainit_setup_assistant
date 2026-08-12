@@ -415,13 +415,18 @@ class ScenePage(QWizardPage):
         apply_map = QPushButton('Apply mapping → build scene')
         apply_map.clicked.connect(self.apply_usd_mapping_table)
         layout.addWidget(apply_map)
-        # how a GRASPED object is shown while held (meshes stay meshes):
-        #   remove  = disappears on grasp, reappears at the tool on release (simplest);
-        #   attach_box = attaches as its AABB box so attached_collision_check works.
+        # how a GRASPED object is represented while held:
+        #   attach_box = DEFAULT. Attaches to the tool as a universal AABB cuboid (one rule
+        #                for ANY shape -> scalable for a client) that fits the mesh (origin
+        #                offset handled). Payload-aware planning (attached_collision_check),
+        #                moves with the EE, robust in RViz. The full mesh stays in the scene
+        #                until grasp; the real object is simulated in Isaac.
+        #   remove     = debug fallback: disappears on grasp, reappears at the tool on release
+        #                (NO payload collision-awareness during the transfer).
         grow = QHBoxLayout()
         grow.addWidget(QLabel('Grasp handling:'))
         self.grasp_mode = QComboBox()
-        self.grasp_mode.addItems(['remove', 'attach_box'])
+        self.grasp_mode.addItems(['attach_box', 'remove'])
         grow.addWidget(self.grasp_mode)
         grow.addStretch(1)
         layout.addLayout(grow)

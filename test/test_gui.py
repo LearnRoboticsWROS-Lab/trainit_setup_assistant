@@ -410,7 +410,7 @@ def test_wizard_usd_mapping_builds_baseline_scene(qapp):
     prewash = next(o for o in ctrl.project.scene.objects if o.id == 'prewash_station')
     assert prewash.is_mesh()
     assert prewash.mesh_resource.endswith('prewash_station/base_collision.stl')
-    assert ctrl.project.scene.grasp_attach_mode == 'remove'   # default set by the page
+    assert ctrl.project.scene.grasp_attach_mode == 'attach_box'   # default: universal AABB cuboid
 
 
 if __name__ == '__main__':

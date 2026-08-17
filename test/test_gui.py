@@ -26,7 +26,7 @@ def test_controller_open_edit_generate():
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('ctrl_gen_test')
         manifest = ctrl.generate(tmp)
-        srdf = os.path.join(tmp, 'ctrl_gen_test_moveit_config', 'config', 'fr3wml.srdf')
+        srdf = os.path.join(tmp, 'ctrl_gen_test_trainit_config', 'config', 'fr3wml.srdf')
         assert os.path.isfile(srdf)
         assert 'park' in open(srdf).read()
         assert manifest.as_dict()['file_count'] > 30
@@ -45,7 +45,7 @@ def test_mock_gripper_server_generated_for_bootstrap():
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('mockgrip_test')
         ctrl.generate(tmp)
-        app = os.path.join(tmp, 'mockgrip_test')
+        app = os.path.join(tmp, 'mockgrip_test_app')
         script = os.path.join(app, 'scripts', 'mock_gripper_action_server.py')
         assert os.path.isfile(script)
         assert 'GripperCommand' in open(script).read()
@@ -166,12 +166,13 @@ def test_wizard_offscreen_full_flow(qapp):
         wiz.generate_page.project_name.setText('fr3wml_wizard_test')
         wiz.generate_page.output_dir.setText(tmp)
         wiz.generate_page.generate()
-        srdf = os.path.join(tmp, 'fr3wml_wizard_test_moveit_config', 'config', 'fr3wml.srdf')
+        bundle = os.path.join(tmp, 'fr3wml_wizard_test_bundle')
+        srdf = os.path.join(bundle, 'fr3wml_wizard_test_trainit_config', 'config', 'fr3wml.srdf')
         assert os.path.isfile(srdf), wiz.generate_page.result.toPlainText()
         assert 'home2' in open(srdf).read()
         # description geometry copied
         assert os.path.isfile(os.path.join(
-            tmp, 'fr3wml_wizard_test_description', 'urdf', 'fr3wml_suction.urdf.xacro'))
+            bundle, 'fr3wml_wizard_test_description', 'urdf', 'fr3wml_suction.urdf.xacro'))
 
 
 def test_wizard_open_project_keeps_matrix(qapp):
@@ -187,7 +188,7 @@ def test_wizard_open_project_keeps_matrix(qapp):
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('reopened_test')
         ctrl.generate(tmp)
-        srdf = os.path.join(tmp, 'reopened_test_moveit_config', 'config', 'fr3wml.srdf')
+        srdf = os.path.join(tmp, 'reopened_test_trainit_config', 'config', 'fr3wml.srdf')
         assert open(srdf).read().count('<disable_collisions') == 13
 
 
@@ -233,7 +234,7 @@ def test_wizard_controllers_page(qapp):
         ctrl.set_project_name('ctrl_page_test')
         ctrl.generate(tmp)
         rc = yaml.safe_load(open(os.path.join(
-            tmp, 'ctrl_page_test_moveit_config', 'config', 'ros2_controllers.yaml')))
+            tmp, 'ctrl_page_test_trainit_config', 'config', 'ros2_controllers.yaml')))
         params = rc['controller_manager']['ros__parameters']
         assert 'my_arm_ctrl' in params
         assert params['update_rate'] == 200
@@ -284,16 +285,17 @@ def test_wizard_app_pages_build_app(qapp):
 
     with tempfile.TemporaryDirectory() as tmp:
         wiz.generate_page.initializePage()
-        wiz.generate_page.project_name.setText('fr3wml_wiz_app')
+        wiz.generate_page.project_name.setText('fr3wml_wiz')
         wiz.generate_page.output_dir.setText(tmp)
         wiz.generate_page.generate()
         import yaml
-        bt = os.path.join(tmp, 'fr3wml_wiz_app', 'config', 'bt_params.yaml')
+        bundle = os.path.join(tmp, 'fr3wml_wiz_bundle')
+        bt = os.path.join(bundle, 'fr3wml_wiz_app', 'config', 'bt_params.yaml')
         data = yaml.safe_load(open(bt))['/**']['ros__parameters']['task_parameters']
         assert data['home']['named'] == 'home2'
         assert data['pick']['motion'] == 'lin'
         assert data['pick']['speed'] == 30
-        tree = open(os.path.join(tmp, 'fr3wml_wiz_app', 'bt_trees', 'pick_place.xml')).read()
+        tree = open(os.path.join(bundle, 'fr3wml_wiz_app', 'bt_trees', 'pick_place.xml')).read()
         assert '<CloseGripper/>' in tree and 'AttachObject' in tree
 
 
@@ -353,17 +355,22 @@ def test_wizard_mvp_flow_offscreen(qapp):
     assert seg.attached_collision_check is True
 
     # Step 9: generate the bundle (generate_page derives bundle names from the project
-    # name via BundleSpec.from_prefix -> app='big1500', config='big1500_moveit_config')
+    # name via BundleSpec.from_prefix -> app='big1500_app', config='big1500_trainit_config')
     with tempfile.TemporaryDirectory() as tmp:
         wiz.generate_page.initializePage()
         wiz.generate_page.project_name.setText('big1500')
         wiz.generate_page.output_dir.setText(tmp)
         wiz.generate_page.generate()
-        tree = open(os.path.join(tmp, 'big1500', 'bt_trees', 'pick_place.xml')).read()
+        bundle = os.path.join(tmp, 'big1500_bundle')
+        tree = open(os.path.join(bundle, 'big1500_app', 'bt_trees', 'pick_place.xml')).read()
         assert '<SetAttachedCollisionCheck value="true"/>' in tree
         assert '<SetReleasePolicy policy="freeze"/>' in tree
         assert os.path.isfile(os.path.join(
-            tmp, 'big1500_moveit_config', 'config', 'fr30_eef.srdf'))
+            bundle, 'big1500_trainit_config', 'config', 'fr30_eef.srdf'))
+        # bundle flow: the app bringup INCLUDES the trainit_config cell bringup
+        bringup = open(os.path.join(bundle, 'big1500_app', 'launch', 'bringup.launch.py')).read()
+        assert 'IncludeLaunchDescription' in bringup
+        assert 'big1500_trainit_config' in bringup
 
 
 USD_SCENE = ('/home/fra/BIG1500_tending_nesting/src/big1500_digital_twin/big1500_isaac/'

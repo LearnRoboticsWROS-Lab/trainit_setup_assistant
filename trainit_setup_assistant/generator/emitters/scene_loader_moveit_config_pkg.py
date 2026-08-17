@@ -63,6 +63,12 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         # 1) COPY the base config/ verbatim (preserves the tuned mode-switch + SRDF).
         ctx.copy_tree(base_config, f'{pkg}/config')
 
+        # 1b) MERGE assistant-captured named states into the copied SRDF. Waypoints
+        # captured live (blind mode: jog with the RViz gizmo, Plan & Execute, capture)
+        # exist only in the project — the app's named-target moves resolve against
+        # THIS config's SRDF at runtime, so they must land here too.
+        self._merge_named_states(project, ctx, base_config, pkg)
+
         # 2) GENERATE scene.yaml from the SceneSpec.
         ctx.generate_to(f'{pkg}/config/scene.yaml', build_scene_yaml(project),
                         source='scene_from_project')
@@ -92,3 +98,35 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                       bridge_packages=dep.bridge_packages())
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'moveit_config/scene_loader_CMakeLists.txt.j2',
                       package_name=pkg)
+
+    @staticmethod
+    def _merge_named_states(project, ctx: GenContext, base_config: Path, pkg: str) -> None:
+        """Append project named states missing from the copied SRDF as <group_state>s."""
+        import xml.etree.ElementTree as ET
+        srdfs = sorted(base_config.glob('*.srdf'))
+        if not srdfs or not project.robot.named_states:
+            return
+        text = srdfs[0].read_text()
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError:
+            ctx.manifest.warn(f'{srdfs[0].name}: parse failed — captured named states '
+                              f'NOT merged into the copied SRDF.')
+            return
+        existing = {(gs.get('name'), gs.get('group')) for gs in root.findall('group_state')}
+        missing = [s for s in project.robot.named_states
+                   if (s.name, s.group) not in existing]
+        if not missing or '</robot>' not in text:
+            return
+        blocks = []
+        for s in missing:
+            joints = '\n'.join(f'        <joint name="{j}" value="{v:.6g}"/>'
+                               for j, v in s.joint_values.items())
+            blocks.append(f'    <group_state name="{s.name}" group="{s.group}">\n'
+                          f'{joints}\n    </group_state>')
+        merged = text.replace(
+            '</robot>',
+            '    <!-- named states captured in the TrainIt Setup Assistant -->\n'
+            + '\n'.join(blocks) + '\n</robot>')
+        ctx.generate_to(f'{pkg}/config/{srdfs[0].name}', merged,
+                        source='srdf_named_state_merge')

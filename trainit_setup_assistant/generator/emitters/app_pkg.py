@@ -60,23 +60,40 @@ class AppEmitter(Emitter):
                       tree_filename=tree_name,
                       default_planner_mode=app.global_planner_mode.value)
 
-        ctx.render_to(f'{pkg}/launch/bringup.launch.py',
-                      'app/bringup.launch.py.j2',
-                      robot_name=robot.robot_name,
-                      moveit_config_package=project.bundle.moveit_config_package,
-                      app_package=pkg,
-                      arm_controller=robot.arm_controller.name,
-                      valid_modes_py=repr(tuple(dep.modes)),
-                      arm_js_remap_to_py=repr(dep.arm_joint_states_remap_to),
-                      bridges_py=repr([b.model_dump() for b in dep.bridges]),
-                      real_include_py=(repr(dep.real_include.model_dump())
-                                       if dep.real_include else 'None'),
-                      default_mode=dep.default_mode,
-                      modes_human=' | '.join(dep.modes),
-                      # mock gripper: run the generated no-op server in mock mode when a
-                      # gripper exists but no cell bridge serves it (empty bridges).
-                      gripper_mock_action_py=(repr(gripper_action)
-                                              if gripper_present else 'None'))
+        if robot.base_moveit_config_path:
+            # Bundle flow: the trainit_config package HAS a full cell bringup (planners,
+            # modes, bridges, scene loader). The app bringup INCLUDES it and runs the
+            # BT on top -> one command launches the whole stack, and the two bringups
+            # can never drift apart.
+            ctx.render_to(f'{pkg}/launch/bringup.launch.py',
+                          'app/bringup.launch.py.j2',
+                          robot_name=robot.robot_name,
+                          moveit_config_package=project.bundle.moveit_config_package,
+                          app_package=pkg,
+                          valid_modes_py=repr(tuple(dep.modes)),
+                          default_mode=dep.default_mode,
+                          modes_human=' | '.join(dep.modes),
+                          default_planner_mode=app.global_planner_mode.value)
+        else:
+            # From-scratch bootstrap: no base config bringup exists — the app bringup
+            # assembles move_group + controllers itself (and a mock gripper server).
+            ctx.render_to(f'{pkg}/launch/bringup.launch.py',
+                          'app/bringup_bootstrap.launch.py.j2',
+                          robot_name=robot.robot_name,
+                          moveit_config_package=project.bundle.moveit_config_package,
+                          app_package=pkg,
+                          arm_controller=robot.arm_controller.name,
+                          valid_modes_py=repr(tuple(dep.modes)),
+                          arm_js_remap_to_py=repr(dep.arm_joint_states_remap_to),
+                          bridges_py=repr([b.model_dump() for b in dep.bridges]),
+                          real_include_py=(repr(dep.real_include.model_dump())
+                                           if dep.real_include else 'None'),
+                          default_mode=dep.default_mode,
+                          modes_human=' | '.join(dep.modes),
+                          # mock gripper: run the generated no-op server in mock mode when
+                          # a gripper exists but no cell bridge serves it (empty bridges).
+                          gripper_mock_action_py=(repr(gripper_action)
+                                                  if gripper_present else 'None'))
 
         # --- mock gripper action server (GENERATE, only if the robot has a gripper) ---
         if gripper_present:

@@ -21,7 +21,7 @@ def test_scene_box_becomes_collision_object():
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('scene_test')
         ctrl.generate(tmp)
-        tree = open(os.path.join(tmp, 'scene_test', 'bt_trees', 'pick_place.xml')).read()
+        tree = open(os.path.join(tmp, 'scene_test_app', 'bt_trees', 'pick_place.xml')).read()
         # static collision object emitted; dynamic excluded from planning
         assert 'AddCollisionObject id="table"' in tree
         assert 'id="part"' not in tree
@@ -36,7 +36,7 @@ def test_non_box_shape_emits_aabb_with_warning():
         ctrl.set_project_name('aabb_test')
         manifest = ctrl.generate(tmp)
         import yaml
-        bt = os.path.join(tmp, 'aabb_test', 'config', 'bt_params.yaml')
+        bt = os.path.join(tmp, 'aabb_test_app', 'config', 'bt_params.yaml')
         params = yaml.safe_load(open(bt))['/**']['ros__parameters']['task_parameters']
         assert params['scene_ball_dims'] == [0.2, 0.2, 0.2]   # sphere AABB
         assert any('box-only' in w for w in manifest.warnings)
@@ -73,7 +73,7 @@ def test_import_usd_scene():
         with tempfile.TemporaryDirectory() as out:
             ctrl.set_project_name('usd_test')
             ctrl.generate(out)
-            tree = open(os.path.join(out, 'usd_test', 'bt_trees', 'pick_place.xml')).read()
+            tree = open(os.path.join(out, 'usd_test_app', 'bt_trees', 'pick_place.xml')).read()
             assert 'AddCollisionObject id="box_a"' in tree
 
 
@@ -136,7 +136,7 @@ def test_actuated_checked_dynamic_allowed_in_tree():
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('cat_test')
         ctrl.generate(tmp)
-        tree = open(os.path.join(tmp, 'cat_test', 'bt_trees', 'pick_place.xml')).read()
+        tree = open(os.path.join(tmp, 'cat_test_app', 'bt_trees', 'pick_place.xml')).read()
         assert 'AddCollisionObject id="belt"' in tree   # actuated -> checked collision
         assert 'id="crate"' not in tree                 # dynamic -> collision-allowed
 

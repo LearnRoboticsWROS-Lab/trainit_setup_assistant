@@ -17,22 +17,26 @@ SCHEMA_VERSION = 1
 
 
 class BundleSpec(BaseModel):
-    """Names of the three generated ROS 2 packages.
+    """Names of the three generated ROS 2 packages of a bundle.
 
-    Independently settable so the output can either match a golden bundle exactly or
-    use a fresh prefix (e.g. ``fr3wml_app_trainit_config``).
+    The prefix is the ROBOT name, so a bundle is ``<robot>_description`` +
+    ``<robot>_trainit_config`` + ``<robot>_app``. ``moveit_config_package`` holds the
+    self-contained *trainit_config* — the "engine bay": the MoveIt config + Pilz/OMPL/
+    CHOMP planners + mock/isaac/real wiring + gripper adapters + the scene loader, on
+    which ``<robot>_app`` (BehaviorTree, consuming the TMR) sits. Fields stay
+    independently settable so a golden bundle can still be matched exactly.
     """
 
     description_package: str
-    moveit_config_package: str
+    moveit_config_package: str   # value is the bundle's self-contained <robot>_trainit_config
     app_package: str
 
     @classmethod
     def from_prefix(cls, prefix: str) -> 'BundleSpec':
         return cls(
             description_package=f'{prefix}_description',
-            moveit_config_package=f'{prefix}_moveit_config',
-            app_package=prefix,
+            moveit_config_package=f'{prefix}_trainit_config',
+            app_package=f'{prefix}_app',
         )
 
 

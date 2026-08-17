@@ -186,6 +186,14 @@ class AssistantController:
         p.robot.base_moveit_config_package = package
         p.robot.base_moveit_config_path = str(base)
 
+        # Description source for the bundle's <robot>_description: the base config
+        # keeps the robot model in config/ (MoveIt-Setup-Assistant style). Without
+        # this the DescriptionSource default ('.') would ingest the whole CWD.
+        model_xacros = sorted(config.glob('*.urdf.xacro')) or sorted(config.glob('*.xacro'))
+        if model_xacros:
+            p.robot.description.urdf_dir = str(config)
+            p.robot.description.top_xacro = model_xacros[0].name
+
         arm = info.arm_group()
         if arm:
             p.robot.planning_group.name = arm.name

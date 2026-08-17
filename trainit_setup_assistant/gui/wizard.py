@@ -338,7 +338,14 @@ class GeneratePage(QWizardPage):
         form.addRow('Result', self.result)
 
     def initializePage(self) -> None:
-        self.project_name.setText(self.ctrl.robot_summary()['robot_name'] + '_app')
+        # Bundle prefix = the ROBOT name -> <robot>_description / _trainit_config / _app.
+        robot = self.ctrl.robot_summary()['robot_name']
+        self.project_name.setText(robot)
+        # Default output: NEXT TO the base config package (generate() adds the
+        # <name>_bundle/ folder itself), so the bundle lands in the colcon src tree.
+        base = self.ctrl.project.robot.base_moveit_config_path
+        if base and not self.output_dir.text().strip():
+            self.output_dir.setText(os.path.dirname(str(base)))
 
     def _browse(self):  # pragma: no cover - needs a display
         path = QFileDialog.getExistingDirectory(self, 'Output directory')
@@ -354,13 +361,33 @@ class GeneratePage(QWizardPage):
         if not out_dir:
             self.result.setPlainText('ERROR: please set an output directory')
             return
+        # the bundle is ONE folder holding the three packages (colcon finds nested
+        # packages, so <src>/<name>_bundle/{_description,_trainit_config,_app} builds)
+        bundle_dirname = f'{name}_bundle' if name else 'bundle'
+        if os.path.basename(os.path.normpath(out_dir)) != bundle_dirname:
+            out_dir = os.path.join(out_dir, bundle_dirname)
         try:
             manifest = self.ctrl.generate(out_dir)
         except Exception as exc:  # noqa: BLE001
             self.result.setPlainText(f'ERROR: {exc}')
             return
         info = manifest.as_dict()
-        lines = [f"Generated {info['file_count']} files into {out_dir}"]
+        b = self.ctrl.project.bundle
+        pkgs = f'{b.description_package} {b.moveit_config_package} {b.app_package}'
+        ws = self.ctrl._workspace_root(out_dir)
+        lines = [
+            f"Generated {info['file_count']} files into {out_dir}",
+            f'Bundle: {b.description_package} + {b.moveit_config_package} + {b.app_package}',
+            '',
+            'Build & run:',
+            f'  cd {ws}',
+            f'  colcon build --packages-select {pkgs}',
+            '  source install/setup.bash',
+            f'  # robot alone:   ros2 launch {b.description_package} view_robot.launch.py',
+            f'  # cell + RViz:   ros2 launch {b.moveit_config_package} bringup.launch.py '
+            f'mode:={self.ctrl.project.deployment.default_mode}',
+            f'  # application:  ros2 launch {b.app_package} bringup.launch.py',
+        ]
         # also persist the project so you can REOPEN it (e.g. to capture poses with the
         # gizmo after building this bootstrap) — the two-pass workflow.
         try:
@@ -707,7 +734,15 @@ class WaypointsPage(QWizardPage):
         form.addRow('Position (x,y,z)', posrow)
         form.addRow('Orientation (qx,qy,qz,qw)', self.quat)
         self.named = QLineEdit()
-        form.addRow('Named state (if target=named)', self.named)
+        capj = QPushButton('Capture joints (live)')
+        capj.setToolTip('Blind mode: jog the robot with the RViz gizmo (Plan & Execute), '
+                        'then capture — the CURRENT joints become a named state with '
+                        'this move\'s name, targeted by this move.')
+        capj.clicked.connect(self.capture_named)
+        namedrow = QHBoxLayout()
+        namedrow.addWidget(self.named)
+        namedrow.addWidget(capj)
+        form.addRow('Named state (if target=named)', namedrow)
         self.motion = QComboBox()
         self.motion.addItems(['ptp', 'lin', 'circ', 'free'])
         form.addRow('Motion', self.motion)
@@ -767,6 +802,25 @@ class WaypointsPage(QWizardPage):
         self.pos.setText(', '.join(f'{v:.4f}' for v in pos))
         self.quat.setText(', '.join(f'{v:.4f}' for v in quat))
         self.target_mode.setCurrentText('tcp')
+
+    def capture_named(self):  # pragma: no cover - needs a live ROS session
+        """Blind-mode: save the robot's CURRENT joints as a named state + target it.
+        (Jog with the RViz gizmo, Plan & Execute, then capture.) The generator merges
+        these captured states into the bundle's SRDF so they resolve at runtime."""
+        name = self.move_name.text().strip() or self.named.text().strip()
+        if not name:
+            self.seq.addItem('(set a Move name first, then capture)')
+            return
+        joints = self.ctrl.robot_summary()['arm_joints']
+        try:
+            values = self.wizard().live_capture().current_joint_values(joints)
+        except Exception as exc:  # noqa: BLE001
+            self.named.setText(f'# capture failed: {exc}')
+            return
+        self.ctrl.add_named_state(name, values)
+        self.named.setText(name)
+        self.target_mode.setCurrentText('named')
+        self.seq.addItem(f'(captured joints -> named state "{name}")')
 
     def add_move(self):
         name = self.move_name.text().strip()

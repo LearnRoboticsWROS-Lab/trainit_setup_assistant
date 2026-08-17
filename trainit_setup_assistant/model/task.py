@@ -45,6 +45,9 @@ class MotionSegment(BaseModel):
     # None => inherit the current runtime state (scene default). Emitted as a
     # SetAttachedCollisionCheck BT node before this move when not None.
     attached_collision_check: Optional[bool] = None
+    # Process-layer pause AFTER this waypoint (and its tool actions): a Wait block in
+    # the sequence editor. Emitted as the BT.CPP built-in <Sleep msec="..."/>.
+    wait_after_ms: int = Field(default=0, ge=0)
 
 
 class ToolAction(BaseModel):
@@ -70,6 +73,10 @@ class ApplicationSpec(BaseModel):
     # start AND end). Empty => the application template derives order from roles.
     # Each waypoint is DEFINED once (bt_params) but may be VISITED multiple times.
     sequence: List[str] = Field(default_factory=list)
+    # Process-layer loop over the WHOLE sequence (the Loop block): 0 = run once,
+    # -1 = repeat forever, N>0 = repeat N times. Emitted as the BT.CPP built-in
+    # <Repeat num_cycles="..."> around the move body.
+    loop_cycles: int = 0
 
     def segment_for(self, waypoint_name: str) -> Optional[MotionSegment]:
         """The incoming segment for a waypoint, if any."""

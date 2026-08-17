@@ -148,3 +148,4 @@ class ToolActionKind(StrEnum):
     RELEASE = 'release'  # OpenGripper / SetGripper(open)
     ATTACH = 'attach'    # AttachObject (payload follows the tcp)
     DETACH = 'detach'    # DetachObject
+    RESET_SCENE = 'reset_scene'  # ResetScene: dynamic objects -> initial poses (sim loop)

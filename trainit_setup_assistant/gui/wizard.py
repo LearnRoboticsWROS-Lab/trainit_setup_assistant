@@ -14,23 +14,30 @@ import os
 from typing import Dict, Optional
 
 from python_qt_binding.QtCore import Qt
+from python_qt_binding.QtGui import QBrush, QColor
 from python_qt_binding.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QPushButton,
     QSpinBox,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
     QWizard,
     QWizardPage,
 )
@@ -386,7 +393,8 @@ class GeneratePage(QWizardPage):
             f'  # robot alone:   ros2 launch {b.description_package} view_robot.launch.py',
             f'  # cell + RViz:   ros2 launch {b.moveit_config_package} bringup.launch.py '
             f'mode:={self.ctrl.project.deployment.default_mode}',
-            f'  # application:  ros2 launch {b.app_package} bringup.launch.py',
+            f'  # application:  ros2 launch {b.app_package} bringup.launch.py '
+            f'mode:={self.ctrl.project.deployment.default_mode}',
         ]
         # also persist the project so you can REOPEN it (e.g. to capture poses with the
         # gizmo after building this bootstrap) — the two-pass workflow.
@@ -1035,6 +1043,504 @@ class ModeBringupPage(QWizardPage):
         return True
 
 
+# ═══ Step 6 (v3 UX): block-based application editor ══════════════════════════
+# Palette | Sequence | Inspector — the MoveIt-Pro-style trittico. Blocks belong to
+# LAYERS: 1 robot motion (blue), 2 gripper/objects (green), 3 process (orange).
+# Greyed palette entries are roadmap (vision, PLC, policy). Layer 4 (adapters per
+# mock/isaac/real) is shown read-only in the Deployment dialog. The page FOLDS the
+# block list into the existing canonical model (moves + tool actions + wait/loop),
+# so bundle generation is untouched.
+
+_BLOCK_META = {
+    'move':    ('\U0001F9BE', '#1565c0', 'Move (robot)'),
+    'gripper': ('✊',     '#2e7d32', 'Gripper'),
+    'reset':   ('♻',     '#2e7d32', 'Reset scene'),
+    'wait':    ('⏱',     '#ef6c00', 'Wait'),
+    'loop':    ('\U0001F501', '#ef6c00', 'Loop'),
+}
+
+
+class DeploymentDialog(QDialog):
+    """Layer 4, READ-ONLY: what is wired under the hood for mock / isaac / real."""
+
+    def __init__(self, ctrl: AssistantController, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Layer 4 — Deployment (read-only)')
+        self.resize(680, 420)
+        p = ctrl.project
+        dep, robot = p.deployment, p.robot
+        lines = [
+            'Derived from the base moveit_config — editing comes in a later release.\n',
+            f'Modes: {", ".join(dep.modes)}   (default: {dep.default_mode})',
+            f'Arm controller: {robot.arm_controller.name} '
+            f'(action: /{robot.arm_controller.name}/follow_joint_trajectory)',
+            f'Gripper action: {robot.gripper.gripper_action_ns() or "-"}',
+            f'Arm /joint_states remap: {dep.arm_joint_states_remap_to or "-"}',
+            '',
+            'Cell bridges / adapters:',
+        ]
+        for b in dep.bridges:
+            modes = ",".join(b.modes) if getattr(b, 'modes', None) else 'mock,isaac'
+            lines.append(f'  [{modes:16s}] {b.package} / {b.executable}')
+        if dep.real_include:
+            lines.append(f'  [real hardware  ] include {dep.real_include.package}'
+                         f'/launch/{dep.real_include.launch_file}')
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText('\n'.join(lines))
+        lay = QVBoxLayout(self)
+        lay.addWidget(text)
+        close = QPushButton('Close')
+        close.clicked.connect(self.accept)
+        lay.addWidget(close)
+
+
+class BlocksPage(QWizardPage):
+    """Step 6 — the application as ordered BLOCKS (palette | sequence | inspector)."""
+
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('Step 6 — Application blocks (robot · gripper · process)')
+        self.setSubTitle('Drag blocks into the sequence and order them. Jog the robot with '
+                         'the RViz gizmo, then Capture. Layers: blue=robot motion, '
+                         'green=gripper, orange=process. Greyed blocks are roadmap.')
+        self.blocks: list = []          # ordered [{kind:..., ...}]
+        self._selected: int = -1
+
+        root = QHBoxLayout(self)
+
+        # ---- left: palette ---------------------------------------------------
+        pal = QVBoxLayout()
+        pal.addWidget(QLabel('<b>Blocks</b>'))
+
+        def pal_btn(kind: str, label: str) -> QPushButton:
+            icon, color, _ = _BLOCK_META[kind]
+            b = QPushButton(f'{icon}  {label}')
+            b.setStyleSheet(f'text-align:left; color:{color}; font-weight:bold;')
+            b.clicked.connect(lambda _=False, k=kind: self.add_block(k))
+            return b
+
+        pal.addWidget(QLabel('Layer 1 — Robot'))
+        pal.addWidget(pal_btn('move', 'Move'))
+        pal.addWidget(QLabel('Layer 2 — Gripper / objects'))
+        pal.addWidget(pal_btn('gripper', 'Gripper'))
+        pal.addWidget(pal_btn('reset', 'Reset scene (sim)'))
+        pal.addWidget(QLabel('Layer 3 — Process'))
+        pal.addWidget(pal_btn('wait', 'Wait / delay'))
+        pal.addWidget(pal_btn('loop', 'Loop sequence'))
+        pal.addWidget(QLabel('Roadmap'))
+        for soon in ('Vision (camera + detection)', 'PLC trigger (in/out)',
+                     'Policy (ONNX/PT)', 'Modbus / TCP-IP'):
+            g = QPushButton(f'⚪  {soon}')
+            g.setEnabled(False)
+            g.setToolTip('Coming soon — the UX is ready for it')
+            g.setStyleSheet('text-align:left; color:#9e9e9e;')
+            pal.addWidget(g)
+        pal.addStretch(1)
+        dep_btn = QPushButton('Layer 4 — Deployment…')
+        dep_btn.setToolTip('What is wired for mock / isaac / real (read-only)')
+        dep_btn.clicked.connect(self._show_deployment)
+        pal.addWidget(dep_btn)
+        root.addLayout(pal, 2)
+
+        # ---- centre: the sequence -------------------------------------------
+        mid = QVBoxLayout()
+        mid.addWidget(QLabel('<b>Sequence</b> (drag to reorder)'))
+        self.seq = QListWidget()
+        self.seq.setDragDropMode(QAbstractItemView.InternalMove)
+        self.seq.currentRowChanged.connect(self._on_select)
+        self.seq.model().rowsMoved.connect(self._on_reorder)
+        mid.addWidget(self.seq, 1)
+        rm = QPushButton('Remove selected block')
+        rm.clicked.connect(self.remove_selected)
+        mid.addWidget(rm)
+        self.status = QLabel('')
+        self.status.setWordWrap(True)
+        mid.addWidget(self.status)
+        root.addLayout(mid, 4)
+
+        # ---- right: inspector ------------------------------------------------
+        insp = QVBoxLayout()
+        insp.addWidget(QLabel('<b>Block properties</b>'))
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self._empty_form())     # 0
+        self.stack.addWidget(self._move_form())      # 1
+        self.stack.addWidget(self._gripper_form())   # 2
+        self.stack.addWidget(self._wait_form())      # 3
+        self.stack.addWidget(self._loop_form())      # 4
+        self.stack.addWidget(self._reset_form())     # 5
+        insp.addWidget(self.stack, 1)
+        apply_btn = QPushButton('Apply to block')
+        apply_btn.clicked.connect(self.apply_inspector)
+        insp.addWidget(apply_btn)
+        root.addLayout(insp, 3)
+
+    # ---- inspector forms -----------------------------------------------------
+    def _empty_form(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.addWidget(QLabel('Select a block, or add one from the palette.'))
+        v.addStretch(1)
+        return w
+
+    def _move_form(self) -> QWidget:
+        w = QWidget()
+        f = QFormLayout(w)
+        self.m_name = QLineEdit()
+        f.addRow('Name', self.m_name)
+        self.m_target = QComboBox()
+        self.m_target.addItems(['named (captured joints)', 'tcp (pose)'])
+        f.addRow('Target', self.m_target)
+        self.m_named = QLineEdit()
+        capj = QPushButton('Capture joints (live)')
+        capj.setToolTip('Jog with the RViz gizmo (Plan & Execute), then capture: the '
+                        'CURRENT joints become a named state with this block\'s name.')
+        capj.clicked.connect(self.capture_joints)
+        r1 = QHBoxLayout(); r1.addWidget(self.m_named); r1.addWidget(capj)
+        f.addRow('Named state', r1)
+        self.m_pos = QLineEdit()
+        capp = QPushButton('Capture pose (live)')
+        capp.clicked.connect(self.capture_pose)
+        r2 = QHBoxLayout(); r2.addWidget(self.m_pos); r2.addWidget(capp)
+        f.addRow('Position x,y,z', r2)
+        self.m_quat = QLineEdit('0, 0, 0, 1')
+        f.addRow('Orientation qx,qy,qz,qw', self.m_quat)
+        self.m_motion = QComboBox()
+        self.m_motion.addItems(['ptp', 'lin', 'free', 'circ'])
+        self.m_motion.setToolTip('ptp/free = joint-space (robust). lin/circ = CARTESIAN '
+                                 'straight/arc: to a named state the pose is resolved via '
+                                 'FK; the straight line itself must be feasible.')
+        f.addRow('Motion', self.m_motion)
+        self.m_planner = QComboBox()
+        self.m_planner.addItems(['', 'pilz', 'ompl', 'ompl_chomp'])
+        f.addRow('Planner (blank=global)', self.m_planner)
+        self.m_speed = QSpinBox(); self.m_speed.setRange(1, 100); self.m_speed.setValue(50)
+        f.addRow('Speed %', self.m_speed)
+        self.m_tol = QDoubleSpinBox()
+        self.m_tol.setRange(0.0, 3.1416); self.m_tol.setDecimals(3)
+        self.m_tol.setSingleStep(0.01); self.m_tol.setValue(0.1)
+        f.addRow('Start tol (rad)', self.m_tol)
+        self.m_check = QComboBox()
+        self.m_check.addItems(['inherit', 'on', 'off'])
+        self.m_check.setToolTip('Held-payload collision check for THIS move: ON when the '
+                                'carried objects must avoid the static meshes.')
+        f.addRow('Attached collision check', self.m_check)
+        return w
+
+    def _gripper_form(self) -> QWidget:
+        w = QWidget()
+        f = QFormLayout(w)
+        self.g_action = QComboBox()
+        self.g_action.addItems(['close (grasp)', 'open (release)',
+                                'attach payload', 'detach payload'])
+        f.addRow('Action', self.g_action)
+        self.g_payload = QLineEdit()
+        self.g_payload.setPlaceholderText('attach/detach only: payload id')
+        f.addRow('Payload', self.g_payload)
+        note = QLabel('Object dynamics (attach_box cuboid, freeze/gravity on release) '
+                      'come from the SCENE (Step 2).')
+        note.setWordWrap(True)
+        f.addRow(note)
+        return w
+
+    def _wait_form(self) -> QWidget:
+        w = QWidget()
+        f = QFormLayout(w)
+        self.w_ms = QSpinBox()
+        self.w_ms.setRange(1, 600000); self.w_ms.setValue(500); self.w_ms.setSuffix(' ms')
+        f.addRow('Pause', self.w_ms)
+        return w
+
+    def _reset_form(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        note = QLabel('Puts every DYNAMIC object back at its initial (scene.yaml) pose — '
+                      'the cycle boundary of a looping app in SIMULATION: the next cycle '
+                      'picks where cycle 1 did. Detaches anything still held. In Isaac the '
+                      'adapter is signalled on /isaac_scene_reset. No parameters.')
+        note.setWordWrap(True)
+        v.addWidget(note)
+        v.addStretch(1)
+        return w
+
+    def _loop_form(self) -> QWidget:
+        w = QWidget()
+        f = QFormLayout(w)
+        self.l_forever = QCheckBox('repeat forever')
+        self.l_forever.setChecked(True)
+        f.addRow(self.l_forever)
+        self.l_cycles = QSpinBox(); self.l_cycles.setRange(1, 100000); self.l_cycles.setValue(2)
+        f.addRow('…or cycles', self.l_cycles)
+        note = QLabel('One Loop block per sequence: it repeats the WHOLE sequence.')
+        note.setWordWrap(True)
+        f.addRow(note)
+        return w
+
+    # ---- palette / list operations ------------------------------------------
+    def add_block(self, kind: str) -> None:
+        if kind == 'loop' and any(b['kind'] == 'loop' for b in self.blocks):
+            self.status.setText('Only one Loop block per sequence.')
+            return
+        defaults = {
+            'move':    {'kind': 'move', 'name': f'move_{sum(1 for b in self.blocks if b["kind"] == "move") + 1}',
+                        'target': 'named', 'named': '', 'pos': '', 'quat': '0, 0, 0, 1',
+                        'motion': 'ptp', 'planner': '', 'speed': 50, 'tol': 0.1, 'check': 'inherit'},
+            'gripper': {'kind': 'gripper', 'action': 'close', 'payload': ''},
+            'reset':   {'kind': 'reset'},
+            'wait':    {'kind': 'wait', 'ms': 500},
+            'loop':    {'kind': 'loop', 'cycles': -1},
+        }[kind]
+        self.blocks.append(dict(defaults))
+        self._refresh(select=len(self.blocks) - 1)
+
+    def remove_selected(self) -> None:
+        row = self.seq.currentRow()
+        if 0 <= row < len(self.blocks):
+            del self.blocks[row]
+            self._refresh(select=min(row, len(self.blocks) - 1))
+
+    def _on_reorder(self, *_args) -> None:
+        order = []
+        for i in range(self.seq.count()):
+            order.append(self.seq.item(i).data(Qt.UserRole))
+        self.blocks = [self.blocks[j] for j in order]
+        # the Loop CONTAINS the whole sequence -> it always sits at the end (the
+        # closing bracket); dragging it elsewhere would misread its scope.
+        loops = [b for b in self.blocks if b['kind'] == 'loop']
+        if loops:
+            self.blocks = [b for b in self.blocks if b['kind'] != 'loop'] + loops
+        self._refresh(select=self.seq.currentRow())
+
+    def _on_select(self, row: int) -> None:
+        self._selected = row
+        if not (0 <= row < len(self.blocks)):
+            self.stack.setCurrentIndex(0)
+            return
+        b = self.blocks[row]
+        idx = {'move': 1, 'gripper': 2, 'wait': 3, 'loop': 4, 'reset': 5}[b['kind']]
+        self.stack.setCurrentIndex(idx)
+        if b['kind'] == 'move':
+            self.m_name.setText(b['name'])
+            self.m_target.setCurrentIndex(0 if b['target'] == 'named' else 1)
+            self.m_named.setText(b['named'])
+            self.m_pos.setText(b['pos'])
+            self.m_quat.setText(b['quat'])
+            self.m_motion.setCurrentText(b['motion'])
+            self.m_planner.setCurrentText(b['planner'])
+            self.m_speed.setValue(int(b['speed']))
+            self.m_tol.setValue(float(b['tol']))
+            self.m_check.setCurrentText(b['check'])
+        elif b['kind'] == 'gripper':
+            labels = {'close': 0, 'open': 1, 'attach': 2, 'detach': 3}
+            self.g_action.setCurrentIndex(labels.get(b['action'], 0))
+            self.g_payload.setText(b.get('payload', ''))
+        elif b['kind'] == 'wait':
+            self.w_ms.setValue(int(b['ms']))
+        elif b['kind'] == 'loop':
+            self.l_forever.setChecked(b['cycles'] == -1)
+            if b['cycles'] > 0:
+                self.l_cycles.setValue(int(b['cycles']))
+
+    def apply_inspector(self) -> None:
+        row = self._selected
+        if not (0 <= row < len(self.blocks)):
+            return
+        b = self.blocks[row]
+        if b['kind'] == 'move':
+            b.update(name=self.m_name.text().strip() or b['name'],
+                     target='named' if self.m_target.currentIndex() == 0 else 'tcp',
+                     named=self.m_named.text().strip(),
+                     pos=self.m_pos.text().strip(), quat=self.m_quat.text().strip(),
+                     motion=self.m_motion.currentText(),
+                     planner=self.m_planner.currentText(),
+                     speed=self.m_speed.value(), tol=self.m_tol.value(),
+                     check=self.m_check.currentText())
+        elif b['kind'] == 'gripper':
+            b.update(action=('close', 'open', 'attach', 'detach')[self.g_action.currentIndex()],
+                     payload=self.g_payload.text().strip())
+        elif b['kind'] == 'wait':
+            b.update(ms=self.w_ms.value())
+        elif b['kind'] == 'loop':
+            b.update(cycles=-1 if self.l_forever.isChecked() else self.l_cycles.value())
+        self._refresh(select=row)
+
+    # ---- live capture (blind mode) ------------------------------------------
+    def capture_joints(self):  # pragma: no cover - needs a live ROS session
+        name = self.m_name.text().strip()
+        if not name:
+            self.status.setText('Set the block Name first, then capture.')
+            return
+        joints = self.ctrl.robot_summary()['arm_joints']
+        try:
+            values = self.wizard().live_capture().current_joint_values(joints)
+        except Exception as exc:  # noqa: BLE001
+            self.status.setText(f'capture failed: {exc}')
+            return
+        self.ctrl.add_named_state(name, values)
+        self.m_named.setText(name)
+        self.m_target.setCurrentIndex(0)
+        self.status.setText(f'captured joints -> named state "{name}"')
+
+    def capture_pose(self):  # pragma: no cover - needs a live ROS session
+        s = self.ctrl.robot_summary()
+        try:
+            pos, quat = self.wizard().live_capture().current_pose(s['base_frame'], s['tip_link'])
+        except Exception as exc:  # noqa: BLE001
+            self.status.setText(f'capture failed: {exc}')
+            return
+        self.m_pos.setText(', '.join(f'{v:.4f}' for v in pos))
+        self.m_quat.setText(', '.join(f'{v:.4f}' for v in quat))
+        self.m_target.setCurrentIndex(1)
+        self.status.setText('captured TCP pose')
+
+    def _show_deployment(self):  # pragma: no cover - simple dialog
+        DeploymentDialog(self.ctrl, self).exec_()
+
+    # ---- rendering + model sync ---------------------------------------------
+    def _label(self, b: dict) -> str:
+        if b['kind'] == 'move':
+            tgt = b['named'] or b['name'] if b['target'] == 'named' else 'tcp pose'
+            chk = '' if b['check'] == 'inherit' else f"  · chk {b['check'].upper()}"
+            return (f"{b['name']}   [{b['motion']}"
+                    f"{('/' + b['planner']) if b['planner'] else ''} {b['speed']}%]"
+                    f"  → {tgt}{chk}")
+        if b['kind'] == 'gripper':
+            names = {'close': 'CLOSE (grasp)', 'open': 'OPEN (release)',
+                     'attach': f"ATTACH {b.get('payload', '')}",
+                     'detach': f"DETACH {b.get('payload', '')}"}
+            return f"Gripper {names[b['action']]}"
+        if b['kind'] == 'reset':
+            return 'Reset scene → initial poses (sim)'
+        if b['kind'] == 'wait':
+            return f"Wait {b['ms']} ms"
+        times = 'forever' if b['cycles'] == -1 else f"{b['cycles']}×"
+        return f'REPEATS all the blocks above — {times}'
+
+    def _refresh(self, select: int = -1) -> None:
+        # container rendering: with a Loop present, the contained blocks carry a │
+        # bar and the Loop closes the bracket (└─) — the loop's SCOPE reads at a glance.
+        has_loop = any(b['kind'] == 'loop' for b in self.blocks)
+        self.seq.blockSignals(True)
+        self.seq.clear()
+        for i, b in enumerate(self.blocks):
+            icon, color, _ = _BLOCK_META[b['kind']]
+            if b['kind'] == 'loop':
+                text = f'└─ {icon}  {self._label(b)}'
+            elif has_loop:
+                text = f'│  {icon}  {self._label(b)}'
+            else:
+                text = f'{icon}  {self._label(b)}'
+            item = QListWidgetItem(text)
+            item.setForeground(QBrush(QColor(color)))
+            item.setData(Qt.UserRole, i)
+            self.seq.addItem(item)
+        self.seq.blockSignals(False)
+        if 0 <= select < self.seq.count():
+            self.seq.setCurrentRow(select)
+        self._sync_model()
+
+    def _sync_model(self) -> None:
+        """FOLD the block list into the canonical model (the generator's contract)."""
+        ctrl = self.ctrl
+        try:
+            ctrl.clear_application()
+        except Exception:  # noqa: BLE001 - no project yet
+            return
+        prev_move = None
+        waits: Dict[str, int] = {}
+        loop = 0
+        warn = ''
+        for b in self.blocks:
+            if b['kind'] == 'move':
+                kwargs = dict(name=b['name'], motion=b['motion'],
+                              planner=b['planner'] or None, speed=int(b['speed']),
+                              allowed_start_tolerance=float(b['tol']),
+                              attached_collision_check={'inherit': None, 'on': True,
+                                                        'off': False}[b['check']])
+                try:
+                    if b['target'] == 'named':
+                        kwargs['named'] = b['named'] or b['name']
+                    else:
+                        kwargs['position'] = _parse_floats(b['pos'])
+                        kwargs['orientation'] = _parse_floats(b['quat'])
+                    ctrl.add_move(**kwargs)
+                    prev_move = b['name']
+                except Exception:  # noqa: BLE001 - incomplete block, keep editing
+                    warn = f"block '{b['name']}': incomplete target (set pose or named state)"
+            elif b['kind'] == 'gripper':
+                if prev_move is None:
+                    warn = 'a Gripper block needs a Move before it'
+                    continue
+                kind = {'close': 'grasp', 'open': 'release',
+                        'attach': 'attach', 'detach': 'detach'}[b['action']]
+                ctrl.add_tool_action(prev_move, kind, b.get('payload') or None)
+            elif b['kind'] == 'reset':
+                if prev_move is None:
+                    warn = 'a Reset scene block needs a Move before it'
+                    continue
+                ctrl.add_tool_action(prev_move, 'reset_scene')
+            elif b['kind'] == 'wait':
+                if prev_move is None:
+                    warn = 'a Wait block needs a Move before it'
+                    continue
+                waits[prev_move] = waits.get(prev_move, 0) + int(b['ms'])
+            elif b['kind'] == 'loop':
+                loop = int(b['cycles'])
+        for wp, ms in waits.items():
+            ctrl.set_wait_after(wp, ms)
+        ctrl.set_loop(loop)
+        self.status.setText(warn)
+
+    # ---- lifecycle -----------------------------------------------------------
+    def initializePage(self) -> None:
+        """Rebuild the block list from the project (reopen / back-navigation)."""
+        try:
+            app = self.ctrl.project.application
+        except Exception:  # noqa: BLE001
+            return
+        if self.blocks or not app.sequence:
+            return                        # keep in-progress edits
+        blocks = []
+        for name in app.sequence:
+            wp = app.waypoint_by_name(name)
+            seg = app.segment_for(name)
+            if wp is None:
+                continue
+            blocks.append({'kind': 'move', 'name': name,
+                           'target': 'named' if wp.type.value == 'joint' else 'tcp',
+                           'named': wp.named or '',
+                           'pos': ', '.join(f'{v:.4f}' for v in (wp.position or [])),
+                           'quat': ', '.join(f'{v:.4f}' for v in (wp.orientation or [0, 0, 0, 1])),
+                           'motion': seg.motion.value if seg else 'ptp',
+                           'planner': (seg.planner.value if seg and seg.planner else ''),
+                           'speed': seg.speed if seg else 50,
+                           'tol': wp.allowed_start_tolerance,
+                           'check': ('inherit' if not seg or seg.attached_collision_check is None
+                                     else ('on' if seg.attached_collision_check else 'off'))})
+            acts = app.actions_at(name)
+            for act in acts:
+                if act.kind.value == 'reset_scene':
+                    continue                      # rendered AFTER the wait (cycle boundary)
+                rev = {'grasp': 'close', 'release': 'open',
+                       'attach': 'attach', 'detach': 'detach'}
+                blocks.append({'kind': 'gripper', 'action': rev.get(act.kind.value, 'close'),
+                               'payload': act.payload_ref or ''})
+            if seg and seg.wait_after_ms > 0:
+                blocks.append({'kind': 'wait', 'ms': seg.wait_after_ms})
+            for act in acts:
+                if act.kind.value == 'reset_scene':
+                    blocks.append({'kind': 'reset'})
+        if app.loop_cycles != 0:
+            blocks.append({'kind': 'loop', 'cycles': app.loop_cycles})
+        self.blocks = blocks
+        self._refresh()
+
+    def validatePage(self) -> bool:
+        self._sync_model()
+        return True
+
+
 class SetupWizard(QWizard):
     def __init__(self, controller: Optional[AssistantController] = None):
         super().__init__()
@@ -1047,17 +1553,20 @@ class SetupWizard(QWizard):
         self.mode_page = ModeBringupPage(self.controller)
         self.scene_page = ScenePage(self.controller)
         self.application_page = ApplicationPage(self.controller)
-        self.waypoints_page = WaypointsPage(self.controller)
+        self.blocks_page = BlocksPage(self.controller)
         self.generate_page = GeneratePage(self.controller)
         # From-scratch / advanced pages: constructed (used by the CLI + tests, and as
         # manual overrides of the base-derived values), not in the default MVP flow.
+        # waypoints_page is the LEGACY Step 6 (form-based), kept for tests/back-compat;
+        # the MVP flow now uses the block-based BlocksPage.
+        self.waypoints_page = WaypointsPage(self.controller)
         self.load_page = LoadRobotPage(self.controller)
         self.group_page = GroupFramesPage(self.controller)
         self.controllers_page = ControllersPage(self.controller)
         self.states_page = NamedStatesPage(self.controller)
         # The two-phase MVP flow (Phase A: build the faithful env; Phase B: the app).
         for page in (self.base_page, self.scene_page, self.gen_config_page,
-                     self.mode_page, self.application_page, self.waypoints_page,
+                     self.mode_page, self.application_page, self.blocks_page,
                      self.generate_page):
             self.addPage(page)
         self._scene_pub = None

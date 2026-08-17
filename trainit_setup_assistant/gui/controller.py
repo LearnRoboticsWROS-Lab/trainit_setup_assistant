@@ -354,7 +354,8 @@ class AssistantController:
                  speed: int = 50, role: str = 'generic',
                  aux=None, aux_is_center: bool = False,
                  allowed_start_tolerance: float = 0.1,
-                 attached_collision_check: Optional[bool] = None) -> None:
+                 attached_collision_check: Optional[bool] = None,
+                 wait_after_ms: int = 0) -> None:
         """Define a waypoint + its incoming motion segment and append it to the tree.
 
         TCP target if ``position`` is given; else a joint target (``named``/``joints``).
@@ -381,7 +382,8 @@ class AssistantController:
             to_waypoint=name, motion=MotionType(motion),
             planner=PlannerId(planner) if planner else None, speed=speed,
             aux=list(aux) if aux is not None else None, aux_is_center=aux_is_center,
-            attached_collision_check=attached_collision_check)
+            attached_collision_check=attached_collision_check,
+            wait_after_ms=max(0, int(wait_after_ms)))
         app.segments = [s for s in app.segments if s.to_waypoint != name] + [seg]
         app.sequence.append(name)
 
@@ -390,6 +392,17 @@ class AssistantController:
         self._require().application.tool_actions.append(
             ToolAction(at_waypoint=at_waypoint, kind=ToolActionKind(kind),
                        payload_ref=payload_ref))
+
+    def set_wait_after(self, waypoint: str, ms: int) -> None:
+        """Process-layer Wait block: pause (ms) after the waypoint + its tool actions."""
+        seg = self._require().application.segment_for(waypoint)
+        if seg is None:
+            raise ValueError(f'no move named "{waypoint}"')
+        seg.wait_after_ms = max(0, int(ms))
+
+    def set_loop(self, cycles: int) -> None:
+        """Process-layer Loop block over the WHOLE sequence: 0=off, -1=forever, N=times."""
+        self._require().application.loop_cycles = int(cycles)
 
     def clear_application(self) -> None:
         app = self._require().application

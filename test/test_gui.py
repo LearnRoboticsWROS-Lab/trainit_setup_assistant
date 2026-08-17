@@ -422,3 +422,77 @@ def test_wizard_usd_mapping_builds_baseline_scene(qapp):
 
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))
+
+
+def test_blocks_page_builds_app_with_wait_and_loop(qapp):
+    """v3 UX: drive the block editor (palette|sequence|inspector) offscreen — moves +
+    gripper + wait + loop fold into the canonical model and the BT gets Sleep/Repeat."""
+    from trainit_setup_assistant.applications.registry import get_application
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    ctrl.clear_application()
+    ctrl.set_payload('cube', [0.02, 0.02, 0.02])
+    wiz = SetupWizard(ctrl)
+    bp = wiz.blocks_page
+
+    # move "home" (named) -> gripper close -> wait 250ms -> move "place" (tcp)
+    # -> gripper open -> loop forever
+    bp.add_block('move')
+    bp.m_name.setText('home')
+    bp.m_target.setCurrentIndex(0)
+    bp.m_named.setText('home')
+    bp.m_motion.setCurrentText('ptp')
+    bp.apply_inspector()
+
+    bp.add_block('gripper')
+    bp.g_action.setCurrentIndex(0)          # close (grasp)
+    bp.apply_inspector()
+
+    bp.add_block('wait')
+    bp.w_ms.setValue(250)
+    bp.apply_inspector()
+
+    bp.add_block('move')
+    bp.m_name.setText('place')
+    bp.m_target.setCurrentIndex(1)          # tcp
+    bp.m_pos.setText('0.3, 0.3, 0.1')
+    bp.m_quat.setText('0, 1, 0, 0')
+    bp.m_motion.setCurrentText('lin')
+    bp.m_planner.setCurrentText('pilz')
+    bp.m_check.setCurrentText('on')
+    bp.apply_inspector()
+
+    bp.add_block('gripper')
+    bp.g_action.setCurrentIndex(1)          # open (release)
+    bp.apply_inspector()
+
+    bp.add_block('reset')                   # scene reset at the cycle boundary
+    bp.add_block('loop')                    # forever (default)
+    bp.apply_inspector()
+    assert bp.validatePage()
+
+    app = ctrl.project.application
+    assert app.sequence == ['home', 'place']
+    assert app.segment_for('home').wait_after_ms == 250
+    assert app.segment_for('place').attached_collision_check is True
+    assert app.loop_cycles == -1
+    kinds = [a.kind.value for a in app.tool_actions]
+    assert kinds == ['grasp', 'release', 'reset_scene']
+
+    xml = get_application(app.type).build_tree_xml(ctrl.project)
+    assert '<Sleep msec="250"/>' in xml
+    assert '<Repeat num_cycles="-1">' in xml
+    assert xml.index('<Repeat') < xml.index('<MoveWaypoint')
+    # scene reset renders INSIDE the loop, as the cycle boundary (after the release)
+    assert '<ResetScene/>' in xml
+    assert xml.index('<ResetScene/>') > xml.index('OpenGripper')
+    assert xml.index('<ResetScene/>') < xml.index('</Repeat>')
+
+    # a second loop block is refused; reload round-trip rebuilds the same blocks
+    bp.add_block('loop')
+    assert sum(1 for b in bp.blocks if b['kind'] == 'loop') == 1
+    bp.blocks = []
+    bp.initializePage()
+    rebuilt = [b['kind'] for b in bp.blocks]
+    assert rebuilt == ['move', 'gripper', 'wait', 'move', 'gripper', 'reset', 'loop']

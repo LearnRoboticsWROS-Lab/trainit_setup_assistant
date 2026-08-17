@@ -103,16 +103,38 @@ class PickAndPlace(ApplicationTemplate):
                     )
             out.append('')
 
+        # Process-layer loop (the Loop block): repeat the move body via the BT.CPP
+        # built-in Repeat decorator. -1 = forever, N>0 = N cycles, 0 = no loop.
+        loop = app.loop_cycles
+        body_indent = '      '
+        if loop != 0:
+            out.append(f'      <Repeat num_cycles="{loop}">')
+            out.append(f'        <Sequence name="{seq_name}Cycle">')
+            body_indent = '          '
+
         for wp_name in seq:
             # per-move planning-collision check for held objects (SetBool service): ON
             # before a transfer that must route the payload around the static meshes.
             seg = app.segment_for(wp_name)
             if seg is not None and seg.attached_collision_check is not None:
                 val = 'true' if seg.attached_collision_check else 'false'
-                out.append(f'      <SetAttachedCollisionCheck value="{val}"/>')
-            out.append(f'      <MoveWaypoint waypoint="{wp_name}"/>')
-            for action in app.actions_at(wp_name):
-                out.append('      ' + self._render_action(action, project))
+                out.append(f'{body_indent}<SetAttachedCollisionCheck value="{val}"/>')
+            out.append(f'{body_indent}<MoveWaypoint waypoint="{wp_name}"/>')
+            acts = app.actions_at(wp_name)
+            for action in acts:
+                if action.kind is not ToolActionKind.RESET_SCENE:
+                    out.append(body_indent + self._render_action(action, project))
+            # process-layer pause (the Wait block): BT.CPP built-in Sleep.
+            if seg is not None and seg.wait_after_ms > 0:
+                out.append(f'{body_indent}<Sleep msec="{seg.wait_after_ms}"/>')
+            # scene reset LAST (after the pause): the cycle boundary of a looping app.
+            for action in acts:
+                if action.kind is ToolActionKind.RESET_SCENE:
+                    out.append(body_indent + self._render_action(action, project))
+
+        if loop != 0:
+            out.append('        </Sequence>')
+            out.append('      </Repeat>')
 
         out.append('')
         out.append(f'      <Log message="{label}: complete"/>')
@@ -131,6 +153,8 @@ class PickAndPlace(ApplicationTemplate):
         link = payload.attach_link if payload else 'tcp'
         if action.kind is ToolActionKind.GRASP:
             return '<CloseGripper/>'
+        if action.kind is ToolActionKind.RESET_SCENE:
+            return '<ResetScene/>'
         if action.kind is ToolActionKind.RELEASE:
             # with a scene loader (Isaac flow), tell the manipulation adapter what the
             # released object does (freeze|gravity) BEFORE opening the grip. Without one

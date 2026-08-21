@@ -1,0 +1,9 @@
+# --- TrainIt Isaac cell kit -------------------------------------------------
+# The TSA resolves meshes through the INSTALLED share, so `meshes` MUST be in this
+# list or every mesh suggestion at Step 2 comes back empty and the scene builds 0
+# objects — with no error.
+install(DIRECTORY usd config launch scripts meshes
+  DESTINATION share/${PROJECT_NAME})
+
+# Bridges you run as ROS nodes (not the OmniGraph Script Nodes, which live in the USD):
+# install(PROGRAMS scripts/<your_bridge>.py DESTINATION lib/${PROJECT_NAME})

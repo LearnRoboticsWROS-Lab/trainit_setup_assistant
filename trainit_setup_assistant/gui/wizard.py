@@ -436,6 +436,21 @@ class ScenePage(QWizardPage):
         # touch a grasped object (self-collision relief). BIG1500: end_effector, tcp, wrist3_link.
         self.touch_links = QLineEdit('tcp')
         usd_form.addRow('Tool touch links (csv)', self.touch_links)
+        # The two ROS contract topics scene_manager_node needs. They are NOT derivable
+        # from the base moveit_config (they live as declare_parameter defaults inside the
+        # cell bridge's own source), but the USD ActionGraph names the gripper one — so
+        # "Load USD" fills the combo with what it found. Editable: the user always wins.
+        self.gripper_topic = QComboBox()
+        self.gripper_topic.setEditable(True)
+        self.gripper_topic.setToolTip(
+            'Bool, true = gripper CLOSED. scene_manager_node attaches the grasp targets '
+            'when this fires. A wrong name fails SILENTLY: the payload never attaches.')
+        usd_form.addRow('Gripper cmd topic', self.gripper_topic)
+        self.reset_topic = QLineEdit()
+        self.reset_topic.setToolTip(
+            'Bool, latched. scene_manager_node publishes here on ~/reset_scene so the '
+            'hand-authored Isaac adapter can teleport its dynamic prims home.')
+        usd_form.addRow('Scene reset topic', self.reset_topic)
         load_usd = QPushButton('Load USD → auto-suggest meshes')
         load_usd.clicked.connect(self.load_usd_mapping)
         usd_form.addRow(load_usd)
@@ -544,6 +559,11 @@ class ScenePage(QWizardPage):
             self.status.setText(f'USD load failed: {exc}')
             return
         self._fill_table(self._rules)
+        # The ActionGraph named the gripper signal — offer it, and show what got applied.
+        for t in (getattr(self.ctrl, 'usd_bool_topics', None) or []):
+            if self.gripper_topic.findText(t) < 0:
+                self.gripper_topic.addItem(t)
+        self._prefill_topics()
         scan = getattr(self.ctrl, 'mesh_scan', {}) or {}
         mdir, stls = scan.get('dir'), scan.get('stls', [])
         matched = sum(1 for r in self._rules if r['mesh'])
@@ -556,6 +576,21 @@ class ScenePage(QWizardPage):
             self.status.setText(
                 f'{len(self._rules)} prim groups · scanned {mdir} ({len(stls)} STLs) · '
                 f'{matched}/{len(self._rules)} groups matched a mesh — review, then "Apply mapping".')
+        # append the gripper-topic outcome to whichever status line was just written
+        if not getattr(self.ctrl, 'usd_base_prim_ok', True):
+            tried = getattr(self.ctrl, 'usd_base_prim_tried', '?')
+            self.status.setText(
+                f'STOP — the robot was NOT found at "{tried}". Object poses are in STAGE '
+                f'coordinates (wrong by the robot mount height) and the robot itself is '
+                f'listed as a scene object. The path comes from the SRDF of the base '
+                f'moveit_config loaded at Step 1 — go Back and check you pointed at the '
+                f'RIGHT package.')
+            return
+        sniffed = getattr(self.ctrl, 'usd_bool_topics', None) or []
+        self.status.setText(self.status.text() + (
+            f'  ·  gripper topic from USD: {", ".join(sniffed)}' if sniffed else
+            '  ·  ⚠ no std_msgs/Bool subscriber in the USD — set the Gripper cmd topic '
+            'by hand or the payload never attaches.'))
 
     def _fill_table(self, rules):
         self.map_table.setRowCount(len(rules))
@@ -595,7 +630,10 @@ class ScenePage(QWizardPage):
             return
         try:
             n = self.ctrl.apply_usd_mapping(self._read_table())
-            self.ctrl.set_scene_loader_params(grasp_attach_mode=self.grasp_mode.currentText())
+            self.ctrl.set_scene_loader_params(
+                grasp_attach_mode=self.grasp_mode.currentText(),
+                gripper_cmd_topic=self.gripper_topic.currentText(),
+                scene_reset_topic=self.reset_topic.text())
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f'apply failed: {exc}')
             return
@@ -627,7 +665,21 @@ class ScenePage(QWizardPage):
             self.ctrl.set_object_category(oid, category)
             self._refresh()
 
+    def _prefill_topics(self):
+        """Show what the project currently holds. Guarded: self.ctrl.project is None on a
+        fresh wizard, and initializePage must not raise."""
+        try:
+            sc = self.ctrl.project.scene
+        except Exception:  # noqa: BLE001
+            return
+        cur = sc.gripper_cmd_topic
+        if self.gripper_topic.findText(cur) < 0:
+            self.gripper_topic.addItem(cur)
+        self.gripper_topic.setCurrentText(cur)
+        self.reset_topic.setText(sc.scene_reset_topic)
+
     def initializePage(self):
+        self._prefill_topics()
         # touch_links were derived from the robot chain at Step 1 — show them, don't ask.
         try:
             self.touch_links.setText(', '.join(self.ctrl.project.scene.touch_links))
@@ -918,10 +970,13 @@ class BaseConfigPage(QWizardPage):
                 self.ctrl.new_blank_project(self.project_name.text().strip() or 'robot_app')
                 info = self.ctrl.load_base_moveit_config(
                     self.base_pkg.text().strip(), _expand_path(self.base_path.text()))
+                nj = len(info.get('arm_joints') or [])
+                warn = '' if nj else '  ⚠ NO ARM JOINTS — captured named states would be EMPTY'
                 self.summary.setText(
                     f"{info['robot_name']}: group={info['group']}, "
+                    f"joints={nj}, "
                     f"named states={len(info['named_states'])}, "
-                    f"arm={info['arm_controller']}, gripper={info['gripper_controller']}")
+                    f"arm={info['arm_controller']}, gripper={info['gripper_controller']}{warn}")
                 return True
         except Exception as exc:  # noqa: BLE001
             self.summary.setText(f'ERROR: {exc}')
@@ -1264,6 +1319,17 @@ class BlocksPage(QWizardPage):
         v.addStretch(1)
         return w
 
+    def _fill_loop_to(self, current=''):
+        """Move blocks the loop may end on. Rebuilt on selection so it always matches
+        the current sequence."""
+        names = [b['name'] for b in self.blocks if b['kind'] == 'move']
+        self.l_to.blockSignals(True)
+        self.l_to.clear()
+        self.l_to.addItem('(end)')
+        self.l_to.addItems(names)
+        self.l_to.setCurrentText(current if current in names else '(end)')
+        self.l_to.blockSignals(False)
+
     def _loop_form(self) -> QWidget:
         w = QWidget()
         f = QFormLayout(w)
@@ -1272,7 +1338,12 @@ class BlocksPage(QWizardPage):
         f.addRow(self.l_forever)
         self.l_cycles = QSpinBox(); self.l_cycles.setRange(1, 100000); self.l_cycles.setValue(2)
         f.addRow('…or cycles', self.l_cycles)
-        note = QLabel('One Loop block per sequence: it repeats the WHOLE sequence.')
+        self.l_to = QComboBox()
+        self.l_to.setEditable(False)
+        f.addRow('…up to (incl.)', self.l_to)
+        note = QLabel('The loop repeats the moves FROM this block DOWN TO the one chosen '
+                      'above — drag the Loop block to set where it starts. Blocks above '
+                      'it (a homing move, say) stay outside. "(end)" = to the last block.')
         note.setWordWrap(True)
         f.addRow(note)
         return w
@@ -1305,11 +1376,10 @@ class BlocksPage(QWizardPage):
         for i in range(self.seq.count()):
             order.append(self.seq.item(i).data(Qt.UserRole))
         self.blocks = [self.blocks[j] for j in order]
-        # the Loop CONTAINS the whole sequence -> it always sits at the end (the
-        # closing bracket); dragging it elsewhere would misread its scope.
-        loops = [b for b in self.blocks if b['kind'] == 'loop']
-        if loops:
-            self.blocks = [b for b in self.blocks if b['kind'] != 'loop'] + loops
+        # The Loop block's POSITION is its meaning: the region runs from the first Move
+        # below it down to the block named in '...up to'. It used to be force-moved back
+        # to the end on every reorder (when a loop always wrapped the whole sequence),
+        # which made it the one block the user could not place. Leave it where it lands.
         self._refresh(select=self.seq.currentRow())
 
     def _on_select(self, row: int) -> None:
@@ -1338,6 +1408,7 @@ class BlocksPage(QWizardPage):
         elif b['kind'] == 'wait':
             self.w_ms.setValue(int(b['ms']))
         elif b['kind'] == 'loop':
+            self._fill_loop_to(b.get('to', ''))
             self.l_forever.setChecked(b['cycles'] == -1)
             if b['cycles'] > 0:
                 self.l_cycles.setValue(int(b['cycles']))
@@ -1362,7 +1433,9 @@ class BlocksPage(QWizardPage):
         elif b['kind'] == 'wait':
             b.update(ms=self.w_ms.value())
         elif b['kind'] == 'loop':
-            b.update(cycles=-1 if self.l_forever.isChecked() else self.l_cycles.value())
+            to = self.l_to.currentText()
+            b.update(cycles=-1 if self.l_forever.isChecked() else self.l_cycles.value(),
+                     to='' if to == '(end)' else to)
         self._refresh(select=row)
 
     # ---- live capture (blind mode) ------------------------------------------
@@ -1415,20 +1488,32 @@ class BlocksPage(QWizardPage):
         if b['kind'] == 'wait':
             return f"Wait {b['ms']} ms"
         times = 'forever' if b['cycles'] == -1 else f"{b['cycles']}×"
-        return f'REPEATS all the blocks above — {times}'
+        upto = b.get('to') or 'end'
+        return f'LOOP starts here → repeats down to {upto} — {times}'
 
     def _refresh(self, select: int = -1) -> None:
         # container rendering: with a Loop present, the contained blocks carry a │
         # bar and the Loop closes the bracket (└─) — the loop's SCOPE reads at a glance.
-        has_loop = any(b['kind'] == 'loop' for b in self.blocks)
+        # the region runs from the block AFTER the Loop down to its 'to' move
+        # (inclusive), so the bracket shows exactly what repeats.
+        loop_i = next((i for i, b in enumerate(self.blocks) if b['kind'] == 'loop'), None)
+        end_i = len(self.blocks) - 1
+        if loop_i is not None:
+            to = self.blocks[loop_i].get('to') or ''
+            if to:
+                end_i = next((i for i, b in enumerate(self.blocks)
+                              if b['kind'] == 'move' and b['name'] == to), end_i)
         self.seq.blockSignals(True)
         self.seq.clear()
         for i, b in enumerate(self.blocks):
             icon, color, _ = _BLOCK_META[b['kind']]
+            inside = loop_i is not None and loop_i < i <= end_i
             if b['kind'] == 'loop':
-                text = f'└─ {icon}  {self._label(b)}'
-            elif has_loop:
+                text = f'┌─ {icon}  {self._label(b)}'
+            elif inside:
                 text = f'│  {icon}  {self._label(b)}'
+                if i == end_i:
+                    text = f'└─ {icon}  {self._label(b)}'
             else:
                 text = f'{icon}  {self._label(b)}'
             item = QListWidgetItem(text)
@@ -1450,6 +1535,7 @@ class BlocksPage(QWizardPage):
         prev_move = None
         waits: Dict[str, int] = {}
         loop = 0
+        loop_from = loop_to = None
         warn = ''
         for b in self.blocks:
             if b['kind'] == 'move':
@@ -1487,9 +1573,14 @@ class BlocksPage(QWizardPage):
                 waits[prev_move] = waits.get(prev_move, 0) + int(b['ms'])
             elif b['kind'] == 'loop':
                 loop = int(b['cycles'])
+                loop_to = b.get('to') or None
+                # the loop starts at the first Move AFTER the block, so dragging it below
+                # a homing move leaves that move outside the cycle
+                loop_from = next((x['name'] for x in self.blocks[self.blocks.index(b) + 1:]
+                                  if x['kind'] == 'move'), None)
         for wp, ms in waits.items():
             ctrl.set_wait_after(wp, ms)
-        ctrl.set_loop(loop)
+        ctrl.set_loop(loop, start=loop_from, end=loop_to)
         self.status.setText(warn)
 
     # ---- lifecycle -----------------------------------------------------------
@@ -1532,7 +1623,8 @@ class BlocksPage(QWizardPage):
                 if act.kind.value == 'reset_scene':
                     blocks.append({'kind': 'reset'})
         if app.loop_cycles != 0:
-            blocks.append({'kind': 'loop', 'cycles': app.loop_cycles})
+            blocks.append({'kind': 'loop', 'cycles': app.loop_cycles,
+                           'to': app.loop_end or ''})
         self.blocks = blocks
         self._refresh()
 

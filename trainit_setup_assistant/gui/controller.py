@@ -14,6 +14,7 @@ from typing import Dict, List, Optional
 
 from ..applications import get_application
 from ..generator import GenerationManifest, Orchestrator
+from ..model.scene import SceneSpec
 from ..model import (
     BundleSpec,
     CanonicalProject,
@@ -201,6 +202,16 @@ class AssistantController:
                 self.set_frames(arm.chain[0], arm.chain[1])
             if arm.joints:
                 p.robot.planning_group.joints = arm.joints
+            else:
+                # An SRDF group may declare its members as a bare <chain> with no
+                # explicit <joint> children — that is what the MoveIt Setup Assistant
+                # emits by default. Without this fallback planning_group.joints stays
+                # empty, and then EVERY named state captured in the wizard is stored
+                # with an empty joint_values dict (gui/wizard.py capture_joints passes
+                # robot_summary()['arm_joints'] to LiveCapture). The generated SRDF
+                # gets <group_state> elements with no <joint> children, and MoveIt
+                # rejects them at runtime with "named target does not exist".
+                self._derive_group_joints_from_chain(config)
             p.robot.named_states = [
                 NamedState(name=s.name, group=s.group, joint_values=s.joint_values)
                 for s in info.states_for(arm.name)]
@@ -223,6 +234,11 @@ class AssistantController:
 
         self._load_controllers_from_base(config)
         self._load_deployment_from_base(base)
+        # Grasp targets attach to the robot's OWN tool link. Without this the scene keeps
+        # the model default 'tcp', which is silently right for FR30/FR3WML and silently
+        # wrong for any cell whose tip_link is named differently.
+        if p.robot.tip_link:
+            p.scene.attach_link = p.robot.tip_link
         self._derive_touch_links(config)
         try:
             self.import_collision_matrix_from_srdf(srdfs[0])
@@ -231,10 +247,32 @@ class AssistantController:
         return {
             'robot_name': info.robot_name,
             'group': arm.name if arm else None,
+            'arm_joints': list(p.robot.planning_group.joints),
             'named_states': [s.name for s in (info.states_for(arm.name) if arm else [])],
             'gripper_controller': p.robot.gripper.controller_name,
             'arm_controller': p.robot.arm_controller.name,
         }
+
+    def _derive_group_joints_from_chain(self, config_dir: Path) -> None:
+        """Fill ``planning_group.joints`` from the base->tip kinematic chain.
+
+        Used when the SRDF group declares only a ``<chain>``. Mirrors what MoveIt
+        itself does when it expands a chain group, so the captured named states carry
+        the same joint set the runtime expects.
+        """
+        p = self._require()
+        try:
+            from ..robotmodel.kinematic_chain import chain_movable_joints, parse_urdf
+            from ..robotmodel.xacro_loader import compile_xacro
+            xacros = sorted(config_dir.glob('*.urdf.xacro')) or sorted(config_dir.glob('*.xacro'))
+            if not xacros:
+                return
+            robot = parse_urdf(compile_xacro(xacros[0]))
+            joints = chain_movable_joints(robot, p.robot.base_frame, p.robot.tip_link)
+            if joints:
+                p.robot.planning_group.joints = joints
+        except Exception:  # noqa: BLE001 - a missing/!compiling xacro must not block Step 1
+            pass
 
     def _derive_touch_links(self, config_dir: Path) -> None:
         """Derive the scene-loader ``touch_links`` from the robot instead of asking:
@@ -400,9 +438,13 @@ class AssistantController:
             raise ValueError(f'no move named "{waypoint}"')
         seg.wait_after_ms = max(0, int(ms))
 
-    def set_loop(self, cycles: int) -> None:
-        """Process-layer Loop block over the WHOLE sequence: 0=off, -1=forever, N=times."""
-        self._require().application.loop_cycles = int(cycles)
+    def set_loop(self, cycles: int, start: str = None, end: str = None) -> None:
+        """Repeat a slice of the sequence. start/end are inclusive waypoint names;
+        None/None keeps the historical whole-sequence behaviour."""
+        app = self._require().application
+        app.loop_cycles = int(cycles)
+        app.loop_start = start or None
+        app.loop_end = end or None
 
     def clear_application(self) -> None:
         app = self._require().application
@@ -469,13 +511,33 @@ class AssistantController:
                     o.touchable_collision_ids = list(touchable_collision_ids)
                 break
 
-    def set_scene_loader_params(self, *, gripper_cmd_topic=None, attach_link=None,
-                                touch_links=None, attached_collision_check=None,
+    @staticmethod
+    def _norm_topic(value: str, what: str) -> str:
+        """Normalise a ROS topic typed by a human or read out of a USD ActionGraph.
+
+        Done HERE, not in a pydantic validator: no model sets validate_assignment, so a
+        @field_validator never fires on plain attribute assignment — and every writer
+        (the GUI combo, the USD auto-apply, import_scene_yaml) goes through this method.
+        An empty topic would reach rclcpp's create_subscription and throw
+        InvalidTopicNameError at scene_manager_node construction.
+        """
+        t = (value or '').strip()
+        if not t:
+            raise ValueError(f'{what} must not be empty')
+        if any(c.isspace() for c in t):
+            raise ValueError(f'{what} must not contain whitespace: {t!r}')
+        return t if t.startswith('/') else '/' + t
+
+    def set_scene_loader_params(self, *, gripper_cmd_topic=None, scene_reset_topic=None,
+                                attach_link=None, touch_links=None,
+                                attached_collision_check=None,
                                 grasp_attach_mode=None) -> None:
         """Scene-loader (scene_manager_node) params emitted into scene.yaml."""
         s = self._require().scene
         if gripper_cmd_topic is not None:
-            s.gripper_cmd_topic = gripper_cmd_topic
+            s.gripper_cmd_topic = self._norm_topic(gripper_cmd_topic, 'gripper_cmd_topic')
+        if scene_reset_topic is not None:
+            s.scene_reset_topic = self._norm_topic(scene_reset_topic, 'scene_reset_topic')
         if attach_link is not None:
             s.attach_link = attach_link
         if touch_links is not None:
@@ -535,6 +597,7 @@ class AssistantController:
                                       orientation=quat, category=cat, grasp_target=grasp)
         self.set_scene_loader_params(
             gripper_cmd_topic=params.get('gripper_cmd_topic'),
+            scene_reset_topic=params.get('scene_reset_topic'),
             attach_link=params.get('attach_link'),
             touch_links=params.get('touch_links'),
             attached_collision_check=params.get('attached_collision_check'))
@@ -547,7 +610,8 @@ class AssistantController:
         which reproduce the baseline) and AUTO-SUGGEST a collision mesh per group by
         scanning ``<mesh_pkg>/meshes``. Returns the editable group rules; the per-prim
         poses are held for :meth:`apply_usd_mapping`."""
-        from ..importers.usd_scene import build_group_rules, read_cell_prims, scan_meshes
+        from ..importers.usd_scene import (build_group_rules, read_cell_prims,
+                                           read_ros2_bool_topics, scan_meshes)
         p = self._require()
         if base_prim is None:
             base_prim = f'/World/{p.robot.robot_name}/{p.robot.base_frame}'
@@ -556,6 +620,16 @@ class AssistantController:
         # surfaced to the user: if the mesh dir is not found every suggestion is empty,
         # which would build a scene the loader cannot render.
         self.mesh_scan = scan_meshes(mesh_pkg, p.robot.base_moveit_config_path)
+        # The Isaac side NAMES the gripper-close signal; the base moveit_config does not.
+        # Auto-apply only while the value is still the shipped default, so a project that
+        # already carries a deliberate topic is never silently overwritten on reload.
+        self.usd_bool_topics = read_ros2_bool_topics(
+            str(usd_path), exclude=(p.scene.scene_reset_topic,))
+        self.usd_base_prim_ok = getattr(read_cell_prims, 'base_prim_ok', True)
+        self.usd_base_prim_tried = getattr(read_cell_prims, 'base_prim_tried', base_prim)
+        default_topic = SceneSpec.model_fields['gripper_cmd_topic'].default
+        if self.usd_bool_topics and p.scene.gripper_cmd_topic == default_topic:
+            self.set_scene_loader_params(gripper_cmd_topic=self.usd_bool_topics[0])
         return build_group_rules(self._usd_prims, mesh_pkg,
                                  hint_path=p.robot.base_moveit_config_path)
 

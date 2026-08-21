@@ -26,6 +26,9 @@ setup(
             'generator/templates/moveit_config/*.j2',
             'generator/templates/app/*.j2',
             'config/*.yaml',
+            'resources/isaac/*.py',
+            'resources/isaac_cell_kit/*',
+            'resources/isaac_cell_kit/scripts/*',
         ],
     },
     install_requires=['setuptools', 'pydantic>=2', 'jinja2', 'pyyaml'],
@@ -46,6 +49,8 @@ setup(
             'trainit_compute_collisions = trainit_setup_assistant.cli.compute_collisions:main',
             # the RViz-native GUI wizard (added in M6)
             'trainit_setup_assistant = trainit_setup_assistant.cli.gui:main',
+            # install the reusable Isaac-cell tooling into a <cell>_isaac package
+            'trainit_isaac_kit = trainit_setup_assistant.cli.isaac_kit:main',
         ],
     },
 )

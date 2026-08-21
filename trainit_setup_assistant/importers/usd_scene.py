@@ -56,6 +56,49 @@ def suggest_mesh(group: str, stls: List[str]) -> str:
     return pool[0]
 
 
+def read_ros2_bool_topics(usd_path: str, exclude=()) -> List[str]:
+    """Topics of every std_msgs/Bool ROS2Subscriber in the stage's OmniGraph.
+
+    The gripper-close signal cannot be derived from the base moveit_config: it exists
+    only as a ``declare_parameter`` default inside the cell bridge's own source, and the
+    launch never overrides it. The USD, however, names it explicitly on the Isaac side —
+    both reference cells carry exactly one such subscriber. Returned in traversal order;
+    the caller decides (and the user can always override).
+    """
+    if not usd_available():
+        return []
+    from pxr import Usd
+    try:
+        stage = Usd.Stage.Open(usd_path, load=Usd.Stage.LoadAll)
+    except Exception:  # noqa: BLE001
+        return []
+    if not stage:
+        return []
+    out: List[str] = []
+    for prim in stage.Traverse():
+        if not prim.HasAttribute('node:type'):
+            continue
+        if 'ROS2Subscriber' not in str(prim.GetAttribute('node:type').Get() or ''):
+            continue
+
+        def _get(name):
+            return prim.GetAttribute(name).Get() if prim.HasAttribute(name) else None
+
+        if (_get('inputs:messagePackage'), _get('inputs:messageName')) != ('std_msgs', 'Bool'):
+            continue
+        topic = (_get('inputs:topicName') or '').strip()
+        if not topic:
+            continue
+        topic = topic if topic.startswith('/') else '/' + topic
+        # A cell that implements the reset contract has a SECOND Bool subscriber. It is
+        # not a gripper signal, and offering it first would silently wire the scene
+        # manager to the reset topic.
+        if topic in exclude or 'reset' in topic.lower():
+            continue
+        out.append(topic)
+    return out
+
+
 def read_cell_prims(usd_path: str, base_prim: Optional[str] = None,
                     robot_hint: Optional[str] = None) -> List[dict]:
     """Top-level cell prims (excluding robot, physics, unresolvable) with base-aligned
@@ -71,9 +114,12 @@ def read_cell_prims(usd_path: str, base_prim: Optional[str] = None,
     bp = base_prim or _guess_base_prim(stage, robot_hint)
     binv = None
     robot_root = None
+    read_cell_prims.base_prim_ok = False      # surfaced by the wizard: a miss is silent
+    read_cell_prims.base_prim_tried = bp
     if bp:
         bprim = stage.GetPrimAtPath(bp)
         if bprim and bprim.IsValid():
+            read_cell_prims.base_prim_ok = True
             binv = UsdGeom.Xformable(bprim).ComputeLocalToWorldTransform(
                 Usd.TimeCode.Default()).GetInverse()
         parts = bp.strip('/').split('/')

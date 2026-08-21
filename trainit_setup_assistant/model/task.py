@@ -77,6 +77,11 @@ class ApplicationSpec(BaseModel):
     # -1 = repeat forever, N>0 = repeat N times. Emitted as the BT.CPP built-in
     # <Repeat num_cycles="..."> around the move body.
     loop_cycles: int = 0
+    # Which slice of `sequence` the loop wraps (inclusive waypoint names). Both None =
+    # the WHOLE sequence, which is what loop_cycles alone meant before — so every
+    # existing project.yaml keeps its behaviour untouched.
+    loop_start: Optional[str] = None
+    loop_end: Optional[str] = None
 
     def segment_for(self, waypoint_name: str) -> Optional[MotionSegment]:
         """The incoming segment for a waypoint, if any."""

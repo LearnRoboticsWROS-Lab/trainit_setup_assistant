@@ -106,13 +106,23 @@ class PickAndPlace(ApplicationTemplate):
         # Process-layer loop (the Loop block): repeat the move body via the BT.CPP
         # built-in Repeat decorator. -1 = forever, N>0 = N cycles, 0 = no loop.
         loop = app.loop_cycles
-        body_indent = '      '
+        # The loop may wrap only a SLICE of the sequence, so a homing move can sit
+        # outside it. Unset markers => the whole sequence (the historical behaviour).
+        lo, hi = 0, len(seq) - 1
         if loop != 0:
-            out.append(f'      <Repeat num_cycles="{loop}">')
-            out.append(f'        <Sequence name="{seq_name}Cycle">')
-            body_indent = '          '
+            if app.loop_start in seq:
+                lo = seq.index(app.loop_start)
+            if app.loop_end in seq:
+                hi = seq.index(app.loop_end)
+            if hi < lo:                 # inverted markers: degrade to "to the end"
+                hi = len(seq) - 1
+        body_indent = '      '
 
-        for wp_name in seq:
+        for i, wp_name in enumerate(seq):
+            if loop != 0 and i == lo:
+                out.append(f'      <Repeat num_cycles="{loop}">')
+                out.append(f'        <Sequence name="{seq_name}Cycle">')
+                body_indent = '          '
             # per-move planning-collision check for held objects (SetBool service): ON
             # before a transfer that must route the payload around the static meshes.
             seg = app.segment_for(wp_name)
@@ -131,10 +141,14 @@ class PickAndPlace(ApplicationTemplate):
             for action in acts:
                 if action.kind is ToolActionKind.RESET_SCENE:
                     out.append(body_indent + self._render_action(action, project))
+            # close AFTER the whole body of the last block in the region, so the cycle
+            # boundary (ResetScene) stays INSIDE the loop.
+            if loop != 0 and i == hi:
+                out.append('        </Sequence>')
+                out.append('      </Repeat>')
+                body_indent = '      '
 
-        if loop != 0:
-            out.append('        </Sequence>')
-            out.append('      </Repeat>')
+
 
         out.append('')
         out.append(f'      <Log message="{label}: complete"/>')

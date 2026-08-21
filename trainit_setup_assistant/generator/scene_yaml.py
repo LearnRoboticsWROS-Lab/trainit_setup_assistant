@@ -43,15 +43,25 @@ def build_scene_yaml(project: CanonicalProject) -> str:
         f'    frame_id: {frame}',
         f'    force_republish_hz: {_num(scene.force_republish_hz)}',
         '    scene_update_wait_ms: 800',
-        f'    gripper_cmd_topic: {scene.gripper_cmd_topic}',
+        f'    gripper_cmd_topic: "{scene.gripper_cmd_topic}"',
+        f'    scene_reset_topic: "{scene.scene_reset_topic}"',
         f'    attach_link: {scene.attach_link}',
-        f'    touch_links: {_strs(scene.touch_links)}',
         f'    attached_collision_check: {"true" if scene.attached_collision_check else "false"}',
         f'    grasp_attach_mode: {scene.grasp_attach_mode}',
-        f'    attach_object_ids: {_strs(scene.grasp_target_ids())}',
-        f'    object_ids: {_strs([o.id for o in objs])}',
-        '    objects:',
     ]
+    # NEVER emit an empty sequence or an empty mapping: YAML gives them no type, so the
+    # ROS 2 parameter parser reports "No parameter value set" and scene_manager_node
+    # ABORTS at construction (SIGABRT, before it can log anything). Omitting the key
+    # instead lets the node's own declared default apply — it declares every one of these
+    # with an empty default, so the behaviour is identical and it actually starts.
+    _lists = (('touch_links', list(scene.touch_links)),
+              ('attach_object_ids', list(scene.grasp_target_ids())),
+              ('object_ids', [o.id for o in objs]))
+    for key, vals in _lists:
+        if vals:
+            out.append(f'    {key}: {_strs(vals)}')
+    if objs:
+        out.append('    objects:')
     for o in objs:
         out.append(f'      {o.id}:')
         if o.is_mesh():

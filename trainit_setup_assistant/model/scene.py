@@ -135,6 +135,10 @@ class SceneSpec(BaseModel):
     # --- scene-loader (scene_manager_node) runtime params ---
     # The gripper-close signal that triggers attaching grasp_target objects to the tool.
     gripper_cmd_topic: str = '/isaac_gripper_cmd'
+    # Cycle-boundary signal: scene_manager_node latches a Bool here when ~/reset_scene is
+    # called, so the hand-authored Isaac adapter can teleport its dynamic prims home.
+    # TSA owns the CONTRACT; putting the simulated prims back is the cell author's half.
+    scene_reset_topic: str = '/isaac_scene_reset'
     attach_link: str = 'tcp'                    # tool link grasp targets attach to
     # links near the tool allowed to touch an attached object (self-collision relief).
     touch_links: List[str] = Field(default_factory=lambda: ['tcp'])

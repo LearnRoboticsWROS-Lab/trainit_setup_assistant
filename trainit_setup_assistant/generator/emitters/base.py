@@ -27,24 +27,40 @@ class GenContext:
         self.manifest = manifest
 
     # --- low-level write (always records in the manifest) ---
-    def write_bytes(self, rel_path: str, data: bytes, action: str, source: str = None) -> Path:
+    def write_bytes(self, rel_path: str, data: bytes, action: str, source: str = None,
+                    make_executable: bool = False) -> Path:
         dest = self.output_root / rel_path
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
+        if make_executable:
+            # Anything the generated CMakeLists installs with install(PROGRAMS) MUST be
+            # executable at the source. install(PROGRAMS) chmods the installed COPY, but
+            # `colcon build --symlink-install` installs a symlink instead, so the source
+            # file's mode is what ros2 launch actually sees -- and a non-executable target
+            # fails with "executable '<name>' not found on the libexec directory", which
+            # reads like a missing file rather than a wrong permission bit.
+            dest.chmod(dest.stat().st_mode | 0o111)
         self.manifest.record(rel_path, action, sha256_bytes(data), source)
         return dest
 
-    def write_text(self, rel_path: str, text: str, action: str, source: str = None) -> Path:
-        return self.write_bytes(rel_path, text.encode('utf-8'), action, source)
+    def write_text(self, rel_path: str, text: str, action: str, source: str = None,
+                   make_executable: bool = False) -> Path:
+        return self.write_bytes(rel_path, text.encode('utf-8'), action, source,
+                                make_executable=make_executable)
 
     # --- rendering ---
     def render(self, template_name: str, **variables) -> str:
         return self.env.get_template(template_name).render(**variables)
 
-    def render_to(self, rel_path: str, template_name: str, **variables) -> Path:
-        """Render a Jinja2 template and write it as a TEMPLATE file."""
+    def render_to(self, rel_path: str, template_name: str, make_executable: bool = False,
+                  **variables) -> Path:
+        """Render a Jinja2 template and write it as a TEMPLATE file.
+
+        Pass make_executable=True for anything installed with install(PROGRAMS).
+        """
         return self.write_text(
-            rel_path, self.render(template_name, **variables), TEMPLATE, source=template_name
+            rel_path, self.render(template_name, **variables), TEMPLATE,
+            source=template_name, make_executable=make_executable
         )
 
     def generate_to(self, rel_path: str, text: str, source: str = None) -> Path:

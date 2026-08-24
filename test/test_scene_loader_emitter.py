@@ -6,6 +6,7 @@ present (skips otherwise), so the test also proves the copied config is self-con
 """
 
 import os
+import re
 import tempfile
 
 import pytest
@@ -146,3 +147,31 @@ def test_import_scene_yaml_reproduces_baseline():
 
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))
+
+def test_generated_programs_are_executable():
+    """Every file a generated CMakeLists installs with install(PROGRAMS) must be
+    executable at generation time.
+
+    install(PROGRAMS ...) chmods the installed COPY, but `colcon build
+    --symlink-install` puts a SYMLINK in the install tree instead, so the source
+    file's mode is what ros2 launch actually sees. A non-executable source then
+    fails with "executable '<name>' not found on the libexec directory" -- a
+    permission bug wearing a missing-file costume, which cost real debugging time
+    on 2026-08-24.
+    """
+    ctrl, p = _project_with_base()
+    with tempfile.TemporaryDirectory() as tmp:
+        Orchestrator().generate(p, tmp)
+        checked = []
+        for root, _dirs, files in os.walk(tmp):
+            if 'CMakeLists.txt' not in files:
+                continue
+            text = open(os.path.join(root, 'CMakeLists.txt')).read()
+            for m in re.finditer(r'install\(PROGRAMS\s+(.*?)\s+DESTINATION', text, re.S):
+                for rel in m.group(1).split():
+                    path = os.path.join(root, rel)
+                    assert os.path.isfile(path), f'{rel} is installed but was never emitted'
+                    assert os.access(path, os.X_OK), \
+                        f'{rel} is installed with install(PROGRAMS) but is not executable'
+                    checked.append(rel)
+        assert checked, 'no install(PROGRAMS) in the generated bundle - invariant untested'

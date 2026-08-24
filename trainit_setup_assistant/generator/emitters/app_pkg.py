@@ -99,6 +99,7 @@ class AppEmitter(Emitter):
         if gripper_present:
             ctx.render_to(f'{pkg}/scripts/mock_gripper_action_server.py',
                           'app/mock_gripper_action_server.py.j2',
+                          make_executable=True,          # installed with install(PROGRAMS)
                           gripper_action=gripper_action)
 
         # --- README.md (TEMPLATE): how to build/run per mode + where to tune DOF ---

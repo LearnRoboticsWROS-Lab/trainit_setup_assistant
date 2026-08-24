@@ -52,14 +52,14 @@ source install/setup.bash
 
 ```bash
 ros2 run trainit_setup_assistant trainit_verify \
-  ~/fr5_ws/src/fr3wml_digital_twin/trainit_setup_assistant/examples/fr3wml_project.yaml \
+  ~/fr5_ws/src/trainit_setup_assistant/examples/fr3wml_project.yaml \
   --golden ~/fr5_ws/src/fr3wml_digital_twin/fr3wml_app --build
 ```
 **Expect:** `32/32 checks passed`, `EQUIVALENCE: PASS`, `BUILD: PASS`.
 
 Optional unit tests:
 ```bash
-cd ~/fr5_ws/src/fr3wml_digital_twin/trainit_setup_assistant
+cd ~/fr5_ws/src/trainit_setup_assistant
 QT_QPA_PLATFORM=offscreen PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=$PWD:$PYTHONPATH \
   python3 -m pytest test/ -q          # expect: 21 passed
 ```
@@ -77,7 +77,7 @@ gizmo (Test C) is optional.
    ros2 run trainit_setup_assistant trainit_setup_assistant
    ```
 2. **S0 — Load robot (use "Open project" for FR3WML):** in **Open project.yaml** browse to
-   `~/fr5_ws/src/fr3wml_digital_twin/trainit_setup_assistant/examples/fr3wml_project.yaml`.
+   `~/fr5_ws/src/trainit_setup_assistant/examples/fr3wml_project.yaml`.
    **Next.** → "… gripper=suction | collision-matrix: yes".
    (The *Robot xacro* field below is the bootstrap path for a brand-new robot — see
    "Two ways to start" above; it shows `collision-matrix: MISSING`.)
@@ -174,7 +174,7 @@ ros2 run trainit_setup_assistant trainit_setup_assistant
 ```
 
 **In the wizard:**
-1. **S0 — Open project:** `~/fr5_ws/src/fr3wml_digital_twin/trainit_setup_assistant/examples/fr3wml_project.yaml`. **Next** → S1/S2.
+1. **S0 — Open project:** `~/fr5_ws/src/trainit_setup_assistant/examples/fr3wml_project.yaml`. **Next** → S1/S2.
 2. **S3 — Scene → Import USD…:** select your scene, e.g.
    `~/fr5_ws/install/fr3wml_isaac/share/fr3wml_isaac/usd/scenes/bin_picking_cell.usd`.
    Leave **"USD robot base prim"** blank → it auto-detects the robot (`/fr3wml_suction`
@@ -190,7 +190,7 @@ ros2 run trainit_setup_assistant trainit_setup_assistant
 **Verify (quick, headless):** the part lands at the flange, not 1 m up:
 ```bash
 python3 - <<'PY'
-import sys; sys.path.insert(0,'/home/fra/fr5_ws/src/fr3wml_digital_twin/trainit_setup_assistant')
+import sys; sys.path.insert(0,'/home/fra/fr5_ws/src/trainit_setup_assistant')
 from trainit_setup_assistant.importers import import_usd
 U='/home/fra/fr5_ws/install/fr3wml_isaac/share/fr3wml_isaac/usd/scenes/bin_picking_cell.usd'
 for o in import_usd(U, robot_hint='fr3wml'):   # auto-align to the robot

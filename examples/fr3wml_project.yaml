@@ -1,4 +1,6 @@
-# Reference project describing the FR3WML golden bundle (fr3wml_app).
+# Reference project describing the FR3WML robot description.
+# Points at fr5_app, which is the URDF and mesh root of the robot and is NOT
+# deletable; the former golden bundle fr3wml_app was removed on 2026-08-24.
 # `trainit_generate examples/fr3wml_project.yaml -o /tmp/out` must reproduce a bundle
 # equivalent to fr3wml_app. NOTE: description paths are absolute (machine-specific);
 # point them at wherever the robot's description package lives.
@@ -19,9 +21,9 @@ meta:
 robot:
   robot_name: fr3wml
   description:
-    urdf_dir: /home/fra/fr5_ws/src/fr3wml_digital_twin/fr3wml_app/fr3wml_description/urdf
+    urdf_dir: /home/fra/fr5_ws/src/fr3wml_digital_twin/fr5_app/urdf
     top_xacro: fr3wml_suction.urdf.xacro
-    meshes_dir: /home/fra/fr5_ws/src/fr3wml_digital_twin/fr3wml_app/fr3wml_description/meshes
+    meshes_dir: /home/fra/fr5_ws/src/fr3wml_digital_twin/fr5_app/meshes
   base_frame: base_link
   tip_link: tcp
   planning_group:

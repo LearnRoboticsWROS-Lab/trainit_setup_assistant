@@ -104,8 +104,8 @@ def test_detect_scara_prismatic_in_arm():
     assert det.gripper_joints == []
 
 
-FR3WML_XACRO = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/fr3wml_app/'
-                'fr3wml_description/urdf/fr3wml_suction.urdf.xacro')
+FR3WML_XACRO = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
+                'fr5_app/urdf/fr3wml_suction.urdf.xacro')
 
 
 @pytest.mark.skipif(not os.path.isfile(FR3WML_XACRO), reason='FR3WML xacro not present')

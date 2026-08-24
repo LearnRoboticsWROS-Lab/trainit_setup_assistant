@@ -10,10 +10,12 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 from trainit_setup_assistant.gui.controller import AssistantController  # noqa: E402
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), os.pardir, 'examples', 'fr3wml_project.yaml')
-FR3WML_XACRO = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/fr3wml_app/'
-                'fr3wml_description/urdf/fr3wml_suction.urdf.xacro')
-FR3WML_MESHES = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/fr3wml_app/'
-                 'fr3wml_description/meshes')
+# The robot description lives in fr5_app, the URDF and mesh root. It used to be read
+# from the hand-written golden bundle fr3wml_app, which was removed on 2026-08-24.
+FR3WML_XACRO = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
+                'fr5_app/urdf/fr3wml_suction.urdf.xacro')
+FR3WML_MESHES = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
+                 'fr5_app/meshes')
 
 
 # ---- controller (ROS-free) ----
@@ -55,8 +57,8 @@ def test_mock_gripper_server_generated_for_bootstrap():
         assert 'mock_gripper_action_server.py' in open(os.path.join(app, 'CMakeLists.txt')).read()
 
 
-GOLDEN_SRDF = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/fr3wml_app/'
-               'fr3wml_app_moveit_config/config/fr3wml.srdf')
+GOLDEN_SRDF = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
+               'fr3wml_suction_moveit_config/config/fr3wml_suction.srdf')
 
 
 @pytest.mark.skipif(not os.path.isfile(GOLDEN_SRDF), reason='golden SRDF not present')
@@ -69,58 +71,16 @@ def test_controller_import_collision_matrix():
     assert len(ctrl.project.robot.disable_collisions) == 13
 
 
-QUAT = [-0.707, 0.707, 0.008, -0.009]
-GOLDEN_ROOT = '/home/fra/fr5_ws/src/fr3wml_digital_twin/fr3wml_app'
-
-
-@pytest.mark.skipif(not os.path.isdir(GOLDEN_ROOT), reason='golden not present')
-def test_controller_rebuilds_golden_app():
-    """Build the FR3WML pick&place app entirely via controller calls -> == golden app."""
-    from trainit_setup_assistant.model import BundleSpec
-    from trainit_setup_assistant.verify import compare_bundle
-    from trainit_setup_assistant.verify.equivalence import APP, DESCRIPTION, MOVEIT
-
-    ctrl = AssistantController()
-    ctrl.open_project(EXAMPLE)               # robot half (incl. collision matrix)
-    ctrl.clear_application()
-    ctrl.project.scene.objects = []
-    ctrl.project.scene.payload = None
-
-    ctrl.set_application('pick_and_place', 'pilz')
-    ctrl.add_scene_object('table', [2.0, 2.0, 0.10], [0.0, 0.0, -0.08])
-    ctrl.set_payload('cube', [0.02, 0.02, 0.02], 'tcp', [0.0, 0.0, 0.01])
-
-    ctrl.add_move('home', named='home2', motion='ptp', planner='pilz', speed=80, role='home')
-    ctrl.add_move('pre_pick', position=[0.556, -0.029, 0.167], orientation=QUAT,
-                  motion='free', planner='pilz', speed=60, role='pre_pick')
-    ctrl.add_move('pick', position=[0.558, -0.026, 0.024], orientation=QUAT,
-                  motion='lin', speed=30, role='pick')
-    ctrl.add_tool_action('pick', 'grasp')
-    ctrl.add_tool_action('pick', 'attach', 'cube')
-    ctrl.add_move('post_pick', position=[0.558, -0.026, 0.124], orientation=QUAT,
-                  motion='lin', speed=40, role='post_pick')
-    ctrl.add_move('pre_place', position=[0.564, -0.275, 0.248], orientation=QUAT,
-                  motion='free', planner='pilz', speed=60, role='pre_place')
-    ctrl.add_move('place', position=[0.558, -0.275, 0.023], orientation=QUAT,
-                  motion='lin', speed=30, role='place')
-    ctrl.add_tool_action('place', 'release')
-    ctrl.add_tool_action('place', 'detach', 'cube')
-    ctrl.add_move('post_place', position=[0.558, -0.275, 0.123], orientation=QUAT,
-                  motion='lin', speed=40, role='post_place')
-    ctrl.add_move('home', named='home2', motion='ptp', planner='pilz', speed=80, role='home')
-
-    ctrl.project.project_name = 'fr3wml_app'
-    ctrl.project.bundle = BundleSpec(description_package='fr3wml_description',
-                                     moveit_config_package='fr3wml_app_moveit_config',
-                                     app_package='fr3wml_app')
-    pkgs = {DESCRIPTION: 'fr3wml_description', MOVEIT: 'fr3wml_app_moveit_config',
-            APP: 'fr3wml_app'}
-    with tempfile.TemporaryDirectory() as tmp:
-        ctrl.generate(tmp)
-        report = compare_bundle(tmp, GOLDEN_ROOT, pkgs, pkgs)
-        app_checks = [c for c in report.checks if c[0].startswith('app/')]
-        failed = [c for c in app_checks if not c[2]]
-        assert not failed, '\n'.join(f'{c[0]}: {c[3]}' for c in failed)
+# NOTE: test_controller_rebuilds_golden_app was removed on 2026-08-24 together with the
+# hand-written golden bundle fr3wml_app. Unlike the other golden-dependent tests it could
+# not be re-pointed: it was tied to that bundle by CONTENT -- the hard-coded 'home2' named
+# state and pose quaternions were the old bundle's, not any current one.
+#
+# What it asserted -- "an app built through the controller API equals a known-good bundle"
+# -- is now asserted by test_generator_golden.py against fr3wml_suction_tsa_32_bundle, a
+# real TSA output validated in Isaac. The controller API itself stays covered by
+# test_wizard_mvp_flow.py and the remaining cases here (add_move, add_tool_action,
+# set_payload, add_scene_object, set_application, generate).
 
 
 # ---- Qt wizard (offscreen) ----

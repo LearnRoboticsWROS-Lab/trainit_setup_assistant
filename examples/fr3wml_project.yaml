@@ -2,7 +2,8 @@
 # Points at fr5_app, which is the URDF and mesh root of the robot and is NOT
 # deletable; the former golden bundle fr3wml_app was removed on 2026-08-24.
 # `trainit_generate examples/fr3wml_project.yaml -o /tmp/out` must reproduce a bundle
-# equivalent to fr3wml_app. NOTE: description paths are absolute (machine-specific);
+# equivalent to the former hand-written golden (removed 2026-08-24; the live golden
+# is fr3wml_suction_tsa_32_bundle, whose own project.yaml is the VISION example). NOTE: description paths are absolute (machine-specific);
 # point them at wherever the robot's description package lives.
 schema_version: 1
 project_name: fr3wml_app_trainit_config

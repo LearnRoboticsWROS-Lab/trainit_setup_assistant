@@ -53,15 +53,15 @@ source install/setup.bash
 ```bash
 ros2 run trainit_setup_assistant trainit_verify \
   ~/fr5_ws/src/trainit_setup_assistant/examples/fr3wml_project.yaml \
-  --golden ~/fr5_ws/src/fr3wml_digital_twin/fr3wml_app --build
+  --golden ~/fr5_ws/src/fr3wml_digital_twin/fr3wml_suction_tsa_32_bundle --build
 ```
-**Expect:** `32/32 checks passed`, `EQUIVALENCE: PASS`, `BUILD: PASS`.
+**Expect:** `21/21 checks passed`, `EQUIVALENCE: PASS`, `BUILD: PASS`.
 
 Optional unit tests:
 ```bash
 cd ~/fr5_ws/src/trainit_setup_assistant
 QT_QPA_PLATFORM=offscreen PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=$PWD:$PYTHONPATH \
-  python3 -m pytest test/ -q          # expect: 21 passed
+  python3 -m pytest test/ -q          # expect: 61 passed (plus 1 pre-existing network-USD failure)
 ```
 
 ---
@@ -115,8 +115,9 @@ gizmo (Test C) is optional.
    # Terminal B:
    ros2 launch fr3wml_gui_test trainit_bt.launch.py planner_mode:=pilz
    ```
-   **Expect:** RViz opens with FR3WML; the robot runs the same pick&place as
-   `fr3wml_app` (home → pre_pick → pick → suction → … → home). Then `mode:=isaac`.
+   **Expect:** RViz opens with FR3WML; the robot runs the validated pick&place of
+   the `fr3wml_suction_tsa_32_bundle` golden (ready → pre_pick → pick → suction →
+   … ). Then `mode:=isaac`.
 
 ---
 
@@ -130,7 +131,7 @@ live session (no bootstrap needed).
    ```bash
    cd ~/fr5_ws && source install/setup.bash
    ros2 launch trainit_setup_assistant setup_assistant.launch.py \
-       moveit_config_package:=fr3wml_app_moveit_config robot_name:=fr3wml
+       moveit_config_package:=fr3wml_suction_camera_moveit_config robot_name:=fr3wml
    ```
    RViz opens with the **MotionPlanning** panel. The interactive-marker **gizmo** is on
    the `tcp` frame.
@@ -167,7 +168,7 @@ source install/setup.bash
 
 # Terminal A — live session (RViz shows the planning scene)
 ros2 launch trainit_setup_assistant setup_assistant.launch.py \
-    moveit_config_package:=fr3wml_app_moveit_config robot_name:=fr3wml
+    moveit_config_package:=fr3wml_suction_camera_moveit_config robot_name:=fr3wml
 
 # Terminal B — the wizard
 ros2 run trainit_setup_assistant trainit_setup_assistant

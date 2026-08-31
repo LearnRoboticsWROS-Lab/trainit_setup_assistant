@@ -20,7 +20,7 @@ A cell has **three** MoveIt configs with distinct roles:
 |---|---|---|
 | `<robot>_moveit_config` (**base**) | hand, Adaptation Sprint | The mock/isaac/real bring-up + bridge wiring + SRDF waypoints. The source of truth for the connectors. |
 | `<robot>_scene_loader_moveit_config` (**intermediate**) | TSA Step 3 | A standalone copy of the base + planners + `scene.yaml`, used **only** to configure the app against a faithful RViz. |
-| `<robot>_trainit_config` (**bundle**) | TSA Step 9 | The same standalone copy, shipped in the bundle. **Independent** of the other two configs. |
+| `<robot>_trainit_config` (**bundle**) | TSA Step 8 | The same standalone copy, shipped in the bundle. **Independent** of the other two configs. |
 
 **Why the bundle is a standalone COPY (not an overlay):** the intermediate/bundle configs
 are produced by `SceneLoaderMoveitConfigEmitter`, which **copies the base's `config/`
@@ -48,8 +48,11 @@ vendor bridges under the same namespaces.
   (`templates/moveit_config/scene_loader_bringup.launch.py.j2`; `build_move_group_params`
   on **itself** + `scene_manager_node`). Invoked for the bundle config and, via
   `generate_scene_loader_config()`, for the Step-3 intermediate (same logic → config==deploy).
-- `emitters/app_pkg.py` + `applications/pick_and_place.py` → BT XML + `bt_params.yaml` +
-  launch + Groot2 + README. Every DOF is in `bt_params.yaml`; the tree is uniform.
+- `emitters/app_pkg.py` + `applications/pick_and_place.py` (and
+  `applications/vision_guided_motion.py`, which inherits the blind skeleton via a
+  registry keyed by `AppType` and adds the vision prologue + settle) → BT XML +
+  `bt_params.yaml` + `perception.yaml` + launch + Groot2 + README. Every DOF is in
+  `bt_params.yaml`; the tree is uniform.
 - All writes go through `GenContext` → recorded in `generation_manifest.yaml`
   (COPY/TEMPLATE/GENERATE + sha256). Determinism: same project ⇒ byte-identical output.
 
@@ -86,11 +89,13 @@ Subscribers, and tests it in Step 1. The BIG1500 reference is
 ## 6. TMR BT vocabulary (what an application may use)
 
 25+ leaf nodes; the assistant emits: `MoveWaypoint` (data-driven), `Close/OpenGripper`,
-`AttachObject/DetachObject`, and now `SetAttachedCollisionCheck`/`SetReleasePolicy`, plus
-`AddCollisionObject` (from-scratch path only). Trees are **linear** (no control-flow /
-sensor nodes yet). The TMR can run pick-and-place / tending / palletizing / kitting today,
-and cartesian process paths (gluing/follow-path) with a bit more wiring. No CNC-as-machine,
-no vision, no force control, no online servo yet.
+`AttachObject/DetachObject`, `SetAttachedCollisionCheck`/`SetReleasePolicy`,
+`AddCollisionObject` (from-scratch path only), and — v4 (D-015) — `DetectObject` +
+`SetWaypointFromDetection` plus the post-reset settle `Sleep`. Trees are **linear**
+(no control-flow / sensor-condition nodes yet). The TMR can run pick-and-place /
+vision-guided picking / tending / palletizing / kitting today, and cartesian process
+paths (gluing/follow-path) with a bit more wiring. No CNC-as-machine, no force
+control, no online servo yet.
 
 ## 7. Status & roadmap
 
@@ -101,10 +106,13 @@ no vision, no force control, no online servo yet.
 - Phase 3 — `SceneLoaderMoveitConfigEmitter` + `scene.yaml` + app wiring + bundle README.
 - Phase 5 — this doc, the public README, the generalized Isaac adapter.
 
+**Done (v3/v4):** the two-phase 8-page wizard (`gui/`), and — v4.0.0 (D-015) —
+the dedicated **Perception step** (live HSV tuner running trainit_perception's pure
+`detect()`, noise filters, continuous/on-demand trigger, settle) + the **Vision
+block** binding detectors to waypoints + the vision emitters (perception.yaml,
+detector_node, depth_image_proc isaac branch, camera-variant URDF/SRDF rewrite).
+
 **Next:**
-- **Phase 4 — the wizard** (`gui/`): the two-phase, 9-step flow; Step-1 USD preview +
-  missing-asset handling; Step-2 base-config extraction; Step-3 generate + build snippet;
-  Step-8 dynamic-object management UI. This is the largest remaining piece.
 - **Touchable-ACM**: honour `touchable_collision_ids` in `scene_manager_node`
   (`applyAttachedAcm`) — the metadata is already emitted into `scene.yaml`.
 - **Real generalization**: for cells whose real branch is more than one include, extend the
@@ -114,8 +122,10 @@ no vision, no force control, no online servo yet.
 - **PLC actuation** — a bundle package driving robot + PLC components via BT with per-mode
   adapters (`Isaac_Adapter_PLC_Actuator`, `PLC_Beckhoff_Adapter`) behind the same contract
   as the gripper adapter.
-- **Vision** — 2D (OpenCV) / 3D (PCL) perception feeding grasp poses; needs Condition/
-  perception BT nodes in the TMR (not present).
+- **Vision 3D / learned** — the 2D colour-mask path SHIPPED in v4 (TMR v1.3
+  `DetectObject`/`SetWaypointFromDetection`, proven live 2026-08-31); PCL 3D,
+  shape and learned methods remain roadmap as external nodes behind the same
+  `Detection3DArray` contract.
 - **Docker** packaging; **policies** (Isaac-Lab-trained weights) as selectable per-task
   motion strategies.
 
@@ -123,5 +133,6 @@ no vision, no force control, no online servo yet.
 
 `QT_QPA_PLATFORM=offscreen PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=$PWD:$PYTHONPATH \
 python3 -m pytest test/ -q` (the plugin-autoload flag avoids the ament lint plugins). The
-fr3wml golden equivalence is the from-scratch-path regression guard; `test_scene_loader_emitter.py`
+fr3wml golden equivalence regenerates the 3.2 VISION bundle from its shipped
+project.yaml (21/21 checks — the scene-loader path); `test_scene_loader_emitter.py`
 covers the MVP copy-base flow; `test_bt_nodes.cpp` (TMR) covers node registration.

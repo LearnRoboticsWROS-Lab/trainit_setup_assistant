@@ -9,8 +9,9 @@ planner choice, and dynamic-object handling → a Behaviour-Tree app you can wat
 immediately. Robot- and cell-agnostic; nothing is hardcoded to a specific robot.
 
 > The headline product target is **camera-driven bin-picking with learned policies**.
-> This MVP ships **blind pick-and-place** end-to-end; vision, PLC actuation and policies
-> are architecture seams (present, not yet active). A course is included.
+> v4 ships **blind pick-and-place** AND **vision-guided motion** (2D colour-mask
+> perception, live-tuned) end-to-end; PLC actuation and policies are architecture
+> seams (present, not yet active). A course is included.
 
 ---
 
@@ -49,34 +50,34 @@ colcon build --packages-select trainit_motion_runtime trainit_setup_assistant --
 source install/setup.bash
 ```
 
-## The flow (wizard, 10 steps)
+## The flow (wizard, 8 steps — the on-screen numbering)
 
 **Phase A — build a faithful configuration environment**
-1. **Load the USD scene** — preview robot+EE+objects; missing/cloud assets are flagged
-   (load a local `.usd` or skip). Objects are classified (static / actuated / dynamic).
-   Test the cell's Isaac grasp adapter here (see `resources/isaac/`).
-2. **Load the base MoveIt config** — the assistant reads its group/frames/controllers.
+1. **Robot & base config** — open a `project.yaml`, or point at the hand-made base
+   MoveIt config; the assistant reads its group/frames/controllers/collision matrix.
+2. **Cell scene (USD)** — preview robot+EE+objects; missing/cloud assets are flagged.
+   Objects are classified (static / actuated / dynamic; grasp targets).
 3. **Generate the scene+planner config** — a standalone copy of the base + planners +
-   `scene.yaml`. Pick an output path/name.
-4. **Build snippet** — `colcon build … && source install/setup.bash`.
-5. **Choose the mode** — mock | isaac | real.
-6. **Guided bring-up** — the exact commands for your mode (open Isaac → Play → launch …).
+   `scene.yaml`, plus the `colcon build … && source` snippet.
+4. **Mode & bring-up** — mock | isaac | real, with the exact guided commands
+   (open Isaac → Play → launch …). The live session powers every capture below.
 
 **Phase B — configure the application**
-7. **Perception (v4)** — configure the camera and the DETECTORS as named resources:
+5. **Perception (v4)** — configure the camera and the DETECTORS as named resources:
    pick a method (colour mask; shape/PCL/custom are roadmap), tune HSV + noise
    filters LIVE against the running bring-up (the tuner runs the SAME pure
    `detect()` the bundle will run), capture the centroid, set continuous/on-demand
    and the post-reset settle time. Skip it for a blind application.
-8. **Choose the application type** — *Blind pick and place* or *Vision guided
-   motion* (the editable sequence with Vision blocks). Others are on the roadmap.
-9. **Configure it** — capture waypoint poses from RViz, motion type + planner + speed per
-   move, the **dynamic-object management** (which objects the gripper grasps, per-move
-   attached-collision-check, freeze/gravity on release), and — for vision — drop a
-   **Vision block** binding a Step-7 detector to the target/approach/retreat waypoints
-   with their dz offsets.
-10. **Generate the bundle** — `<robot>_trainit_config` + `<robot>_app` + `<robot>_description`
-   + a README. Build it and run — one command brings up the cell, one runs the app.
+6. **Application type** — *Blind pick and place* or *Vision guided motion* (the
+   editable sequence with Vision blocks). Others are on the roadmap.
+7. **Application blocks** — capture waypoint poses from RViz, motion type + planner +
+   speed per move, the **dynamic-object management** (which objects the gripper
+   grasps, per-move attached-collision-check, freeze/gravity on release), and — for
+   vision — drop a **Vision block** binding a Step-5 detector to the
+   target/approach/retreat waypoints with their dz offsets.
+8. **Generate the bundle** — `<robot>_trainit_config` + `<robot>_app` +
+   `<robot>_description` + a README. Build it and run — one command brings up the
+   cell, one runs the app.
 
 ## Running a generated bundle
 

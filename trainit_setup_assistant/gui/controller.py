@@ -52,7 +52,7 @@ from ..robotmodel import bootstrap_project, load_robot_spec
 class AssistantController:
     def __init__(self, project: Optional[CanonicalProject] = None):
         self.project: Optional[CanonicalProject] = project
-        # the scene+planner config package name generated at Step 3 (used by Step 6's
+        # the scene+planner config package name generated at Step 3 (used by Step 4's
         # bring-up procedure so it names the package the user actually created).
         self.scene_loader_pkg: Optional[str] = None
         self.workspace_root: Optional[str] = None   # colcon build root (parent of src/)
@@ -562,7 +562,7 @@ class AssistantController:
                          release_policy: Optional[str] = None,
                          isaac_grasp_method: Optional[str] = None,
                          touchable_collision_ids=None) -> None:
-        """Step 8: set the dynamic-object grasp attributes (attach on close, freeze/
+        """Scene: set the dynamic-object grasp attributes (attach on close, freeze/
         gravity on release, Isaac method, touchable meshes)."""
         for o in self._require().scene.objects:
             if o.id == obj_id:
@@ -802,15 +802,15 @@ class AssistantController:
             return root or os.sep
         return os.path.abspath(str(output_dir))
 
-    # ---- Step 5/6: mode + guided bring-up ----
+    # ---- Step 4: mode + guided bring-up ----
     def set_mode(self, mode: str) -> None:
-        """Step 5: the mode the user will configure/run in (mock | isaac | real)."""
+        """Step 4: the mode the user will configure/run in (mock | isaac | real)."""
         if mode not in ('mock', 'isaac', 'real'):
             raise ValueError(f"mode must be mock|isaac|real, got {mode!r}")
         self._require().deployment.default_mode = mode
 
     def build_snippet(self, package: str, ws_root: str = None) -> str:
-        """Step 4: the terminal snippet to build+source a generated package. colcon build
+        """The terminal snippet to build+source a generated package. colcon build
         runs at the WORKSPACE ROOT (parent of src/), not the output dir."""
         ws_root = ws_root or self.workspace_root or '<ros2_ws>'
         return (f'cd {ws_root}\n'
@@ -820,9 +820,9 @@ class AssistantController:
     def bringup_procedure(self, mode: str, config_package: str,
                           usd_path: Optional[str] = None,
                           ws_root: str = None) -> str:
-        """Step 6: the guided procedure to BUILD + bring up the scene+planner config so
+        """Step 4: the guided procedure to BUILD + bring up the scene+planner config so
         the application can be configured against a faithful RViz. The application itself
-        is launched later (Step 7 generates it; the bundle README has the run command)."""
+        is launched later (Step 8 generates it; the bundle README has the run command)."""
         ws_root = ws_root or self.workspace_root or '<ros2_ws>'
         steps: List[str] = []
         n = 1

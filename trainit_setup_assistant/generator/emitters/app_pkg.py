@@ -64,6 +64,20 @@ class AppEmitter(Emitter):
             ctx.generate_to(f'{pkg}/config/perception.yaml',
                             build_perception_yaml(project),
                             source='perception_from_project')
+        # D-015 noise-filter params exist only from trainit_perception 0.2.0: on an
+        # older runtime they merge silently into params and are IGNORED — the deployed
+        # mask would differ from what was tuned, with no error. Pin the minimum.
+        _V015_KEYS = ('blur_px', 'depth_min_m', 'depth_max_m')
+        needs_v02 = any(k in d.params for d in (per.detectors if per else [])
+                        for k in _V015_KEYS)
+        # bootstrap flow (no base config): the camera extras live in the scene-loader
+        # emitter only — say so instead of silently dropping them.
+        if per and per.camera and not robot.base_moveit_config_path:
+            ctx.manifest.warn(
+                'bootstrap flow with a camera: the synthetic coloured cloud '
+                '(depth_image_proc) and the base<->camera SRDF pair are only emitted '
+                'on the scene-loader path (base config set) — add them by hand or '
+                'switch to a base config.')
 
         # --- launch files (TEMPLATE) ---
         ctx.render_to(f'{pkg}/launch/trainit_bt.launch.py',
@@ -144,6 +158,7 @@ class AppEmitter(Emitter):
                       moveit_config_package=project.bundle.moveit_config_package,
                       description_package=project.bundle.description_package,
                       bridge_packages=dep.bridge_packages(),
-                      has_perception=bool(detector_nodes))
+                      has_perception=bool(detector_nodes),
+                      perception_min_version=('0.2.0' if needs_v02 else None))
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'app/CMakeLists.txt.j2',
                       package_name=pkg, has_gripper_script=gripper_present)

@@ -71,9 +71,12 @@ class DetectorSpec(BaseModel):
 
     @property
     def emits_node(self) -> bool:
-        """True when the assistant generates a detector_node for this method
-        (pure-python methods). External-node methods publish the contract themselves."""
-        return self.method in (DetectionMethod.COLOR_MASK, DetectionMethod.CUSTOM)
+        """True when the assistant generates a detector_node for this method — only
+        the pure-python methods the runtime registry actually knows. CUSTOM and
+        PCL_CLUSTER are external-node methods: their node publishes the contract
+        itself, and generating a detector_node for them would crash at startup
+        (make_detector raises KeyError on an unknown method)."""
+        return self.method is DetectionMethod.COLOR_MASK
 
 
 class VisionBinding(BaseModel):

@@ -14,7 +14,11 @@
 
   <exec_depend>trainit_motion_runtime</exec_depend>
 {% if has_perception %}
+{% if perception_min_version %}
+  <exec_depend version_gte="{{ perception_min_version }}">trainit_perception</exec_depend>
+{% else %}
   <exec_depend>trainit_perception</exec_depend>
+{% endif %}
 {% endif %}
   <exec_depend>{{ moveit_config_package }}</exec_depend>
   <exec_depend>{{ description_package }}</exec_depend>

@@ -514,3 +514,25 @@ def test_wizard_vision_flow_offscreen(qapp):
         assert 'SetWaypointFromDetection waypoint="approach"' in tree
         launch = open(os.path.join(appdir, 'launch', 'trainit_bt.launch.py')).read()
         assert 'detector_node' in launch and 'detector_cube' in launch
+
+
+def test_blocks_page_preserves_golden_loop_start_and_tree(qapp):
+    """Regression (verification blocker): merely ENTERING Step 7 on a reopened
+    project must not fold loop_start away — the regenerated tree must still equal
+    the golden's shape (Repeat opening at pre_pick, detection inside the cycle)."""
+    GOLDEN_PROJECT = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
+                      'fr3wml_suction_tsa_32_bundle/project.yaml')
+    if not os.path.isfile(GOLDEN_PROJECT):
+        pytest.skip('golden bundle not present')
+    from trainit_setup_assistant.applications import get_application
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    ctrl.open_project(GOLDEN_PROJECT)
+    before = get_application(ctrl.project.application.type).build_tree_xml(ctrl.project)
+    wiz = SetupWizard(ctrl)
+    wiz.blocks_page.initializePage()           # enter Step 7 (this used to null it)
+    assert wiz.blocks_page.validatePage()
+    assert ctrl.project.application.loop_start == 'pre_pick'
+    after = get_application(ctrl.project.application.type).build_tree_xml(ctrl.project)
+    from trainit_setup_assistant.verify.equivalence import tree_diffs
+    assert not tree_diffs(after, before), tree_diffs(after, before)[:5]

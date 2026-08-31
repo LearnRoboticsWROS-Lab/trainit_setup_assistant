@@ -462,12 +462,22 @@ class AssistantController:
             p.perception = PerceptionSpec()
         return p.perception
 
+    _CAMERA_CLEARABLE = ('replace_include', 'with_include')
+
     def set_camera(self, **fields) -> None:
-        """Upsert the cell camera (topics, frames, variant includes, synthetic cloud)."""
+        """Upsert the cell camera (topics, frames, variant includes, synthetic cloud).
+        For the two include fields an EMPTY STRING clears the value (so a wrong path
+        can be corrected back to 'no rewrite'); elsewhere None means 'leave as is'."""
         per = self._perception()
         cam = per.camera or CameraSpec()
-        per.camera = cam.model_copy(update={k: v for k, v in fields.items()
-                                            if v is not None})
+        update = {}
+        for k, v in fields.items():
+            if k in self._CAMERA_CLEARABLE:
+                if v is not None:
+                    update[k] = v or None      # '' -> None (clear)
+            elif v is not None:
+                update[k] = v
+        per.camera = cam.model_copy(update=update)
 
     def set_perception_timing(self, settle_ms: Optional[int] = None,
                               detect_timeout_ms: Optional[int] = None) -> None:
@@ -481,8 +491,12 @@ class AssistantController:
                         params: Optional[dict] = None, continuous: bool = True,
                         rate_hz: float = 10.0) -> None:
         """Add or update a named detector (the Perception step's list entries)."""
-        if not name.strip():
-            raise ValueError('detector needs a name')
+        import re
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', name.strip()):
+            raise ValueError(
+                f'invalid detector name "{name}": it becomes the ROS node name '
+                f'detector_<name> and the topic /perception/<name>/detections — '
+                f'use [A-Za-z][A-Za-z0-9_]*')
         per = self._perception()
         spec = DetectorSpec(name=name.strip(), method=DetectionMethod(method),
                             params=dict(params or {}), continuous=continuous,

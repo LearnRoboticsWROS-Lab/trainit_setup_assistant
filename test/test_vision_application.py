@@ -174,3 +174,38 @@ def test_camera_include_rewrite():
 
 if __name__ == '__main__':
     raise SystemExit(pytest.main([__file__, '-v']))
+
+
+# --- adversarial-review regressions (2026-08-31 verification pass) --------------
+
+def test_validate_flags_on_demand_bound_detector_and_detected_orientation():
+    p = _project()
+    p.perception.detectors[0].continuous = False
+    p.application.waypoint_by_name('pick').vision.orientation = 'detected'
+    problems = get_application(AppType.VISION_GUIDED_MOTION).validate(p)
+    text = '\n'.join(problems)
+    assert 'on-demand' in text and 'time out' in text
+    assert 'identity orientation' in text
+
+
+def test_custom_method_emits_no_detector_node():
+    d = DetectorSpec(name='mine', method='custom')
+    assert d.emits_node is False               # runtime registry knows only color_mask
+
+
+def test_detector_name_validation():
+    from trainit_setup_assistant.gui.controller import AssistantController
+    ctrl = AssistantController(_project())
+    with pytest.raises(ValueError):
+        ctrl.upsert_detector('red cube')
+    with pytest.raises(ValueError):
+        ctrl.upsert_detector('1cube')
+    ctrl.upsert_detector('red_cube')           # valid
+
+
+def test_camera_rewrite_refuses_double_include():
+    cam = CameraSpec(replace_include='$(find x)/a.xacro',
+                     with_include='$(find x)/a_camera.xacro')
+    both = ('<robot>\n<xacro:include filename="$(find x)/a.xacro" />\n'
+            '<xacro:include filename="$(find x)/a_camera.xacro" />\n</robot>\n')
+    assert rewrite_camera_include(both, cam) is None

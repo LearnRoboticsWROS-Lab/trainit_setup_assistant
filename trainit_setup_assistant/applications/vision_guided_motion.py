@@ -56,11 +56,28 @@ class VisionGuidedMotion(PickAndPlace):
                 # the golden's joint pre_pick borrows "from:pick").
                 problems.append(f'waypoint "{wp.name}": orientation "keep" but the '
                                 'waypoint has none — the runtime would fail')
+        bound_detectors = {wp.vision.detector for wp in bound}
         for d in per.detectors:
             if not d.emits_node:
                 problems.append(f'note: detector "{d.name}" ({d.method.value}) is an '
                                 'external-node method — its node is not generated; '
                                 'launch it yourself so it publishes the contract')
+            if d.name in bound_detectors and not d.continuous:
+                problems.append(
+                    f'detector "{d.name}" is on-demand (continuous: false) but the '
+                    'generated tree only consumes the continuous stream — every '
+                    'DetectObject would time out. Enable continuous, or add your own '
+                    'Trigger caller.')
+        from ..model.enums import DetectionMethod
+        for wp in bound:
+            d = per.detector_by_name(wp.vision.detector)
+            if (d is not None and wp.vision.orientation == 'detected'
+                    and d.method is DetectionMethod.COLOR_MASK):
+                problems.append(
+                    f'waypoint "{wp.name}": orientation "detected" with a colour-mask '
+                    'detector — a colour mask publishes an identity orientation, which '
+                    'after TF becomes the camera-to-base rotation: an arbitrary TCP '
+                    'orientation. Use "keep" or "from:<waypoint>".')
         return problems
 
     # --- tree hooks -------------------------------------------------------------

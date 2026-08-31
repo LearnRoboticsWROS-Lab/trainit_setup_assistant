@@ -758,7 +758,9 @@ class PerceptionPage(QWizardPage):
                          'save it as a named detector. The application step then binds '
                          'detectors to waypoints. Skip this step for a blind application.')
         self._detectors: Dict[str, dict] = {}      # name -> DetectorSpec-shaped dict
+        self._deleted: set = set()                 # names removed here, to reconcile
         self._last_detection = None
+        self._tuner_topics = None                  # snapshot while the tuner runs
         root = QHBoxLayout(self)
 
         # ---- left: detector list + camera + timing ---------------------------
@@ -878,8 +880,10 @@ class PerceptionPage(QWizardPage):
         trow = QHBoxLayout()
         self.p_cont = QCheckBox('continuous')
         self.p_cont.setChecked(True)
-        self.p_cont.setToolTip('Publish at rate; off = compute only on the Trigger '
-                               'service call (the tree samples arrival-fresh either way)')
+        self.p_cont.setToolTip('Publish at rate (what the generated tree consumes). '
+                               'Off = publish only on the /perception/<name>/detect '
+                               'Trigger service — NOTE: the generated tree does NOT '
+                               'call it, so keep continuous for tree-driven apps.')
         self.p_rate = QDoubleSpinBox(); self.p_rate.setRange(0.1, 60.0)
         self.p_rate.setValue(10.0); self.p_rate.setSuffix(' Hz')
         trow.addWidget(self.p_cont)
@@ -975,6 +979,14 @@ class PerceptionPage(QWizardPage):
         if not name:
             self.tuner_status.setText('Give the detector a name first.')
             return
+        import re
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', name):
+            self.tuner_status.setText(
+                f'"{name}" is not a valid detector name: it becomes a ROS node and '
+                'topic name — use letters, digits and underscores, starting with a '
+                'letter (e.g. red_cube).')
+            return
+        self._deleted.discard(name)
         self._detectors[name] = {'method': 'color_mask',
                                  'params': self._params_from_form(),
                                  'continuous': self.p_cont.isChecked(),
@@ -998,6 +1010,7 @@ class PerceptionPage(QWizardPage):
         item = self.det_list.currentItem()
         if item:
             self._detectors.pop(item.text(), None)
+            self._deleted.add(item.text())    # reconciled into the project on Next
             self._refresh_list()
 
     def _on_pick_detector(self, name: str) -> None:
@@ -1021,25 +1034,39 @@ class PerceptionPage(QWizardPage):
     # ---- live tuner ----------------------------------------------------------
     def _toggle_tuner(self, on: bool):  # pragma: no cover - needs a live ROS session
         if on:
+            # topic snapshot: editing a topic field mid-run must not churn the ROS
+            # node once per keystroke — a change applies on the next explicit Start
+            self._tuner_topics = (self.c_rgb.text().strip(),
+                                  self.c_depth.text().strip(),
+                                  self.c_info.text().strip())
             self.tune_btn.setText('Stop live tuning')
             self._timer.start()
         else:
             self.tune_btn.setText('Start live tuning')
             self._timer.stop()
 
+    def hideEvent(self, event):  # pragma: no cover - GUI lifecycle
+        # Back/Next/close: never leave the tuner ticking on a hidden page
+        self.tune_btn.setChecked(False)
+        super().hideEvent(event)
+
     def _tick(self):  # pragma: no cover - needs a live ROS session
         try:
-            cap = self.wizard().camera_capture(self.c_rgb.text().strip(),
-                                               self.c_depth.text().strip(),
-                                               self.c_info.text().strip())
+            cap = self.wizard().camera_capture(*(self._tuner_topics or
+                                                 ('/camera/color/image_raw',
+                                                  '/camera/depth/image_rect_raw',
+                                                  '/camera/color/camera_info')))
         except Exception as exc:  # noqa: BLE001
             self.tuner_status.setText(f'camera capture failed: {exc}')
             self.tune_btn.setChecked(False)
             return
         frame = cap.latest()
         if frame is None:
-            self.tuner_status.setText('waiting for frames… (is the Step-4 bring-up '
-                                      'running, with the camera publishing?)')
+            err = cap.last_error()
+            self.tuner_status.setText(
+                f'frames arriving but undecodable: {err}' if err else
+                'waiting for frames… (is the Step-4 bring-up running, with the '
+                'camera publishing?)')
             return
         rgb, depth_m, K, frame_id = frame
         try:
@@ -1047,13 +1074,13 @@ class PerceptionPage(QWizardPage):
             det = make_detector('color_mask', self._params_from_form())
             detections = det.detect(rgb, depth_m, K)
             mask = det.debug_mask(rgb, depth_m)
+            self._paint(self.img_view, rgb)
+            if mask is not None:
+                self._paint(self.mask_view, mask)
         except Exception as exc:  # noqa: BLE001
             self.tuner_status.setText(f'detector failed: {exc}')
             self.tune_btn.setChecked(False)
             return
-        self._paint(self.img_view, rgb)
-        if mask is not None:
-            self._paint(self.mask_view, mask)
         if detections:
             d = detections[0]
             self._last_detection = (d, frame_id)
@@ -1121,32 +1148,42 @@ class PerceptionPage(QWizardPage):
             self.c_cloud.setChecked(c.synthetic_cloud_in_sim)
         self.t_settle.setValue(per.settle_ms)
         self.t_timeout.setValue(per.detect_timeout_ms)
-        if not self._detectors:
-            for d in per.detectors:
+        # merge by name: never resurrect a locally removed detector on back-navigation
+        for d in per.detectors:
+            if d.name not in self._detectors and d.name not in self._deleted:
                 self._detectors[d.name] = {'method': d.method.value,
                                            'params': dict(d.params),
                                            'continuous': d.continuous,
                                            'rate_hz': d.rate_hz}
-            self._refresh_list()
+        self._refresh_list()
 
     def validatePage(self) -> bool:
-        self._timer.stop()
-        self.tune_btn.setChecked(False)
-        if not self._detectors:
+        self.tune_btn.setChecked(False)        # stops the timer via the toggle handler
+        project_has = bool(self.ctrl.detector_names()) if self.ctrl.project else False
+        if not self._detectors and not project_has and not self._deleted:
             return True                        # blind flow: nothing to push
+        # deletions first (also unbinds any waypoint using the removed detector)
+        for name in set(self.ctrl.detector_names()) - set(self._detectors):
+            self.ctrl.remove_detector(name)
+        self._deleted.clear()
         self.ctrl.set_camera(
             rgb_topic=self.c_rgb.text().strip() or None,
             depth_topic=self.c_depth.text().strip() or None,
             camera_info_topic=self.c_info.text().strip() or None,
             optical_frame=self.c_frame.text().strip() or None,
             link=self.c_link.text().strip() or None,
-            replace_include=self.c_replace.text().strip() or None,
-            with_include=self.c_with.text().strip() or None,
+            replace_include=self.c_replace.text().strip(),
+            with_include=self.c_with.text().strip(),
             synthetic_cloud_in_sim=self.c_cloud.isChecked())
         self.ctrl.set_perception_timing(self.t_settle.value(), self.t_timeout.value())
         for name, d in self._detectors.items():
-            self.ctrl.upsert_detector(name, method=d['method'], params=d['params'],
-                                      continuous=d['continuous'], rate_hz=d['rate_hz'])
+            try:
+                self.ctrl.upsert_detector(name, method=d['method'], params=d['params'],
+                                          continuous=d['continuous'],
+                                          rate_hz=d['rate_hz'])
+            except ValueError as exc:
+                self.tuner_status.setText(str(exc))
+                return False
         return True
 
 
@@ -1178,11 +1215,17 @@ class ApplicationPage(QWizardPage):
         form.addRow('Application', self.app_type)
 
     def initializePage(self) -> None:
-        # suggest Vision guided motion when the Perception step configured detectors
         try:
+            cur = self.ctrl.project.application.type.value
             per = self.ctrl.project.perception
         except Exception:  # noqa: BLE001
             return
+        tokens = [t for t, _, _ in self.APPS]
+        if getattr(self, '_user_chose', False):
+            # re-entry: mirror what the user already chose, never override it
+            self.app_type.setCurrentIndex(tokens.index(cur) if cur in tokens else 0)
+            return
+        # first entry: suggest Vision guided motion when detectors exist
         if per is not None and per.detectors:
             self.app_type.setCurrentIndex(1)
 
@@ -1193,6 +1236,7 @@ class ApplicationPage(QWizardPage):
             token = 'pick_and_place'           # guard: a disabled row cannot be chosen
         # planner is per-waypoint; keep a sensible fallback for segments that don't set one
         self.ctrl.set_application(token, 'ompl')
+        self._user_chose = True
         return True
 
 
@@ -1883,6 +1927,11 @@ class BlocksPage(QWizardPage):
         order = []
         for i in range(self.seq.count()):
             order.append(self.seq.item(i).data(Qt.UserRole))
+        # Rebuilding the list widget INSIDE the drop's rowsMoved signal is fragile
+        # (stale persistent indexes mid-dropEvent) — defer it out of the drop.
+        QTimer.singleShot(0, lambda: self._apply_reorder(order))
+
+    def _apply_reorder(self, order) -> None:
         self.blocks = [self.blocks[j] for j in order]
         # The Loop block's POSITION is its meaning: the region runs from the first Move
         # below it down to the block named in '...up to'. It used to be force-moved back
@@ -2073,7 +2122,12 @@ class BlocksPage(QWizardPage):
                               planner=b['planner'] or None, speed=int(b['speed']),
                               allowed_start_tolerance=float(b['tol']),
                               attached_collision_check={'inherit': None, 'on': True,
-                                                        'off': False}[b['check']])
+                                                        'off': False}[b['check']],
+                              # carried through the block dict (no widgets): the fold
+                              # must not silently strip a reopened project's data
+                              role=b.get('role', 'generic'),
+                              aux=b.get('aux'),
+                              aux_is_center=bool(b.get('aux_is_center', False)))
                 try:
                     if b['target'] == 'named':
                         kwargs['named'] = b['named'] or b['name']
@@ -2159,7 +2213,10 @@ class BlocksPage(QWizardPage):
                            'speed': seg.speed if seg else 50,
                            'tol': wp.allowed_start_tolerance,
                            'check': ('inherit' if not seg or seg.attached_collision_check is None
-                                     else ('on' if seg.attached_collision_check else 'off'))})
+                                     else ('on' if seg.attached_collision_check else 'off')),
+                           'role': wp.role.value,
+                           'aux': (list(seg.aux) if seg and seg.aux else None),
+                           'aux_is_center': (seg.aux_is_center if seg else False)})
             acts = app.actions_at(name)
             for act in acts:
                 if act.kind.value == 'reset_scene':
@@ -2174,8 +2231,20 @@ class BlocksPage(QWizardPage):
                 if act.kind.value == 'reset_scene':
                     blocks.append({'kind': 'reset'})
         if app.loop_cycles != 0:
-            blocks.append({'kind': 'loop', 'cycles': app.loop_cycles,
-                           'to': app.loop_end or ''})
+            lb = {'kind': 'loop', 'cycles': app.loop_cycles, 'to': app.loop_end or ''}
+            # The Loop block's POSITION is its meaning (the region starts at the first
+            # Move after it) — so it must be REBUILT before the loop_start move, or
+            # merely entering this page would fold loop_start back to None and a
+            # regenerated bundle would wrap the homing move into the cycle.
+            idx = None
+            if app.loop_start:
+                idx = next((i for i, blk in enumerate(blocks)
+                            if blk['kind'] == 'move' and blk['name'] == app.loop_start),
+                           None)
+            if idx is not None:
+                blocks.insert(idx, lb)
+            else:
+                blocks.append(lb)
         # rebuild the Vision blocks from the waypoint bindings (reopen path). The
         # canonical model stores per-waypoint bindings; a block groups one detector's
         # bindings back into target/approach/retreat by their orientation policy.

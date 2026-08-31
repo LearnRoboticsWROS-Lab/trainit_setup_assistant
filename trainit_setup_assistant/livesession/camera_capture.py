@@ -46,6 +46,7 @@ class LiveCameraCapture:
         self._latest: Optional[tuple] = None      # (rgb, depth_m)
         self._K = None
         self._frame_id: Optional[str] = None
+        self._last_error: Optional[str] = None    # why frames are being dropped
 
         sensor_qos = QoSProfile(depth=2, reliability=ReliabilityPolicy.BEST_EFFORT,
                                 history=HistoryPolicy.KEEP_LAST)
@@ -75,24 +76,31 @@ class LiveCameraCapture:
         np = self._np
         try:
             if rgb_msg.encoding not in ('rgb8', 'bgr8'):
-                return
+                raise ValueError(f'unsupported rgb encoding {rgb_msg.encoding!r}')
+            h, w = rgb_msg.height, rgb_msg.width
+            # honour the row stride: cameras may pad rows (step != width * bpp)
             rgb = np.frombuffer(rgb_msg.data, np.uint8).reshape(
-                rgb_msg.height, rgb_msg.width, 3)
+                h, rgb_msg.step)[:, :w * 3].reshape(h, w, 3)
             if rgb_msg.encoding == 'bgr8':
                 rgb = rgb[:, :, ::-1]
+            dh, dw = depth_msg.height, depth_msg.width
             if depth_msg.encoding == '32FC1':
-                depth = np.frombuffer(depth_msg.data, np.float32).reshape(
-                    depth_msg.height, depth_msg.width).copy()
+                depth = np.frombuffer(depth_msg.data, np.uint8).reshape(
+                    dh, depth_msg.step)[:, :dw * 4].reshape(dh, dw * 4)
+                depth = depth.view(np.float32).reshape(dh, dw).copy()
             elif depth_msg.encoding == '16UC1':
-                depth = np.frombuffer(depth_msg.data, np.uint16).reshape(
-                    depth_msg.height, depth_msg.width).astype(np.float32) / 1000.0
+                depth = np.frombuffer(depth_msg.data, np.uint8).reshape(
+                    dh, depth_msg.step)[:, :dw * 2].reshape(dh, dw * 2)
+                depth = depth.view(np.uint16).reshape(dh, dw).astype(np.float32) / 1000.0
             else:
-                return
+                raise ValueError(f'unsupported depth encoding {depth_msg.encoding!r}')
             with self._lock:
                 self._latest = (rgb.copy(), depth)
                 self._frame_id = rgb_msg.header.frame_id
-        except Exception:  # noqa: BLE001 — a malformed frame must not kill the thread
-            pass
+                self._last_error = None
+        except Exception as exc:  # noqa: BLE001 — a bad frame must not kill the thread
+            with self._lock:
+                self._last_error = repr(exc)      # …but the drop reason is surfaced
 
     def _on_info(self, msg):
         with self._lock:
@@ -106,6 +114,11 @@ class LiveCameraCapture:
                 return None
             rgb, depth = self._latest
             return rgb, depth, self._K, self._frame_id
+
+    def last_error(self) -> Optional[str]:
+        """Why the newest frame was dropped (None when frames decode fine)."""
+        with self._lock:
+            return self._last_error
 
     def close(self) -> None:
         self._spinning = False

@@ -25,11 +25,16 @@ def rewrite_camera_include(text: str, camera) -> Optional[str]:
     if camera is None or not camera.replace_include or not camera.with_include:
         return None
     needle = f'filename="{camera.replace_include}"'
+    replacement = f'filename="{camera.with_include}"'
     if needle not in text:
         return None
-    replacement = f'filename="{camera.with_include}"'
+    if replacement in text:
+        # the file ALREADY carries the camera include (e.g. a half-hand-edited base
+        # was re-ingested): rewriting would include the camera model twice and the
+        # URDF would fail xacro expansion on duplicate links. Leave it untouched.
+        return None
+    # marker above the FIRST replaced include (anchor on the needle's position in
+    # the original text — anchoring on the replacement could find a different spot)
+    line_start = text.rfind('\n', 0, text.index(needle)) + 1
     out = text.replace(needle, replacement)
-    # a short generated marker above the first rewritten include, for the reader
-    line_start = out.index(replacement)
-    line_start = out.rfind('\n', 0, line_start) + 1
     return out[:line_start] + _MARK + out[line_start:]

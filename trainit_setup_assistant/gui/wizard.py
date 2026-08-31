@@ -13,8 +13,8 @@ from __future__ import annotations
 import os
 from typing import Dict, Optional
 
-from python_qt_binding.QtCore import Qt
-from python_qt_binding.QtGui import QBrush, QColor
+from python_qt_binding.QtCore import Qt, QTimer
+from python_qt_binding.QtGui import QBrush, QColor, QImage, QPixmap
 from python_qt_binding.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -31,6 +31,7 @@ from python_qt_binding.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSlider,
     QSpinBox,
     QStackedWidget,
     QTableWidget,
@@ -324,7 +325,7 @@ class GeneratePage(QWizardPage):
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
-        self.setTitle('Step 7 — Generate the bundle')
+        self.setTitle('Step 8 — Generate the bundle')
         self.setSubTitle('Name the bundle and generate the 3 packages (app + trainit_config '
                          '+ description). The bundle README has the one-command run.')
         form = QFormLayout(self)
@@ -732,37 +733,466 @@ class ScenePage(QWizardPage):
         return True
 
 
-class ApplicationPage(QWizardPage):
-    # Every application the TrainIt Motion Runtime can host (only pick_and_place is
-    # wired end-to-end in this MVP; the rest are shown greyed = coming / PRO).
-    APPS = [('pick_and_place', True), ('gluing', False), ('follow_path', False),
-            ('waypoint_replay', False), ('cnc', False)]
+class PerceptionPage(QWizardPage):
+    """Step 5 — Perception: WHAT the camera sees, HOW, and what to extract (D-015).
+
+    Detectors are NAMED RESOURCES configured here once; the application step only
+    BINDS them to waypoints. The live tuner runs trainit_perception's pure
+    ``detect()`` on frames from the running bring-up — the SAME function the
+    generated bundle runs, so what you tune is what you deploy.
+    """
+
+    # method token, label, enabled. Greyed = roadmap: shape mask (OpenCV contours),
+    # PCL 3D cluster (an external C++ node behind the same contract), custom node.
+    METHODS = [('color_mask', 'Colour mask (HSV)', True),
+               ('shape_mask', 'Shape mask (contours)', False),
+               ('pcl_cluster', 'PCL 3D cluster (C++ node)', False),
+               ('custom', 'Custom node (expert)', False)]
 
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
-        self.setTitle('Step 5 — Application type')
-        self.setSubTitle('Pick the robotic application. The greyed ones are hosted by the '
-                         'TrainIt Motion Runtime but not yet wired in this MVP (PRO / '
-                         'roadmap). Motion type + planner are chosen PER WAYPOINT in the '
-                         'next step — there is no single global planner. The manipulated '
-                         'objects come from the scene (grasp targets), not from here.')
+        self.setTitle('Step 5 — Perception (camera & detectors)')
+        self.setSubTitle('Configure what the camera must SEE and what to EXTRACT: pick a '
+                         'method, tune it LIVE against the running bring-up (Step 4), and '
+                         'save it as a named detector. The application step then binds '
+                         'detectors to waypoints. Skip this step for a blind application.')
+        self._detectors: Dict[str, dict] = {}      # name -> DetectorSpec-shaped dict
+        self._last_detection = None
+        root = QHBoxLayout(self)
+
+        # ---- left: detector list + camera + timing ---------------------------
+        left = QVBoxLayout()
+        left.addWidget(QLabel('<b>Detectors</b>'))
+        self.det_list = QListWidget()
+        self.det_list.currentTextChanged.connect(self._on_pick_detector)
+        left.addWidget(self.det_list, 1)
+        addrow = QHBoxLayout()
+        self.det_name = QLineEdit()
+        self.det_name.setPlaceholderText('name (e.g. cube)')
+        addb = QPushButton('Add')
+        addb.clicked.connect(self._add_detector)
+        rmb = QPushButton('Remove')
+        rmb.clicked.connect(self._remove_detector)
+        addrow.addWidget(self.det_name)
+        addrow.addWidget(addb)
+        addrow.addWidget(rmb)
+        left.addLayout(addrow)
+
+        cam = QGroupBox('Camera')
+        cf = QFormLayout(cam)
+        self.c_rgb = QLineEdit('/camera/color/image_raw')
+        self.c_depth = QLineEdit('/camera/depth/image_rect_raw')
+        self.c_info = QLineEdit('/camera/color/camera_info')
+        self.c_frame = QLineEdit('camera_color_optical_frame')
+        self.c_link = QLineEdit('camera_link')
+        cf.addRow('RGB topic', self.c_rgb)
+        cf.addRow('Depth topic', self.c_depth)
+        cf.addRow('CameraInfo', self.c_info)
+        cf.addRow('Optical frame', self.c_frame)
+        cf.addRow('Camera link', self.c_link)
+        self.c_replace = QLineEdit()
+        self.c_replace.setPlaceholderText('URDF include to replace (base model)')
+        self.c_with = QLineEdit()
+        self.c_with.setPlaceholderText('camera-variant include (with the camera)')
+        cf.addRow('Base include', self.c_replace)
+        cf.addRow('Camera include', self.c_with)
+        self.c_cloud = QCheckBox('build the coloured cloud in sim (depth_image_proc; '
+                                 'in real the driver publishes it)')
+        self.c_cloud.setChecked(True)
+        cf.addRow(self.c_cloud)
+        left.addWidget(cam)
+
+        timing = QGroupBox('Timing (cycle rules)')
+        tf_ = QFormLayout(timing)
+        self.t_settle = QSpinBox()
+        self.t_settle.setRange(0, 60000)
+        self.t_settle.setValue(1500)
+        self.t_settle.setSuffix(' ms')
+        self.t_settle.setToolTip('Settle barrier emitted AFTER a scene reset that '
+                                 'precedes a detection in the loop: the reset returns '
+                                 'before the camera has re-rendered the world '
+                                 '(measured 0.4 s on the reference cell).')
+        tf_.addRow('Settle after reset', self.t_settle)
+        self.t_timeout = QSpinBox()
+        self.t_timeout.setRange(100, 60000)
+        self.t_timeout.setValue(3000)
+        self.t_timeout.setSuffix(' ms')
+        tf_.addRow('Detect timeout', self.t_timeout)
+        left.addWidget(timing)
+        root.addLayout(left, 3)
+
+        # ---- right: method + params + live tuner -----------------------------
+        right = QVBoxLayout()
+        mrow = QFormLayout()
+        self.method = QComboBox()
+        for _, label, enabled in self.METHODS:
+            self.method.addItem(label if enabled else f'{label}  (roadmap)')
+        mmodel = self.method.model()
+        for i, (_, _, enabled) in enumerate(self.METHODS):
+            if not enabled:
+                mmodel.item(i).setEnabled(False)
+        mrow.addRow('Method', self.method)
+        self.p_class = QLineEdit('object')
+        mrow.addRow('Class id', self.p_class)
+        right.addLayout(mrow)
+
+        params = QGroupBox('Colour mask parameters (tuned live)')
+        pf = QFormLayout(params)
+        self.h_lo, r = self._slider_row(179, 170)
+        pf.addRow('H low', r)
+        self.h_hi, r = self._slider_row(179, 10)
+        pf.addRow('H high (lo>hi wraps 0 = red)', r)
+        self.s_lo, r = self._slider_row(255, 40)
+        pf.addRow('S low', r)
+        self.s_hi, r = self._slider_row(255, 255)
+        pf.addRow('S high', r)
+        self.v_lo, r = self._slider_row(255, 60)
+        pf.addRow('V low', r)
+        self.v_hi, r = self._slider_row(255, 255)
+        pf.addRow('V high', r)
+        nrow = QHBoxLayout()
+        self.p_area = QSpinBox(); self.p_area.setRange(1, 100000); self.p_area.setValue(60)
+        self.p_max = QSpinBox(); self.p_max.setRange(1, 20); self.p_max.setValue(1)
+        self.p_morph = QSpinBox(); self.p_morph.setRange(0, 15); self.p_morph.setValue(3)
+        self.p_win = QSpinBox(); self.p_win.setRange(1, 15); self.p_win.setValue(5)
+        for lbl, w in (('min area px', self.p_area), ('max obj', self.p_max),
+                       ('morph', self.p_morph), ('depth win', self.p_win)):
+            nrow.addWidget(QLabel(lbl)); nrow.addWidget(w)
+        pf.addRow(nrow)
+        frow = QHBoxLayout()
+        self.p_blur = QSpinBox(); self.p_blur.setRange(0, 31)
+        self.p_blur.setToolTip('Gaussian blur (px, 0=off): melts single-pixel colour noise')
+        self.p_zmin = QDoubleSpinBox(); self.p_zmin.setRange(0.0, 10.0)
+        self.p_zmin.setDecimals(2); self.p_zmin.setSingleStep(0.05)
+        self.p_zmax = QDoubleSpinBox(); self.p_zmax.setRange(0.0, 10.0)
+        self.p_zmax.setDecimals(2); self.p_zmax.setSingleStep(0.05)
+        self.p_zmax.setToolTip('Depth pass-through band [min, max) m; max 0 = off. '
+                               'Cuts colour noise outside the working distance.')
+        for lbl, w in (('blur px', self.p_blur), ('z min m', self.p_zmin),
+                       ('z max m', self.p_zmax)):
+            frow.addWidget(QLabel(lbl)); frow.addWidget(w)
+        pf.addRow(frow)
+        right.addWidget(params)
+
+        trow = QHBoxLayout()
+        self.p_cont = QCheckBox('continuous')
+        self.p_cont.setChecked(True)
+        self.p_cont.setToolTip('Publish at rate; off = compute only on the Trigger '
+                               'service call (the tree samples arrival-fresh either way)')
+        self.p_rate = QDoubleSpinBox(); self.p_rate.setRange(0.1, 60.0)
+        self.p_rate.setValue(10.0); self.p_rate.setSuffix(' Hz')
+        trow.addWidget(self.p_cont)
+        trow.addWidget(self.p_rate)
+        save = QPushButton('Save detector')
+        save.setToolTip('Store the tuned parameters under the selected name')
+        save.clicked.connect(self._save_detector)
+        trow.addWidget(save)
+        right.addLayout(trow)
+
+        tuner = QGroupBox('Live tuner (needs the Step-4 bring-up running)')
+        tv = QVBoxLayout(tuner)
+        imgrow = QHBoxLayout()
+        self.img_view = QLabel('camera')
+        self.mask_view = QLabel('mask')
+        for v in (self.img_view, self.mask_view):
+            v.setMinimumSize(240, 140)
+            v.setAlignment(Qt.AlignCenter)
+            v.setStyleSheet('background:#222; color:#888;')
+        imgrow.addWidget(self.img_view)
+        imgrow.addWidget(self.mask_view)
+        tv.addLayout(imgrow)
+        brow = QHBoxLayout()
+        self.tune_btn = QPushButton('Start live tuning')
+        self.tune_btn.setCheckable(True)
+        self.tune_btn.toggled.connect(self._toggle_tuner)
+        cap = QPushButton('Capture centroid')
+        cap.setToolTip('Freeze the current detection and show its 3D point: pixel -> '
+                       'metres via the intrinsics (X,Y), depth image at the centroid (Z), '
+                       'then TF into the robot base frame')
+        cap.clicked.connect(self._capture_centroid)
+        brow.addWidget(self.tune_btn)
+        brow.addWidget(cap)
+        tv.addLayout(brow)
+        self.tuner_status = QLabel('')
+        self.tuner_status.setWordWrap(True)
+        tv.addWidget(self.tuner_status)
+        right.addWidget(tuner, 1)
+        root.addLayout(right, 5)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(120)          # ~8 Hz, matching the runtime default
+        self._timer.timeout.connect(self._tick)
+
+    # ---- widgets helpers -----------------------------------------------------
+    def _slider_row(self, top: int, value: int):
+        s = QSlider(Qt.Horizontal)
+        s.setRange(0, top)
+        s.setValue(value)
+        val = QLabel(str(value))
+        val.setMinimumWidth(30)
+        s.valueChanged.connect(lambda v, lab=val: lab.setText(str(v)))
+        row = QHBoxLayout()
+        row.addWidget(s)
+        row.addWidget(val)
+        return s, row
+
+    def _params_from_form(self) -> dict:
+        p = {'class_id': self.p_class.text().strip() or 'object',
+             'h': [self.h_lo.value(), self.h_hi.value()],
+             's': [self.s_lo.value(), self.s_hi.value()],
+             'v': [self.v_lo.value(), self.v_hi.value()],
+             'min_area_px': self.p_area.value(),
+             'max_objects': self.p_max.value(),
+             'morph_kernel': self.p_morph.value(),
+             'depth_window_px': self.p_win.value()}
+        # noise filters land in the file only when ON, so an untuned profile stays
+        # byte-stable with the runtime defaults
+        if self.p_blur.value() > 0:
+            p['blur_px'] = self.p_blur.value()
+        if self.p_zmax.value() > 0:
+            p['depth_min_m'] = round(self.p_zmin.value(), 3)
+            p['depth_max_m'] = round(self.p_zmax.value(), 3)
+        return p
+
+    def _form_from_params(self, p: dict) -> None:
+        self.p_class.setText(str(p.get('class_id', 'object')))
+        h = p.get('h', [170, 10]); s = p.get('s', [40, 255]); v = p.get('v', [60, 255])
+        self.h_lo.setValue(int(h[0])); self.h_hi.setValue(int(h[1]))
+        self.s_lo.setValue(int(s[0])); self.s_hi.setValue(int(s[1]))
+        self.v_lo.setValue(int(v[0])); self.v_hi.setValue(int(v[1]))
+        self.p_area.setValue(int(p.get('min_area_px', 60)))
+        self.p_max.setValue(int(p.get('max_objects', 1)))
+        self.p_morph.setValue(int(p.get('morph_kernel', 3)))
+        self.p_win.setValue(int(p.get('depth_window_px', 5)))
+        self.p_blur.setValue(int(p.get('blur_px', 0)))
+        self.p_zmin.setValue(float(p.get('depth_min_m', 0.0)))
+        self.p_zmax.setValue(float(p.get('depth_max_m', 0.0)))
+
+    # ---- detector list -------------------------------------------------------
+    def _add_detector(self) -> None:
+        name = self.det_name.text().strip()
+        if not name:
+            self.tuner_status.setText('Give the detector a name first.')
+            return
+        self._detectors[name] = {'method': 'color_mask',
+                                 'params': self._params_from_form(),
+                                 'continuous': self.p_cont.isChecked(),
+                                 'rate_hz': self.p_rate.value()}
+        self._refresh_list(select=name)
+
+    def _save_detector(self) -> None:
+        name = self.det_list.currentItem().text() if self.det_list.currentItem() else ''
+        name = name or self.det_name.text().strip()
+        if not name:
+            self.tuner_status.setText('Select (or name) a detector to save into.')
+            return
+        self._detectors[name] = {'method': 'color_mask',
+                                 'params': self._params_from_form(),
+                                 'continuous': self.p_cont.isChecked(),
+                                 'rate_hz': self.p_rate.value()}
+        self._refresh_list(select=name)
+        self.tuner_status.setText(f'saved detector "{name}"')
+
+    def _remove_detector(self) -> None:
+        item = self.det_list.currentItem()
+        if item:
+            self._detectors.pop(item.text(), None)
+            self._refresh_list()
+
+    def _on_pick_detector(self, name: str) -> None:
+        d = self._detectors.get(name)
+        if d:
+            self._form_from_params(d['params'])
+            self.p_cont.setChecked(bool(d.get('continuous', True)))
+            self.p_rate.setValue(float(d.get('rate_hz', 10.0)))
+
+    def _refresh_list(self, select: str = '') -> None:
+        self.det_list.blockSignals(True)
+        self.det_list.clear()
+        for name in sorted(self._detectors):
+            self.det_list.addItem(name)
+        self.det_list.blockSignals(False)
+        if select:
+            hits = self.det_list.findItems(select, Qt.MatchExactly)
+            if hits:
+                self.det_list.setCurrentItem(hits[0])
+
+    # ---- live tuner ----------------------------------------------------------
+    def _toggle_tuner(self, on: bool):  # pragma: no cover - needs a live ROS session
+        if on:
+            self.tune_btn.setText('Stop live tuning')
+            self._timer.start()
+        else:
+            self.tune_btn.setText('Start live tuning')
+            self._timer.stop()
+
+    def _tick(self):  # pragma: no cover - needs a live ROS session
+        try:
+            cap = self.wizard().camera_capture(self.c_rgb.text().strip(),
+                                               self.c_depth.text().strip(),
+                                               self.c_info.text().strip())
+        except Exception as exc:  # noqa: BLE001
+            self.tuner_status.setText(f'camera capture failed: {exc}')
+            self.tune_btn.setChecked(False)
+            return
+        frame = cap.latest()
+        if frame is None:
+            self.tuner_status.setText('waiting for frames… (is the Step-4 bring-up '
+                                      'running, with the camera publishing?)')
+            return
+        rgb, depth_m, K, frame_id = frame
+        try:
+            from trainit_perception.detectors import make_detector
+            det = make_detector('color_mask', self._params_from_form())
+            detections = det.detect(rgb, depth_m, K)
+            mask = det.debug_mask(rgb, depth_m)
+        except Exception as exc:  # noqa: BLE001
+            self.tuner_status.setText(f'detector failed: {exc}')
+            self.tune_btn.setChecked(False)
+            return
+        self._paint(self.img_view, rgb)
+        if mask is not None:
+            self._paint(self.mask_view, mask)
+        if detections:
+            d = detections[0]
+            self._last_detection = (d, frame_id)
+            x, y, z = d.position
+            self.tuner_status.setText(
+                f'{len(detections)} object(s) — best "{d.class_id}" score {d.score:.2f}'
+                f'  px ({d.pixel[0]:.1f}, {d.pixel[1]:.1f})  area {d.area_px} px'
+                f'  optical ({x:.4f}, {y:.4f}, {z:.4f}) m'
+                f'  size ({d.size[0] * 1000:.1f} × {d.size[1] * 1000:.1f}) mm')
+        else:
+            self._last_detection = None
+            self.tuner_status.setText('no detection — widen the HSV window or lower '
+                                      'the min area')
+
+    def _paint(self, view: QLabel, arr) -> None:  # pragma: no cover - display only
+        import numpy as np
+        if arr.ndim == 2:
+            arr = np.stack([arr] * 3, axis=-1)
+        arr = np.ascontiguousarray(arr)
+        h, w, _ = arr.shape
+        img = QImage(arr.data, w, h, 3 * w, QImage.Format_RGB888)
+        view.setPixmap(QPixmap.fromImage(img).scaled(
+            view.width(), view.height(), Qt.KeepAspectRatio))
+
+    def _capture_centroid(self):  # pragma: no cover - needs a live ROS session
+        if self._last_detection is None:
+            self.tuner_status.setText('no detection to capture — start the tuner first')
+            return
+        d, frame_id = self._last_detection
+        base = self.ctrl.robot_summary()['base_frame']
+        optical = frame_id or self.c_frame.text().strip()
+        try:
+            import numpy as np
+            pos, quat = self.wizard().live_capture().current_pose(base, optical)
+            qx, qy, qz, qw = quat
+            R = np.array([
+                [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+                [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+                [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)]])
+            p = np.array(pos) + R @ np.array(d.position)
+            self.tuner_status.setText(
+                f'CAPTURED centroid: optical ({d.position[0]:.4f}, {d.position[1]:.4f}, '
+                f'{d.position[2]:.4f}) -> {base} ({p[0]:.4f}, {p[1]:.4f}, {p[2]:.4f}) m. '
+                f'Bind this detector to a waypoint in Step 7 (Vision block).')
+        except Exception as exc:  # noqa: BLE001
+            self.tuner_status.setText(f'TF {base} -> {optical} failed: {exc}')
+
+    # ---- lifecycle -----------------------------------------------------------
+    def initializePage(self) -> None:
+        try:
+            per = self.ctrl.project.perception
+        except Exception:  # noqa: BLE001
+            return
+        if per is None:
+            return
+        if per.camera is not None:
+            c = per.camera
+            self.c_rgb.setText(c.rgb_topic)
+            self.c_depth.setText(c.depth_topic)
+            self.c_info.setText(c.camera_info_topic)
+            self.c_frame.setText(c.optical_frame)
+            self.c_link.setText(c.link)
+            self.c_replace.setText(c.replace_include or '')
+            self.c_with.setText(c.with_include or '')
+            self.c_cloud.setChecked(c.synthetic_cloud_in_sim)
+        self.t_settle.setValue(per.settle_ms)
+        self.t_timeout.setValue(per.detect_timeout_ms)
+        if not self._detectors:
+            for d in per.detectors:
+                self._detectors[d.name] = {'method': d.method.value,
+                                           'params': dict(d.params),
+                                           'continuous': d.continuous,
+                                           'rate_hz': d.rate_hz}
+            self._refresh_list()
+
+    def validatePage(self) -> bool:
+        self._timer.stop()
+        self.tune_btn.setChecked(False)
+        if not self._detectors:
+            return True                        # blind flow: nothing to push
+        self.ctrl.set_camera(
+            rgb_topic=self.c_rgb.text().strip() or None,
+            depth_topic=self.c_depth.text().strip() or None,
+            camera_info_topic=self.c_info.text().strip() or None,
+            optical_frame=self.c_frame.text().strip() or None,
+            link=self.c_link.text().strip() or None,
+            replace_include=self.c_replace.text().strip() or None,
+            with_include=self.c_with.text().strip() or None,
+            synthetic_cloud_in_sim=self.c_cloud.isChecked())
+        self.ctrl.set_perception_timing(self.t_settle.value(), self.t_timeout.value())
+        for name, d in self._detectors.items():
+            self.ctrl.upsert_detector(name, method=d['method'], params=d['params'],
+                                      continuous=d['continuous'], rate_hz=d['rate_hz'])
+        return True
+
+
+class ApplicationPage(QWizardPage):
+    # Every application the TrainIt Motion Runtime can host. Tokens are frozen
+    # (saved projects carry them); labels are the product names (D-015).
+    APPS = [('pick_and_place', 'Blind pick and place', True),
+            ('vision_guided_motion', 'Vision guided motion', True),
+            ('gluing', 'Gluing', False), ('follow_path', 'Follow path', False),
+            ('waypoint_replay', 'Waypoint replay', False), ('cnc', 'CNC tending', False)]
+
+    def __init__(self, ctrl: AssistantController):
+        super().__init__()
+        self.ctrl = ctrl
+        self.setTitle('Step 6 — Application type')
+        self.setSubTitle('Pick the robotic application. "Vision guided motion" is the '
+                         'editable sequence with vision blocks: waypoints, EEF trigger, '
+                         'per-segment planner, and the detectors from Step 5 bound to '
+                         'waypoints. Greyed entries are roadmap. Motion type + planner '
+                         'are chosen PER WAYPOINT in the next step.')
         form = QFormLayout(self)
         self.app_type = QComboBox()
-        for name, enabled in self.APPS:
-            self.app_type.addItem(name if enabled else f'{name}  (coming soon)')
+        for _, label, enabled in self.APPS:
+            self.app_type.addItem(label if enabled else f'{label}  (coming soon)')
         model = self.app_type.model()          # grey out the not-yet-available apps
-        for i, (_, enabled) in enumerate(self.APPS):
+        for i, (_, _, enabled) in enumerate(self.APPS):
             if not enabled:
                 model.item(i).setEnabled(False)
         form.addRow('Application', self.app_type)
 
+    def initializePage(self) -> None:
+        # suggest Vision guided motion when the Perception step configured detectors
+        try:
+            per = self.ctrl.project.perception
+        except Exception:  # noqa: BLE001
+            return
+        if per is not None and per.detectors:
+            self.app_type.setCurrentIndex(1)
+
     def validatePage(self) -> bool:
-        name = self.APPS[max(0, self.app_type.currentIndex())][0]
-        if not self.APPS[self.app_type.currentIndex()][1]:
-            name = 'pick_and_place'            # guard: only the available one is set
+        idx = max(0, self.app_type.currentIndex())
+        token, _, enabled = self.APPS[idx]
+        if not enabled:
+            token = 'pick_and_place'           # guard: a disabled row cannot be chosen
         # planner is per-waypoint; keep a sensible fallback for segments that don't set one
-        self.ctrl.set_application(name, 'ompl')
+        self.ctrl.set_application(token, 'ompl')
         return True
 
 
@@ -1098,7 +1528,7 @@ class ModeBringupPage(QWizardPage):
         return True
 
 
-# ═══ Step 6 (v3 UX): block-based application editor ══════════════════════════
+# ═══ Step 7 (v3 UX, was 6): block-based application editor ══════════════════════════
 # Palette | Sequence | Inspector — the MoveIt-Pro-style trittico. Blocks belong to
 # LAYERS: 1 robot motion (blue), 2 gripper/objects (green), 3 process (orange).
 # Greyed palette entries are roadmap (vision, PLC, policy). Layer 4 (adapters per
@@ -1110,6 +1540,7 @@ _BLOCK_META = {
     'move':    ('\U0001F9BE', '#1565c0', 'Move (robot)'),
     'gripper': ('✊',     '#2e7d32', 'Gripper'),
     'reset':   ('♻',     '#2e7d32', 'Reset scene'),
+    'detect':  ('\U0001F4F7', '#6a1b9a', 'Vision detect'),
     'wait':    ('⏱',     '#ef6c00', 'Wait'),
     'loop':    ('\U0001F501', '#ef6c00', 'Loop'),
 }
@@ -1156,10 +1587,11 @@ class BlocksPage(QWizardPage):
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
-        self.setTitle('Step 6 — Application blocks (robot · gripper · process)')
+        self.setTitle('Step 7 — Application blocks (robot · gripper · vision · process)')
         self.setSubTitle('Drag blocks into the sequence and order them. Jog the robot with '
                          'the RViz gizmo, then Capture. Layers: blue=robot motion, '
-                         'green=gripper, orange=process. Greyed blocks are roadmap.')
+                         'green=gripper, purple=vision (binds a Step-5 detector to '
+                         'waypoints), orange=process. Greyed blocks are roadmap.')
         self.blocks: list = []          # ordered [{kind:..., ...}]
         self._selected: int = -1
 
@@ -1181,11 +1613,13 @@ class BlocksPage(QWizardPage):
         pal.addWidget(QLabel('Layer 2 — Gripper / objects'))
         pal.addWidget(pal_btn('gripper', 'Gripper'))
         pal.addWidget(pal_btn('reset', 'Reset scene (sim)'))
-        pal.addWidget(QLabel('Layer 3 — Process'))
+        pal.addWidget(QLabel('Layer 3 — Vision'))
+        pal.addWidget(pal_btn('detect', 'Vision (camera + detection)'))
+        pal.addWidget(QLabel('Layer 4 — Process'))
         pal.addWidget(pal_btn('wait', 'Wait / delay'))
         pal.addWidget(pal_btn('loop', 'Loop sequence'))
         pal.addWidget(QLabel('Roadmap'))
-        for soon in ('Vision (camera + detection)', 'PLC trigger (in/out)',
+        for soon in ('PLC trigger (in/out)',
                      'Policy (ONNX/PT)', 'Modbus / TCP-IP'):
             g = QPushButton(f'⚪  {soon}')
             g.setEnabled(False)
@@ -1225,6 +1659,7 @@ class BlocksPage(QWizardPage):
         self.stack.addWidget(self._wait_form())      # 3
         self.stack.addWidget(self._loop_form())      # 4
         self.stack.addWidget(self._reset_form())     # 5
+        self.stack.addWidget(self._detect_form())    # 6
         insp.addWidget(self.stack, 1)
         apply_btn = QPushButton('Apply to block')
         apply_btn.clicked.connect(self.apply_inspector)
@@ -1307,6 +1742,76 @@ class BlocksPage(QWizardPage):
         f.addRow('Pause', self.w_ms)
         return w
 
+    def _detect_form(self) -> QWidget:
+        w = QWidget()
+        f = QFormLayout(w)
+        self.d_detector = QComboBox()
+        self.d_detector.setEditable(False)
+        f.addRow('Detector (Step 5)', self.d_detector)
+        self.d_feeds = QComboBox()
+        f.addRow('Feeds waypoint', self.d_feeds)
+        self.d_pick_dz = QDoubleSpinBox()
+        self.d_pick_dz.setRange(-1.0, 1.0); self.d_pick_dz.setDecimals(3)
+        self.d_pick_dz.setSingleStep(0.001); self.d_pick_dz.setValue(0.006)
+        self.d_pick_dz.setToolTip('Offset above the DETECTED point (the detection is '
+                                  'the visible TOP face): tool standoff at the target')
+        f.addRow('Target dz (m)', self.d_pick_dz)
+        self.d_orient = QComboBox()
+        self.d_orient.addItems(['keep (the waypoint\'s own)', 'detected'])
+        f.addRow('Target orientation', self.d_orient)
+        self.d_approach = QComboBox()
+        f.addRow('Approach waypoint', self.d_approach)
+        self.d_approach_dz = QDoubleSpinBox()
+        self.d_approach_dz.setRange(0.0, 1.0); self.d_approach_dz.setDecimals(3)
+        self.d_approach_dz.setSingleStep(0.005); self.d_approach_dz.setValue(0.08)
+        f.addRow('Approach dz (m)', self.d_approach_dz)
+        self.d_retreat = QComboBox()
+        f.addRow('Retreat waypoint', self.d_retreat)
+        self.d_retreat_dz = QDoubleSpinBox()
+        self.d_retreat_dz.setRange(0.0, 1.0); self.d_retreat_dz.setDecimals(3)
+        self.d_retreat_dz.setSingleStep(0.005); self.d_retreat_dz.setValue(0.08)
+        f.addRow('Retreat dz (m)', self.d_retreat_dz)
+        note = QLabel('The detection runs at the TOP of every cycle (wherever this '
+                      'block sits) and OVERWRITES the bound waypoints\' positions; '
+                      'their captured poses stay as fallback. The approach waypoint '
+                      'borrows the target\'s orientation (from:<target>), so a '
+                      'joint-taught approach is promoted to a tcp goal. With a Reset '
+                      'scene in the loop the settle pause from Step 5 is emitted '
+                      'automatically after it.')
+        note.setWordWrap(True)
+        f.addRow(note)
+        return w
+
+    def _fill_detect_form(self, b: dict) -> None:
+        moves = [x['name'] for x in self.blocks if x['kind'] == 'move']
+        for combo, key, optional in ((self.d_feeds, 'feeds', False),
+                                     (self.d_approach, 'approach', True),
+                                     (self.d_retreat, 'retreat', True)):
+            combo.blockSignals(True)
+            combo.clear()
+            if optional:
+                combo.addItem('(none)')
+            combo.addItems(moves)
+            want = b.get(key, '')
+            combo.setCurrentText(want if want in moves else ('(none)' if optional else
+                                                             (moves[0] if moves else '')))
+            combo.blockSignals(False)
+        self.d_detector.blockSignals(True)
+        self.d_detector.clear()
+        names = []
+        try:
+            names = self.ctrl.detector_names()
+        except Exception:  # noqa: BLE001
+            pass
+        self.d_detector.addItems(names or ['(configure one in Step 5)'])
+        if b.get('detector') in names:
+            self.d_detector.setCurrentText(b['detector'])
+        self.d_detector.blockSignals(False)
+        self.d_pick_dz.setValue(float(b.get('pick_dz', 0.006)))
+        self.d_orient.setCurrentIndex(1 if b.get('orientation') == 'detected' else 0)
+        self.d_approach_dz.setValue(float(b.get('approach_dz', 0.08)))
+        self.d_retreat_dz.setValue(float(b.get('retreat_dz', 0.08)))
+
     def _reset_form(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
@@ -1359,6 +1864,9 @@ class BlocksPage(QWizardPage):
                         'motion': 'ptp', 'planner': '', 'speed': 50, 'tol': 0.1, 'check': 'inherit'},
             'gripper': {'kind': 'gripper', 'action': 'close', 'payload': ''},
             'reset':   {'kind': 'reset'},
+            'detect':  {'kind': 'detect', 'detector': '', 'feeds': '', 'pick_dz': 0.006,
+                        'orientation': 'keep', 'approach': '', 'approach_dz': 0.08,
+                        'retreat': '', 'retreat_dz': 0.08},
             'wait':    {'kind': 'wait', 'ms': 500},
             'loop':    {'kind': 'loop', 'cycles': -1},
         }[kind]
@@ -1388,8 +1896,11 @@ class BlocksPage(QWizardPage):
             self.stack.setCurrentIndex(0)
             return
         b = self.blocks[row]
-        idx = {'move': 1, 'gripper': 2, 'wait': 3, 'loop': 4, 'reset': 5}[b['kind']]
+        idx = {'move': 1, 'gripper': 2, 'wait': 3, 'loop': 4, 'reset': 5,
+               'detect': 6}[b['kind']]
         self.stack.setCurrentIndex(idx)
+        if b['kind'] == 'detect':
+            self._fill_detect_form(b)
         if b['kind'] == 'move':
             self.m_name.setText(b['name'])
             self.m_target.setCurrentIndex(0 if b['target'] == 'named' else 1)
@@ -1432,6 +1943,18 @@ class BlocksPage(QWizardPage):
                      payload=self.g_payload.text().strip())
         elif b['kind'] == 'wait':
             b.update(ms=self.w_ms.value())
+        elif b['kind'] == 'detect':
+            det = self.d_detector.currentText()
+            approach = self.d_approach.currentText()
+            retreat = self.d_retreat.currentText()
+            b.update(detector='' if det.startswith('(') else det,
+                     feeds=self.d_feeds.currentText(),
+                     pick_dz=self.d_pick_dz.value(),
+                     orientation='detected' if self.d_orient.currentIndex() == 1 else 'keep',
+                     approach='' if approach == '(none)' else approach,
+                     approach_dz=self.d_approach_dz.value(),
+                     retreat='' if retreat == '(none)' else retreat,
+                     retreat_dz=self.d_retreat_dz.value())
         elif b['kind'] == 'loop':
             to = self.l_to.currentText()
             b.update(cycles=-1 if self.l_forever.isChecked() else self.l_cycles.value(),
@@ -1485,6 +2008,12 @@ class BlocksPage(QWizardPage):
             return f"Gripper {names[b['action']]}"
         if b['kind'] == 'reset':
             return 'Reset scene → initial poses (sim)'
+        if b['kind'] == 'detect':
+            det = b.get('detector') or '?'
+            feeds = b.get('feeds') or '?'
+            extras = [n for n in (b.get('approach'), b.get('retreat')) if n]
+            more = f" (+{', '.join(extras)})" if extras else ''
+            return f"Vision: {det} → {feeds}{more}"
         if b['kind'] == 'wait':
             return f"Wait {b['ms']} ms"
         times = 'forever' if b['cycles'] == -1 else f"{b['cycles']}×"
@@ -1536,6 +2065,7 @@ class BlocksPage(QWizardPage):
         waits: Dict[str, int] = {}
         loop = 0
         loop_from = loop_to = None
+        detects = []
         warn = ''
         for b in self.blocks:
             if b['kind'] == 'move':
@@ -1566,6 +2096,8 @@ class BlocksPage(QWizardPage):
                     warn = 'a Reset scene block needs a Move before it'
                     continue
                 ctrl.add_tool_action(prev_move, 'reset_scene')
+            elif b['kind'] == 'detect':
+                detects.append(b)             # bindings applied AFTER the moves exist
             elif b['kind'] == 'wait':
                 if prev_move is None:
                     warn = 'a Wait block needs a Move before it'
@@ -1581,6 +2113,25 @@ class BlocksPage(QWizardPage):
         for wp, ms in waits.items():
             ctrl.set_wait_after(wp, ms)
         ctrl.set_loop(loop, start=loop_from, end=loop_to)
+        # vision bindings: the detection is emitted at cycle start by the template;
+        # the block's role is WHICH detector feeds WHICH waypoints, with offsets.
+        for b in detects:
+            det = b.get('detector')
+            feeds = b.get('feeds')
+            if not det or not feeds:
+                warn = 'a Vision block needs a detector (Step 5) and a target waypoint'
+                continue
+            try:
+                ctrl.bind_vision(feeds, det, dz=float(b['pick_dz']),
+                                 orientation=b.get('orientation', 'keep'))
+                if b.get('approach'):
+                    ctrl.bind_vision(b['approach'], det, dz=float(b['approach_dz']),
+                                     orientation=f'from:{feeds}')
+                if b.get('retreat'):
+                    ctrl.bind_vision(b['retreat'], det, dz=float(b['retreat_dz']),
+                                     orientation='keep')
+            except Exception as exc:  # noqa: BLE001 - dangling names while editing
+                warn = f'vision binding: {exc}'
         self.status.setText(warn)
 
     # ---- lifecycle -----------------------------------------------------------
@@ -1625,6 +2176,32 @@ class BlocksPage(QWizardPage):
         if app.loop_cycles != 0:
             blocks.append({'kind': 'loop', 'cycles': app.loop_cycles,
                            'to': app.loop_end or ''})
+        # rebuild the Vision blocks from the waypoint bindings (reopen path). The
+        # canonical model stores per-waypoint bindings; a block groups one detector's
+        # bindings back into target/approach/retreat by their orientation policy.
+        by_det: Dict[str, list] = {}
+        for wp in app.waypoints:
+            if wp.vision is not None:
+                by_det.setdefault(wp.vision.detector, []).append(wp)
+        for det, wps in by_det.items():
+            block = {'kind': 'detect', 'detector': det, 'feeds': '', 'pick_dz': 0.006,
+                     'orientation': 'keep', 'approach': '', 'approach_dz': 0.08,
+                     'retreat': '', 'retreat_dz': 0.08}
+            rest = []
+            for wp in wps:
+                if wp.vision.orientation.startswith('from:'):
+                    block['approach'], block['approach_dz'] = wp.name, wp.vision.dz
+                else:
+                    rest.append(wp)
+            if rest:
+                feeds_wp = min(rest, key=lambda w: w.vision.dz)
+                block['feeds'] = feeds_wp.name
+                block['pick_dz'] = feeds_wp.vision.dz
+                block['orientation'] = feeds_wp.vision.orientation
+                left = [w for w in rest if w.name != feeds_wp.name]
+                if left:
+                    block['retreat'], block['retreat_dz'] = left[0].name, left[0].vision.dz
+            blocks.insert(0, block)
         self.blocks = blocks
         self._refresh()
 
@@ -1644,6 +2221,7 @@ class SetupWizard(QWizard):
         self.gen_config_page = GenerateConfigPage(self.controller)
         self.mode_page = ModeBringupPage(self.controller)
         self.scene_page = ScenePage(self.controller)
+        self.perception_page = PerceptionPage(self.controller)
         self.application_page = ApplicationPage(self.controller)
         self.blocks_page = BlocksPage(self.controller)
         self.generate_page = GeneratePage(self.controller)
@@ -1658,10 +2236,12 @@ class SetupWizard(QWizard):
         self.states_page = NamedStatesPage(self.controller)
         # The two-phase MVP flow (Phase A: build the faithful env; Phase B: the app).
         for page in (self.base_page, self.scene_page, self.gen_config_page,
-                     self.mode_page, self.application_page, self.blocks_page,
-                     self.generate_page):
+                     self.mode_page, self.perception_page, self.application_page,
+                     self.blocks_page, self.generate_page):
             self.addPage(page)
         self._scene_pub = None
+        self._camera = None
+        self._camera_topics = None
 
     def live_capture(self):  # pragma: no cover - needs a live ROS session
         """Lazily create the shared LiveCapture reader for the running session."""
@@ -1677,9 +2257,23 @@ class SetupWizard(QWizard):
             self._scene_pub = PlanningScenePublisher()
         return self._scene_pub
 
+    def camera_capture(self, rgb_topic, depth_topic, info_topic):  # pragma: no cover
+        """Lazily create the shared camera reader; recreate it if the topics change."""
+        topics = (rgb_topic, depth_topic, info_topic)
+        if self._camera is not None and self._camera_topics != topics:
+            self._camera.close()
+            self._camera = None
+        if self._camera is None:
+            from ..livesession import LiveCameraCapture
+            self._camera = LiveCameraCapture(rgb_topic, depth_topic, info_topic)
+            self._camera_topics = topics
+        return self._camera
+
     def closeEvent(self, event):  # pragma: no cover - GUI lifecycle
         if self._live is not None:
             self._live.close()
         if self._scene_pub is not None:
             self._scene_pub.close()
+        if self._camera is not None:
+            self._camera.close()
         super().closeEvent(event)

@@ -456,3 +456,61 @@ def test_blocks_page_builds_app_with_wait_and_loop(qapp):
     bp.initializePage()
     rebuilt = [b['kind'] for b in bp.blocks]
     assert rebuilt == ['move', 'gripper', 'wait', 'move', 'gripper', 'reset', 'loop']
+
+
+def test_wizard_vision_flow_offscreen(qapp):
+    """TSA v4: Perception step -> vision app -> Vision block -> generated bundle."""
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    wiz = SetupWizard(ctrl)
+
+    # Step 5 — Perception: tune + save a detector (no live session: form only)
+    pp = wiz.perception_page
+    pp.det_name.setText('cube')
+    pp.p_class.setText('cube')
+    pp.h_lo.setValue(170); pp.h_hi.setValue(10)
+    pp.c_replace.setText('$(find x)/a.xacro')
+    pp.c_with.setText('$(find x)/a_camera.xacro')
+    pp._add_detector()
+    assert pp.validatePage()
+    per = ctrl.project.perception
+    assert per.detectors[0].name == 'cube'
+    assert per.detectors[0].params['h'] == [170, 10]
+    assert per.camera.with_include == '$(find x)/a_camera.xacro'
+
+    # Step 6 — Application: vision app suggested (detectors exist) and applied
+    wiz.application_page.initializePage()
+    assert wiz.application_page.validatePage()
+    assert ctrl.project.application.type.value == 'vision_guided_motion'
+
+    # Step 7 — blocks: two moves + a Vision block feeding the second
+    bp = wiz.blocks_page
+    bp.blocks = [
+        {'kind': 'move', 'name': 'approach', 'target': 'named', 'named': 'ready',
+         'pos': '', 'quat': '0, 0, 0, 1', 'motion': 'ptp', 'planner': '',
+         'speed': 50, 'tol': 0.1, 'check': 'inherit'},
+        {'kind': 'move', 'name': 'pick', 'target': 'tcp', 'pos': '0.5, 0.0, 0.03',
+         'quat': '-0.707, 0.707, 0, 0', 'named': '', 'motion': 'lin', 'planner': 'pilz',
+         'speed': 50, 'tol': 0.1, 'check': 'inherit'},
+        {'kind': 'detect', 'detector': 'cube', 'feeds': 'pick', 'pick_dz': 0.006,
+         'orientation': 'keep', 'approach': 'approach', 'approach_dz': 0.08,
+         'retreat': '', 'retreat_dz': 0.08},
+    ]
+    bp._sync_model()
+    app = ctrl.project.application
+    assert app.waypoint_by_name('pick').vision.dz == 0.006
+    assert app.waypoint_by_name('approach').vision.orientation == 'from:pick'
+
+    # generate: the bundle carries perception.yaml + the vision tree lines
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl.set_project_name('vision_gui_test')
+        ctrl.generate(tmp)
+        appdir = os.path.join(tmp, 'vision_gui_test_app')
+        per_yaml = open(os.path.join(appdir, 'config', 'perception.yaml')).read()
+        assert 'cube' in per_yaml and 'color_mask' in per_yaml
+        tree = open(os.path.join(appdir, 'bt_trees', 'pick_place.xml')).read()
+        assert 'DetectObject detector="cube"' in tree
+        assert 'SetWaypointFromDetection waypoint="approach"' in tree
+        launch = open(os.path.join(appdir, 'launch', 'trainit_bt.launch.py')).read()
+        assert 'detector_node' in launch and 'detector_cube' in launch

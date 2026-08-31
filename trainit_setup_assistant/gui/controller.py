@@ -17,16 +17,21 @@ from ..generator import GenerationManifest, Orchestrator
 from ..model.scene import SceneSpec
 from ..model import (
     BundleSpec,
+    CameraSpec,
     CanonicalProject,
+    DetectorSpec,
     MotionSegment,
     NamedState,
     Payload,
+    PerceptionSpec,
     SceneObject,
     ToolAction,
+    VisionBinding,
     Waypoint,
     load_project,
     save_project,
 )
+from ..model.enums import DetectionMethod
 from ..model.enums import (
     AppType,
     GripperKind,
@@ -449,6 +454,66 @@ class AssistantController:
     def clear_application(self) -> None:
         app = self._require().application
         app.waypoints, app.segments, app.tool_actions, app.sequence = [], [], [], []
+
+    # ---- perception (the dedicated Perception step, TSA v4 / D-015) ----
+    def _perception(self) -> PerceptionSpec:
+        p = self._require()
+        if p.perception is None:
+            p.perception = PerceptionSpec()
+        return p.perception
+
+    def set_camera(self, **fields) -> None:
+        """Upsert the cell camera (topics, frames, variant includes, synthetic cloud)."""
+        per = self._perception()
+        cam = per.camera or CameraSpec()
+        per.camera = cam.model_copy(update={k: v for k, v in fields.items()
+                                            if v is not None})
+
+    def set_perception_timing(self, settle_ms: Optional[int] = None,
+                              detect_timeout_ms: Optional[int] = None) -> None:
+        per = self._perception()
+        if settle_ms is not None:
+            per.settle_ms = max(0, int(settle_ms))
+        if detect_timeout_ms is not None:
+            per.detect_timeout_ms = max(1, int(detect_timeout_ms))
+
+    def upsert_detector(self, name: str, *, method: str = 'color_mask',
+                        params: Optional[dict] = None, continuous: bool = True,
+                        rate_hz: float = 10.0) -> None:
+        """Add or update a named detector (the Perception step's list entries)."""
+        if not name.strip():
+            raise ValueError('detector needs a name')
+        per = self._perception()
+        spec = DetectorSpec(name=name.strip(), method=DetectionMethod(method),
+                            params=dict(params or {}), continuous=continuous,
+                            rate_hz=float(rate_hz))
+        per.detectors = [d for d in per.detectors if d.name != spec.name] + [spec]
+
+    def remove_detector(self, name: str) -> None:
+        per = self._perception()
+        per.detectors = [d for d in per.detectors if d.name != name]
+        for wp in self._require().application.waypoints:
+            if wp.vision is not None and wp.vision.detector == name:
+                wp.vision = None
+
+    def detector_names(self) -> List[str]:
+        p = self._require()
+        return [d.name for d in p.perception.detectors] if p.perception else []
+
+    def bind_vision(self, waypoint: str, detector: str, *, dz: float = 0.0,
+                    orientation: str = 'keep') -> None:
+        """Make a waypoint vision-driven: its position is overwritten at run time
+        from the detector; the captured pose stays as the recorded fallback."""
+        wp = self._require().application.waypoint_by_name(waypoint)
+        if wp is None:
+            raise ValueError(f'no waypoint named "{waypoint}"')
+        wp.vision = VisionBinding(detector=detector, dz=float(dz),
+                                  orientation=orientation)
+
+    def unbind_vision(self, waypoint: str) -> None:
+        wp = self._require().application.waypoint_by_name(waypoint)
+        if wp is not None:
+            wp.vision = None
 
     # ---- scene (S3) ----
     def set_payload(self, obj_id: str, dims, attach_link: Optional[str] = None,

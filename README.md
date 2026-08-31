@@ -49,7 +49,7 @@ colcon build --packages-select trainit_motion_runtime trainit_setup_assistant --
 source install/setup.bash
 ```
 
-## The flow (wizard, 9 steps)
+## The flow (wizard, 10 steps)
 
 **Phase A — build a faithful configuration environment**
 1. **Load the USD scene** — preview robot+EE+objects; missing/cloud assets are flagged
@@ -63,11 +63,19 @@ source install/setup.bash
 6. **Guided bring-up** — the exact commands for your mode (open Isaac → Play → launch …).
 
 **Phase B — configure the application**
-7. **Choose the application type** — *pick-and-place* (blind). Others are on the roadmap.
-8. **Configure it** — capture waypoint poses from RViz, motion type + planner + speed per
-   move, and the **dynamic-object management**: which objects the gripper grasps, per-move
-   attached-collision-check, freeze/gravity on release.
-9. **Generate the bundle** — `<robot>_trainit_config` + `<robot>_app` + `<robot>_description`
+7. **Perception (v4)** — configure the camera and the DETECTORS as named resources:
+   pick a method (colour mask; shape/PCL/custom are roadmap), tune HSV + noise
+   filters LIVE against the running bring-up (the tuner runs the SAME pure
+   `detect()` the bundle will run), capture the centroid, set continuous/on-demand
+   and the post-reset settle time. Skip it for a blind application.
+8. **Choose the application type** — *Blind pick and place* or *Vision guided
+   motion* (the editable sequence with Vision blocks). Others are on the roadmap.
+9. **Configure it** — capture waypoint poses from RViz, motion type + planner + speed per
+   move, the **dynamic-object management** (which objects the gripper grasps, per-move
+   attached-collision-check, freeze/gravity on release), and — for vision — drop a
+   **Vision block** binding a Step-7 detector to the target/approach/retreat waypoints
+   with their dz offsets.
+10. **Generate the bundle** — `<robot>_trainit_config` + `<robot>_app` + `<robot>_description`
    + a README. Build it and run — one command brings up the cell, one runs the app.
 
 ## Running a generated bundle

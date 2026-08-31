@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>trainit_setup_assistant</name>
-  <version>0.0.0</version>
+  <version>4.0.0</version>
   <description>TrainIt Setup Assistant — a GUI + headless generator that produces a
     robot application bundle (description + moveit_config + app) for the TrainIt Motion
     Runtime, the way the MoveIt Setup Assistant produces a moveit_config. Robot- and

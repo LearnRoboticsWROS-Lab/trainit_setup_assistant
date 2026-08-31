@@ -6,7 +6,8 @@ base->tip transform (for waypoint pose capture) from the live session launched b
 works without a sourced ROS environment.
 """
 
+from .camera_capture import LiveCameraCapture
 from .capture import LiveCapture
 from .planning_scene_client import PlanningScenePublisher
 
-__all__ = ['LiveCapture', 'PlanningScenePublisher']
+__all__ = ['LiveCameraCapture', 'LiveCapture', 'PlanningScenePublisher']

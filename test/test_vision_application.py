@@ -209,3 +209,31 @@ def test_camera_rewrite_refuses_double_include():
     both = ('<robot>\n<xacro:include filename="$(find x)/a.xacro" />\n'
             '<xacro:include filename="$(find x)/a_camera.xacro" />\n</robot>\n')
     assert rewrite_camera_include(both, cam) is None
+
+
+# --- D-016 (v4.1): move-level vision, offsets, planner guard --------------------
+
+def test_dx_dy_emitted_only_when_set():
+    p = _project()
+    p.application.waypoint_by_name('pick').vision.dx = 0.01
+    xml = get_application(AppType.VISION_GUIDED_MOTION).build_tree_xml(p)
+    assert ('waypoint="pick" from="detected.cube" dx="0.010" dz="0.006" '
+            'orientation="keep"' in xml)
+    # pre_pick has no dx/dy -> golden-shaped dz-only attributes
+    assert ('waypoint="pre_pick" from="detected.cube" dz="0.080" '
+            'orientation="from:pick"' in xml)
+
+
+def test_validate_flags_ptp_pilz_into_a_vision_goal():
+    from trainit_setup_assistant.model.enums import MotionType, PlannerId
+    p = _project()
+    seg = p.application.segment_for('pick')
+    seg.motion = MotionType.PTP
+    seg.planner = PlannerId.PILZ
+    problems = get_application(AppType.VISION_GUIDED_MOTION).validate(p)
+    assert any('ptp/pilz' in x and 'vision-driven' in x for x in problems)
+
+
+def test_align_policy_gated_by_detector_metadata():
+    d = DetectorSpec(name='cube')
+    assert d.gives_orientation is False        # colour mask: identity only

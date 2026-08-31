@@ -803,6 +803,11 @@ class PerceptionPage(QWizardPage):
                                  'in real the driver publishes it)')
         self.c_cloud.setChecked(True)
         cf.addRow(self.c_cloud)
+        sniff = QPushButton('Sniff live topics')
+        sniff.setToolTip('Read the running ROS graph and fill the image/depth/'
+                         'camera_info topics from what the camera actually publishes.')
+        sniff.clicked.connect(self._sniff_topics)
+        cf.addRow(sniff)
         left.addWidget(cam)
 
         timing = QGroupBox('Timing (cycle rules)')
@@ -858,6 +863,13 @@ class PerceptionPage(QWizardPage):
         self.p_max = QSpinBox(); self.p_max.setRange(1, 20); self.p_max.setValue(1)
         self.p_morph = QSpinBox(); self.p_morph.setRange(0, 15); self.p_morph.setValue(3)
         self.p_win = QSpinBox(); self.p_win.setRange(1, 15); self.p_win.setValue(5)
+        self.p_area.setToolTip('Blobs smaller than this many pixels are ignored '
+                               '(noise floor).')
+        self.p_max.setToolTip('How many objects to report at most, biggest first.')
+        self.p_morph.setToolTip('Morphological open+close kernel (px): removes '
+                                'speckle, closes small holes. 0 = off.')
+        self.p_win.setToolTip('Median window (px) around the centroid when reading '
+                              'Z from the depth image — rescues depth holes.')
         for lbl, w in (('min area px', self.p_area), ('max obj', self.p_max),
                        ('morph', self.p_morph), ('depth win', self.p_win)):
             nrow.addWidget(QLabel(lbl)); nrow.addWidget(w)
@@ -929,6 +941,11 @@ class PerceptionPage(QWizardPage):
         self._timer.timeout.connect(self._tick)
 
     # ---- widgets helpers -----------------------------------------------------
+    def _status(self, msg: str, ok: bool = False) -> None:
+        self.tuner_status.setStyleSheet(
+            'color:#2e7d32; font-weight:bold;' if ok else '')
+        self.tuner_status.setText(('\u2713 ' if ok else '') + msg)
+
     def _slider_row(self, top: int, value: int):
         s = QSlider(Qt.Horizontal)
         s.setRange(0, top)
@@ -1004,7 +1021,9 @@ class PerceptionPage(QWizardPage):
                                  'continuous': self.p_cont.isChecked(),
                                  'rate_hz': self.p_rate.value()}
         self._refresh_list(select=name)
-        self.tuner_status.setText(f'saved detector "{name}"')
+        self._status(f'saved detector "{name}" — it becomes perception.yaml entry, '
+                     f'node detector_{name} and topic /perception/{name}/detections',
+                     ok=True)
 
     def _remove_detector(self) -> None:
         item = self.det_list.currentItem()
@@ -1069,6 +1088,7 @@ class PerceptionPage(QWizardPage):
                 'camera publishing?)')
             return
         rgb, depth_m, K, frame_id = frame
+        self.tuner_status.setStyleSheet('')
         try:
             from trainit_perception.detectors import make_detector
             det = make_detector('color_mask', self._params_from_form())
@@ -1121,12 +1141,31 @@ class PerceptionPage(QWizardPage):
                 [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
                 [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)]])
             p = np.array(pos) + R @ np.array(d.position)
-            self.tuner_status.setText(
+            self._status(
                 f'CAPTURED centroid: optical ({d.position[0]:.4f}, {d.position[1]:.4f}, '
                 f'{d.position[2]:.4f}) -> {base} ({p[0]:.4f}, {p[1]:.4f}, {p[2]:.4f}) m. '
-                f'Bind this detector to a waypoint in Step 7 (Vision block).')
+                f'Pick this detector on a Move block in Step 7 (Camera guidance).',
+                ok=True)
         except Exception as exc:  # noqa: BLE001
             self.tuner_status.setText(f'TF {base} -> {optical} failed: {exc}')
+
+    def _sniff_topics(self):  # pragma: no cover - needs a live ROS session
+        try:
+            from ..livesession.camera_capture import sniff_camera_topics
+            found = sniff_camera_topics()
+        except Exception as exc:  # noqa: BLE001
+            self._status(f'sniff failed: {exc}')
+            return
+        if not found:
+            self._status('no image topics found — is the bring-up (or the camera) '
+                         'publishing?')
+            return
+        for key, widget in (('rgb', self.c_rgb), ('depth', self.c_depth),
+                            ('camera_info', self.c_info)):
+            if found.get(key):
+                widget.setText(found[key])
+        self._status('topics filled from the live graph: '
+                     + ', '.join(v for v in found.values() if v), ok=True)
 
     # ---- lifecycle -----------------------------------------------------------
     def initializePage(self) -> None:
@@ -1584,10 +1623,14 @@ _BLOCK_META = {
     'move':    ('\U0001F9BE', '#1565c0', 'Move (robot)'),
     'gripper': ('✊',     '#2e7d32', 'Gripper'),
     'reset':   ('♻',     '#2e7d32', 'Reset scene'),
-    'detect':  ('\U0001F4F7', '#6a1b9a', 'Vision detect'),
     'wait':    ('⏱',     '#ef6c00', 'Wait'),
     'loop':    ('\U0001F501', '#ef6c00', 'Loop'),
 }
+
+# D-016: vision is a PROPERTY of the Move block (a detector dropdown on its
+# inspector), not a block of its own — the sequence shows an automatic read-only
+# "detect" row at cycle start instead. Policy labels <-> model orientation tokens:
+_VORI_KEEP, _VORI_SAME, _VORI_ALIGN = 0, 1, 2
 
 
 class DeploymentDialog(QDialog):
@@ -1657,9 +1700,12 @@ class BlocksPage(QWizardPage):
         pal.addWidget(QLabel('Layer 2 — Gripper / objects'))
         pal.addWidget(pal_btn('gripper', 'Gripper'))
         pal.addWidget(pal_btn('reset', 'Reset scene (sim)'))
-        pal.addWidget(QLabel('Layer 3 — Vision'))
-        pal.addWidget(pal_btn('detect', 'Vision (camera + detection)'))
-        pal.addWidget(QLabel('Layer 4 — Process'))
+        note = QLabel('Vision lives on the MOVE block: pick a detector in its '
+                      'properties and the waypoint is guided by the camera.')
+        note.setWordWrap(True)
+        note.setStyleSheet('color:#6a1b9a;')
+        pal.addWidget(note)
+        pal.addWidget(QLabel('Layer 3 — Process'))
         pal.addWidget(pal_btn('wait', 'Wait / delay'))
         pal.addWidget(pal_btn('loop', 'Loop sequence'))
         pal.addWidget(QLabel('Roadmap'))
@@ -1680,6 +1726,13 @@ class BlocksPage(QWizardPage):
         # ---- centre: the sequence -------------------------------------------
         mid = QVBoxLayout()
         mid.addWidget(QLabel('<b>Sequence</b> (drag to reorder)'))
+        # automatic detect row (D-016): shows WHEN the camera fires without the
+        # user managing a block — the detection is always emitted at cycle start.
+        self.auto_detect = QLabel('')
+        self.auto_detect.setWordWrap(True)
+        self.auto_detect.setStyleSheet('color:#6a1b9a; font-weight:bold;')
+        self.auto_detect.setVisible(False)
+        mid.addWidget(self.auto_detect)
         self.seq = QListWidget()
         self.seq.setDragDropMode(QAbstractItemView.InternalMove)
         self.seq.currentRowChanged.connect(self._on_select)
@@ -1703,7 +1756,6 @@ class BlocksPage(QWizardPage):
         self.stack.addWidget(self._wait_form())      # 3
         self.stack.addWidget(self._loop_form())      # 4
         self.stack.addWidget(self._reset_form())     # 5
-        self.stack.addWidget(self._detect_form())    # 6
         insp.addWidget(self.stack, 1)
         apply_btn = QPushButton('Apply to block')
         apply_btn.clicked.connect(self.apply_inspector)
@@ -1760,7 +1812,79 @@ class BlocksPage(QWizardPage):
         self.m_check.setToolTip('Held-payload collision check for THIS move: ON when the '
                                 'carried objects must avoid the static meshes.')
         f.addRow('Attached collision check', self.m_check)
+
+        # --- camera guidance (D-016): take what the detector sees, TF2 it into the
+        # base frame, and the EEF goes there — this move's POSITION comes from the
+        # detection at run time; the pose above stays as the recorded fallback.
+        f.addRow(QLabel('<b>Camera guidance</b>'))
+        self.m_detector = QComboBox()
+        self.m_detector.setToolTip('The Step-5 detector that feeds this move. '
+                                   '(none) = a normal taught waypoint.')
+        f.addRow('Guided by camera', self.m_detector)
+        offrow = QHBoxLayout()
+        self.m_dx = QDoubleSpinBox(); self.m_dy = QDoubleSpinBox()
+        self.m_dz = QDoubleSpinBox()
+        for sb in (self.m_dx, self.m_dy, self.m_dz):
+            sb.setRange(-1.0, 1.0); sb.setDecimals(3); sb.setSingleStep(0.005)
+        self.m_dz.setToolTip('Offset above the DETECTED point (the visible top '
+                             'face): the tool standoff. Base-frame axes.')
+        for lbl, sb in (('dx', self.m_dx), ('dy', self.m_dy), ('dz', self.m_dz)):
+            offrow.addWidget(QLabel(lbl)); offrow.addWidget(sb)
+        f.addRow('Offset from detection (m)', offrow)
+        self.m_vori = QComboBox()
+        self.m_vori.addItems(['keep the taught orientation',
+                              'same as waypoint…',
+                              'align to detected object'])
+        f.addRow('EEF orientation', self.m_vori)
+        self.m_vori_ref = QComboBox()
+        f.addRow('…same as', self.m_vori_ref)
         return w
+
+    def _fill_move_vision(self, b: dict) -> None:
+        """Populate the Camera-guidance widgets for the selected move block."""
+        names = []
+        try:
+            names = self.ctrl.detector_names()
+        except Exception:  # noqa: BLE001
+            pass
+        self.m_detector.blockSignals(True)
+        self.m_detector.clear()
+        self.m_detector.addItem('(none)')
+        self.m_detector.addItems(names)
+        want = b.get('detector', '')
+        self.m_detector.setCurrentText(want if want in names else '(none)')
+        self.m_detector.blockSignals(False)
+        self.m_dx.setValue(float(b.get('vdx', 0.0)))
+        self.m_dy.setValue(float(b.get('vdy', 0.0)))
+        self.m_dz.setValue(float(b.get('vdz', 0.0)))
+        moves = [x['name'] for x in self.blocks
+                 if x['kind'] == 'move' and x['name'] != b.get('name')]
+        self.m_vori_ref.blockSignals(True)
+        self.m_vori_ref.clear()
+        self.m_vori_ref.addItems(moves or [''])
+        ref = b.get('vori_ref', '')
+        if ref in moves:
+            self.m_vori_ref.setCurrentText(ref)
+        self.m_vori_ref.blockSignals(False)
+        self.m_vori.setCurrentIndex({'keep': _VORI_KEEP, 'same': _VORI_SAME,
+                                     'align': _VORI_ALIGN}.get(b.get('vori', 'keep'),
+                                                               _VORI_KEEP))
+        # "align to detected object" only when the detector gives an orientation
+        # (a colour mask / 3D-only detector publishes identity — object-relative
+        # grasping is the future learned-policy path, D-016)
+        gives = False
+        try:
+            per = self.ctrl.project.perception
+            d = per.detector_by_name(want) if per else None
+            gives = bool(d and d.gives_orientation)
+        except Exception:  # noqa: BLE001
+            pass
+        item = self.m_vori.model().item(_VORI_ALIGN)
+        item.setEnabled(gives)
+        item.setToolTip('' if gives else
+                        'This detector publishes no object orientation (3D-only). '
+                        'Object-relative grasping will come from a learned grasp '
+                        'policy (roadmap).')
 
     def _gripper_form(self) -> QWidget:
         w = QWidget()
@@ -1786,83 +1910,15 @@ class BlocksPage(QWizardPage):
         f.addRow('Pause', self.w_ms)
         return w
 
-    def _detect_form(self) -> QWidget:
-        w = QWidget()
-        f = QFormLayout(w)
-        self.d_detector = QComboBox()
-        self.d_detector.setEditable(False)
-        f.addRow('Detector (Step 5)', self.d_detector)
-        self.d_feeds = QComboBox()
-        f.addRow('Feeds waypoint', self.d_feeds)
-        self.d_pick_dz = QDoubleSpinBox()
-        self.d_pick_dz.setRange(-1.0, 1.0); self.d_pick_dz.setDecimals(3)
-        self.d_pick_dz.setSingleStep(0.001); self.d_pick_dz.setValue(0.006)
-        self.d_pick_dz.setToolTip('Offset above the DETECTED point (the detection is '
-                                  'the visible TOP face): tool standoff at the target')
-        f.addRow('Target dz (m)', self.d_pick_dz)
-        self.d_orient = QComboBox()
-        self.d_orient.addItems(['keep (the waypoint\'s own)', 'detected'])
-        f.addRow('Target orientation', self.d_orient)
-        self.d_approach = QComboBox()
-        f.addRow('Approach waypoint', self.d_approach)
-        self.d_approach_dz = QDoubleSpinBox()
-        self.d_approach_dz.setRange(0.0, 1.0); self.d_approach_dz.setDecimals(3)
-        self.d_approach_dz.setSingleStep(0.005); self.d_approach_dz.setValue(0.08)
-        f.addRow('Approach dz (m)', self.d_approach_dz)
-        self.d_retreat = QComboBox()
-        f.addRow('Retreat waypoint', self.d_retreat)
-        self.d_retreat_dz = QDoubleSpinBox()
-        self.d_retreat_dz.setRange(0.0, 1.0); self.d_retreat_dz.setDecimals(3)
-        self.d_retreat_dz.setSingleStep(0.005); self.d_retreat_dz.setValue(0.08)
-        f.addRow('Retreat dz (m)', self.d_retreat_dz)
-        note = QLabel('The detection runs at the TOP of every cycle (wherever this '
-                      'block sits) and OVERWRITES the bound waypoints\' positions; '
-                      'their captured poses stay as fallback. The approach waypoint '
-                      'borrows the target\'s orientation (from:<target>), so a '
-                      'joint-taught approach is promoted to a tcp goal. With a Reset '
-                      'scene in the loop the settle pause from Step 5 is emitted '
-                      'automatically after it.')
-        note.setWordWrap(True)
-        f.addRow(note)
-        return w
-
-    def _fill_detect_form(self, b: dict) -> None:
-        moves = [x['name'] for x in self.blocks if x['kind'] == 'move']
-        for combo, key, optional in ((self.d_feeds, 'feeds', False),
-                                     (self.d_approach, 'approach', True),
-                                     (self.d_retreat, 'retreat', True)):
-            combo.blockSignals(True)
-            combo.clear()
-            if optional:
-                combo.addItem('(none)')
-            combo.addItems(moves)
-            want = b.get(key, '')
-            combo.setCurrentText(want if want in moves else ('(none)' if optional else
-                                                             (moves[0] if moves else '')))
-            combo.blockSignals(False)
-        self.d_detector.blockSignals(True)
-        self.d_detector.clear()
-        names = []
-        try:
-            names = self.ctrl.detector_names()
-        except Exception:  # noqa: BLE001
-            pass
-        self.d_detector.addItems(names or ['(configure one in Step 5)'])
-        if b.get('detector') in names:
-            self.d_detector.setCurrentText(b['detector'])
-        self.d_detector.blockSignals(False)
-        self.d_pick_dz.setValue(float(b.get('pick_dz', 0.006)))
-        self.d_orient.setCurrentIndex(1 if b.get('orientation') == 'detected' else 0)
-        self.d_approach_dz.setValue(float(b.get('approach_dz', 0.08)))
-        self.d_retreat_dz.setValue(float(b.get('retreat_dz', 0.08)))
-
     def _reset_form(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
         note = QLabel('Puts every DYNAMIC object back at its initial (scene.yaml) pose — '
                       'the cycle boundary of a looping app in SIMULATION: the next cycle '
                       'picks where cycle 1 did. Detaches anything still held. In Isaac the '
-                      'adapter is signalled on /isaac_scene_reset. No parameters.')
+                      'adapter is signalled on /isaac_scene_reset. No parameters. '
+                      'With camera-guided moves in the loop, the Step-5 settle pause is '
+                      'emitted automatically after the reset.')
         note.setWordWrap(True)
         v.addWidget(note)
         v.addStretch(1)
@@ -1905,12 +1961,11 @@ class BlocksPage(QWizardPage):
         defaults = {
             'move':    {'kind': 'move', 'name': f'move_{sum(1 for b in self.blocks if b["kind"] == "move") + 1}',
                         'target': 'named', 'named': '', 'pos': '', 'quat': '0, 0, 0, 1',
-                        'motion': 'ptp', 'planner': '', 'speed': 50, 'tol': 0.1, 'check': 'inherit'},
+                        'motion': 'ptp', 'planner': '', 'speed': 50, 'tol': 0.1, 'check': 'inherit',
+                        'detector': '', 'vdx': 0.0, 'vdy': 0.0, 'vdz': 0.0,
+                        'vori': 'keep', 'vori_ref': ''},
             'gripper': {'kind': 'gripper', 'action': 'close', 'payload': ''},
             'reset':   {'kind': 'reset'},
-            'detect':  {'kind': 'detect', 'detector': '', 'feeds': '', 'pick_dz': 0.006,
-                        'orientation': 'keep', 'approach': '', 'approach_dz': 0.08,
-                        'retreat': '', 'retreat_dz': 0.08},
             'wait':    {'kind': 'wait', 'ms': 500},
             'loop':    {'kind': 'loop', 'cycles': -1},
         }[kind]
@@ -1945,12 +2000,10 @@ class BlocksPage(QWizardPage):
             self.stack.setCurrentIndex(0)
             return
         b = self.blocks[row]
-        idx = {'move': 1, 'gripper': 2, 'wait': 3, 'loop': 4, 'reset': 5,
-               'detect': 6}[b['kind']]
+        idx = {'move': 1, 'gripper': 2, 'wait': 3, 'loop': 4, 'reset': 5}[b['kind']]
         self.stack.setCurrentIndex(idx)
-        if b['kind'] == 'detect':
-            self._fill_detect_form(b)
         if b['kind'] == 'move':
+            self._fill_move_vision(b)
             self.m_name.setText(b['name'])
             self.m_target.setCurrentIndex(0 if b['target'] == 'named' else 1)
             self.m_named.setText(b['named'])
@@ -1979,6 +2032,10 @@ class BlocksPage(QWizardPage):
             return
         b = self.blocks[row]
         if b['kind'] == 'move':
+            det = self.m_detector.currentText()
+            det = '' if det.startswith('(') else det
+            vori = {_VORI_KEEP: 'keep', _VORI_SAME: 'same',
+                    _VORI_ALIGN: 'align'}[self.m_vori.currentIndex()]
             b.update(name=self.m_name.text().strip() or b['name'],
                      target='named' if self.m_target.currentIndex() == 0 else 'tcp',
                      named=self.m_named.text().strip(),
@@ -1986,24 +2043,22 @@ class BlocksPage(QWizardPage):
                      motion=self.m_motion.currentText(),
                      planner=self.m_planner.currentText(),
                      speed=self.m_speed.value(), tol=self.m_tol.value(),
-                     check=self.m_check.currentText())
+                     check=self.m_check.currentText(),
+                     detector=det, vdx=self.m_dx.value(), vdy=self.m_dy.value(),
+                     vdz=self.m_dz.value(), vori=vori,
+                     vori_ref=self.m_vori_ref.currentText().strip())
+            # a vision goal lands anywhere: the travel into it must be
+            # collision-aware, so default ptp/pilz away when the camera takes over
+            if det and b['motion'] == 'ptp' and b['planner'] in ('', 'pilz'):
+                b.update(motion='free', planner='ompl')
+                self.status.setText(f"'{b['name']}': motion set to free/OMPL — a "
+                                    'vision-driven move needs a collision-aware '
+                                    'planner (Pilz PTP cannot avoid the camera).')
         elif b['kind'] == 'gripper':
             b.update(action=('close', 'open', 'attach', 'detach')[self.g_action.currentIndex()],
                      payload=self.g_payload.text().strip())
         elif b['kind'] == 'wait':
             b.update(ms=self.w_ms.value())
-        elif b['kind'] == 'detect':
-            det = self.d_detector.currentText()
-            approach = self.d_approach.currentText()
-            retreat = self.d_retreat.currentText()
-            b.update(detector='' if det.startswith('(') else det,
-                     feeds=self.d_feeds.currentText(),
-                     pick_dz=self.d_pick_dz.value(),
-                     orientation='detected' if self.d_orient.currentIndex() == 1 else 'keep',
-                     approach='' if approach == '(none)' else approach,
-                     approach_dz=self.d_approach_dz.value(),
-                     retreat='' if retreat == '(none)' else retreat,
-                     retreat_dz=self.d_retreat_dz.value())
         elif b['kind'] == 'loop':
             to = self.l_to.currentText()
             b.update(cycles=-1 if self.l_forever.isChecked() else self.l_cycles.value(),
@@ -2047,9 +2102,13 @@ class BlocksPage(QWizardPage):
         if b['kind'] == 'move':
             tgt = b['named'] or b['name'] if b['target'] == 'named' else 'tcp pose'
             chk = '' if b['check'] == 'inherit' else f"  · chk {b['check'].upper()}"
+            cam = ''
+            if b.get('detector'):
+                cam = (f"  · \U0001F4F7 {b['detector']}"
+                       f" +{b.get('vdz', 0.0) * 1000:.0f}mm")
             return (f"{b['name']}   [{b['motion']}"
                     f"{('/' + b['planner']) if b['planner'] else ''} {b['speed']}%]"
-                    f"  → {tgt}{chk}")
+                    f"  → {tgt}{chk}{cam}")
         if b['kind'] == 'gripper':
             names = {'close': 'CLOSE (grasp)', 'open': 'OPEN (release)',
                      'attach': f"ATTACH {b.get('payload', '')}",
@@ -2057,12 +2116,6 @@ class BlocksPage(QWizardPage):
             return f"Gripper {names[b['action']]}"
         if b['kind'] == 'reset':
             return 'Reset scene → initial poses (sim)'
-        if b['kind'] == 'detect':
-            det = b.get('detector') or '?'
-            feeds = b.get('feeds') or '?'
-            extras = [n for n in (b.get('approach'), b.get('retreat')) if n]
-            more = f" (+{', '.join(extras)})" if extras else ''
-            return f"Vision: {det} → {feeds}{more}"
         if b['kind'] == 'wait':
             return f"Wait {b['ms']} ms"
         times = 'forever' if b['cycles'] == -1 else f"{b['cycles']}×"
@@ -2101,6 +2154,13 @@ class BlocksPage(QWizardPage):
         self.seq.blockSignals(False)
         if 0 <= select < self.seq.count():
             self.seq.setCurrentRow(select)
+        dets = sorted({b['detector'] for b in self.blocks
+                       if b['kind'] == 'move' and b.get('detector')})
+        if dets:
+            self.auto_detect.setText(
+                '\U0001F4F7 Detect ' + ', '.join(dets) + ' — automatic, at cycle '
+                'start; after a Reset scene the Step-5 settle pause is emitted.')
+        self.auto_detect.setVisible(bool(dets))
         self._sync_model()
 
     def _sync_model(self) -> None:
@@ -2114,7 +2174,7 @@ class BlocksPage(QWizardPage):
         waits: Dict[str, int] = {}
         loop = 0
         loop_from = loop_to = None
-        detects = []
+        bindings = []                 # (waypoint, detector, dx, dy, dz, orientation)
         warn = ''
         for b in self.blocks:
             if b['kind'] == 'move':
@@ -2136,6 +2196,19 @@ class BlocksPage(QWizardPage):
                         kwargs['orientation'] = _parse_floats(b['quat'])
                     ctrl.add_move(**kwargs)
                     prev_move = b['name']
+                    if b.get('detector'):
+                        vori = b.get('vori', 'keep')
+                        ref = b.get('vori_ref', '')
+                        if vori == 'same' and ref:
+                            orientation = f'from:{ref}'
+                        elif vori == 'align':
+                            orientation = 'detected'
+                        else:
+                            orientation = 'keep'
+                        bindings.append((b['name'], b['detector'],
+                                         float(b.get('vdx', 0.0)),
+                                         float(b.get('vdy', 0.0)),
+                                         float(b.get('vdz', 0.0)), orientation))
                 except Exception:  # noqa: BLE001 - incomplete block, keep editing
                     warn = f"block '{b['name']}': incomplete target (set pose or named state)"
             elif b['kind'] == 'gripper':
@@ -2150,8 +2223,6 @@ class BlocksPage(QWizardPage):
                     warn = 'a Reset scene block needs a Move before it'
                     continue
                 ctrl.add_tool_action(prev_move, 'reset_scene')
-            elif b['kind'] == 'detect':
-                detects.append(b)             # bindings applied AFTER the moves exist
             elif b['kind'] == 'wait':
                 if prev_move is None:
                     warn = 'a Wait block needs a Move before it'
@@ -2167,23 +2238,12 @@ class BlocksPage(QWizardPage):
         for wp, ms in waits.items():
             ctrl.set_wait_after(wp, ms)
         ctrl.set_loop(loop, start=loop_from, end=loop_to)
-        # vision bindings: the detection is emitted at cycle start by the template;
-        # the block's role is WHICH detector feeds WHICH waypoints, with offsets.
-        for b in detects:
-            det = b.get('detector')
-            feeds = b.get('feeds')
-            if not det or not feeds:
-                warn = 'a Vision block needs a detector (Step 5) and a target waypoint'
-                continue
+        # vision bindings (D-016): applied AFTER the moves exist; the detection
+        # itself is emitted automatically at cycle start by the application template.
+        for name, det, dx, dy, dz, orientation in bindings:
             try:
-                ctrl.bind_vision(feeds, det, dz=float(b['pick_dz']),
-                                 orientation=b.get('orientation', 'keep'))
-                if b.get('approach'):
-                    ctrl.bind_vision(b['approach'], det, dz=float(b['approach_dz']),
-                                     orientation=f'from:{feeds}')
-                if b.get('retreat'):
-                    ctrl.bind_vision(b['retreat'], det, dz=float(b['retreat_dz']),
-                                     orientation='keep')
+                ctrl.bind_vision(name, det, dx=dx, dy=dy, dz=dz,
+                                 orientation=orientation)
             except Exception as exc:  # noqa: BLE001 - dangling names while editing
                 warn = f'vision binding: {exc}'
         self.status.setText(warn)
@@ -2216,7 +2276,19 @@ class BlocksPage(QWizardPage):
                                      else ('on' if seg.attached_collision_check else 'off')),
                            'role': wp.role.value,
                            'aux': (list(seg.aux) if seg and seg.aux else None),
-                           'aux_is_center': (seg.aux_is_center if seg else False)})
+                           'aux_is_center': (seg.aux_is_center if seg else False),
+                           'detector': (wp.vision.detector if wp.vision else ''),
+                           'vdx': (wp.vision.dx if wp.vision else 0.0),
+                           'vdy': (wp.vision.dy if wp.vision else 0.0),
+                           'vdz': (wp.vision.dz if wp.vision else 0.0),
+                           'vori': ('align' if wp.vision and wp.vision.orientation == 'detected'
+                                    else ('same' if wp.vision and
+                                          wp.vision.orientation.startswith('from:')
+                                          else 'keep')),
+                           'vori_ref': (wp.vision.orientation.split(':', 1)[1]
+                                        if wp.vision and
+                                        wp.vision.orientation.startswith('from:')
+                                        else '')})
             acts = app.actions_at(name)
             for act in acts:
                 if act.kind.value == 'reset_scene':
@@ -2245,32 +2317,6 @@ class BlocksPage(QWizardPage):
                 blocks.insert(idx, lb)
             else:
                 blocks.append(lb)
-        # rebuild the Vision blocks from the waypoint bindings (reopen path). The
-        # canonical model stores per-waypoint bindings; a block groups one detector's
-        # bindings back into target/approach/retreat by their orientation policy.
-        by_det: Dict[str, list] = {}
-        for wp in app.waypoints:
-            if wp.vision is not None:
-                by_det.setdefault(wp.vision.detector, []).append(wp)
-        for det, wps in by_det.items():
-            block = {'kind': 'detect', 'detector': det, 'feeds': '', 'pick_dz': 0.006,
-                     'orientation': 'keep', 'approach': '', 'approach_dz': 0.08,
-                     'retreat': '', 'retreat_dz': 0.08}
-            rest = []
-            for wp in wps:
-                if wp.vision.orientation.startswith('from:'):
-                    block['approach'], block['approach_dz'] = wp.name, wp.vision.dz
-                else:
-                    rest.append(wp)
-            if rest:
-                feeds_wp = min(rest, key=lambda w: w.vision.dz)
-                block['feeds'] = feeds_wp.name
-                block['pick_dz'] = feeds_wp.vision.dz
-                block['orientation'] = feeds_wp.vision.orientation
-                left = [w for w in rest if w.name != feeds_wp.name]
-                if left:
-                    block['retreat'], block['retreat_dz'] = left[0].name, left[0].vision.dz
-            blocks.insert(0, block)
         self.blocks = blocks
         self._refresh()
 

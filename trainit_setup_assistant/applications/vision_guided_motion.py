@@ -68,7 +68,7 @@ class VisionGuidedMotion(PickAndPlace):
                     'generated tree only consumes the continuous stream — every '
                     'DetectObject would time out. Enable continuous, or add your own '
                     'Trigger caller.')
-        from ..model.enums import DetectionMethod
+        from ..model.enums import DetectionMethod, MotionType, PlannerId
         for wp in bound:
             d = per.detector_by_name(wp.vision.detector)
             if (d is not None and wp.vision.orientation == 'detected'
@@ -78,6 +78,19 @@ class VisionGuidedMotion(PickAndPlace):
                     'detector — a colour mask publishes an identity orientation, which '
                     'after TF becomes the camera-to-base rotation: an arbitrary TCP '
                     'orientation. Use "keep" or "from:<waypoint>".')
+            # D-016 (found live): Pilz PTP is a blind joint interpolation — it swept
+            # the wrist through the camera on the way to a vision-computed approach.
+            # A vision goal lands anywhere, so the travel INTO it must be
+            # collision-aware.
+            seg = project.application.segment_for(wp.name)
+            if seg is not None and seg.motion is MotionType.PTP:
+                planner = seg.planner or project.application.global_planner_mode
+                if planner is PlannerId.PILZ:
+                    problems.append(
+                        f'waypoint "{wp.name}" is vision-driven but reached with '
+                        'ptp/pilz — a blind joint interpolation that cannot avoid '
+                        'obstacles (it hit the camera on the reference cell). Use '
+                        'motion "free" with OMPL for the travel into a vision goal.')
         return problems
 
     # --- tree hooks -------------------------------------------------------------
@@ -101,9 +114,12 @@ class VisionGuidedMotion(PickAndPlace):
                 f'timeout_ms="{per.detect_timeout_ms}" out_key="{out_key}"/>')
             for wp in waypoints:
                 b = wp.vision
+                # dx/dy only when set, so the golden (dz-only) stays byte-stable
+                offsets = ''.join(f'{k}="{v:.3f}" ' for k, v in
+                                  (('dx', b.dx), ('dy', b.dy)) if v != 0.0)
                 lines.append(
                     f'{indent}<SetWaypointFromDetection waypoint="{wp.name}" '
-                    f'from="{out_key}" dz="{b.dz:.3f}" '
+                    f'from="{out_key}" {offsets}dz="{b.dz:.3f}" '
                     f'orientation="{b.orientation}"/>')
         return lines
 

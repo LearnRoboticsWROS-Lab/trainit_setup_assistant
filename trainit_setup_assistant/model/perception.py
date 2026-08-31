@@ -70,6 +70,14 @@ class DetectorSpec(BaseModel):
         return str(self.params.get('class_id', 'object'))
 
     @property
+    def gives_orientation(self) -> bool:
+        """Whether this detector publishes a REAL object orientation. A colour mask
+        (and any 3D-only method) cannot — it publishes identity — so the GUI greys
+        the "align to detected object" policy for it (D-016). Becomes method
+        metadata when 6-DoF methods (fiducial/PCL/learned) land."""
+        return False
+
+    @property
     def emits_node(self) -> bool:
         """True when the assistant generates a detector_node for this method — only
         the pure-python methods the runtime registry actually knows. CUSTOM and
@@ -80,7 +88,9 @@ class DetectorSpec(BaseModel):
 
 
 class VisionBinding(BaseModel):
-    """Binds a waypoint to a detector: SetWaypointFromDetection, as data.
+    """Binds a waypoint to a detector: SetWaypointFromDetection, as data (D-016:
+    vision is a PROPERTY of the Move — the waypoint's position comes from the
+    detection at run time; the captured pose stays as the recorded fallback).
 
     ``orientation``: ``keep`` (the waypoint's own), ``detected``, ``from:<waypoint>``
     (borrow another waypoint's orientation — how a joint-named approach pose is
@@ -88,7 +98,9 @@ class VisionBinding(BaseModel):
     """
 
     detector: str
-    dz: float = 0.0                             # metres, along base-frame Z
+    dx: float = 0.0                             # metres, base-frame axes (D-016)
+    dy: float = 0.0
+    dz: float = 0.0
     orientation: str = 'keep'
 
 

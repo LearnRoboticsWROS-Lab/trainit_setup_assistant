@@ -514,15 +514,17 @@ class AssistantController:
         p = self._require()
         return [d.name for d in p.perception.detectors] if p.perception else []
 
-    def bind_vision(self, waypoint: str, detector: str, *, dz: float = 0.0,
+    def bind_vision(self, waypoint: str, detector: str, *, dx: float = 0.0,
+                    dy: float = 0.0, dz: float = 0.0,
                     orientation: str = 'keep') -> None:
         """Make a waypoint vision-driven: its position is overwritten at run time
-        from the detector; the captured pose stays as the recorded fallback."""
+        from the detector (+ base-frame offsets); the captured pose stays as the
+        recorded fallback."""
         wp = self._require().application.waypoint_by_name(waypoint)
         if wp is None:
             raise ValueError(f'no waypoint named "{waypoint}"')
-        wp.vision = VisionBinding(detector=detector, dz=float(dz),
-                                  orientation=orientation)
+        wp.vision = VisionBinding(detector=detector, dx=float(dx), dy=float(dy),
+                                  dz=float(dz), orientation=orientation)
 
     def unbind_vision(self, waypoint: str) -> None:
         wp = self._require().application.waypoint_by_name(waypoint)

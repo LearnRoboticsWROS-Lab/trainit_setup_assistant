@@ -108,8 +108,8 @@ control, no online servo yet.
 
 **Done (v3/v4):** the two-phase 8-page wizard (`gui/`), and — v4.0.0 (D-015) —
 the dedicated **Perception step** (live HSV tuner running trainit_perception's pure
-`detect()`, noise filters, continuous/on-demand trigger, settle) + the **Vision
-block** binding detectors to waypoints + the vision emitters (perception.yaml,
+`detect()`, noise filters, continuous/on-demand trigger, settle) + camera guidance as a MOVE property (v4.1/D-016: detector dropdown +
+dx/dy/dz + EEF-orientation policy on the Move inspector; automatic detect row) + the vision emitters (perception.yaml,
 detector_node, depth_image_proc isaac branch, camera-variant URDF/SRDF rewrite).
 
 **Next:**

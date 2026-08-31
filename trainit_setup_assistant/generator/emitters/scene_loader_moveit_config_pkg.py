@@ -97,7 +97,11 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         # driver publishes it (depth_image_proc, isaac branch only); in real the
         # driver already provides points_topic.
         camera_cloud = None
-        if camera is not None and camera.synthetic_cloud_in_sim:
+        # dedupe (D-016 backlog): a hand-adapted base bring-up may already carry the
+        # cloud node — captured into deployment.bridges at Step 1. Emitting the
+        # template block too would run the same node twice on the same topic.
+        cloud_bridge = any(b.package == 'depth_image_proc' for b in dep.bridges)
+        if camera is not None and camera.synthetic_cloud_in_sim and not cloud_bridge:
             camera_cloud = {'rgb': camera.rgb_topic,
                             'camera_info': camera.camera_info_topic,
                             'depth': camera.depth_topic,

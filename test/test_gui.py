@@ -484,23 +484,28 @@ def test_wizard_vision_flow_offscreen(qapp):
     assert wiz.application_page.validatePage()
     assert ctrl.project.application.type.value == 'vision_guided_motion'
 
-    # Step 7 — blocks: two moves + a Vision block feeding the second
+    # Step 7 — blocks (D-016): vision is a PROPERTY of the Move block
     bp = wiz.blocks_page
     bp.blocks = [
         {'kind': 'move', 'name': 'approach', 'target': 'named', 'named': 'ready',
-         'pos': '', 'quat': '0, 0, 0, 1', 'motion': 'ptp', 'planner': '',
-         'speed': 50, 'tol': 0.1, 'check': 'inherit'},
+         'pos': '', 'quat': '0, 0, 0, 1', 'motion': 'free', 'planner': 'ompl',
+         'speed': 50, 'tol': 0.1, 'check': 'inherit',
+         'detector': 'cube', 'vdx': 0.0, 'vdy': 0.0, 'vdz': 0.08,
+         'vori': 'same', 'vori_ref': 'pick'},
         {'kind': 'move', 'name': 'pick', 'target': 'tcp', 'pos': '0.5, 0.0, 0.03',
          'quat': '-0.707, 0.707, 0, 0', 'named': '', 'motion': 'lin', 'planner': 'pilz',
-         'speed': 50, 'tol': 0.1, 'check': 'inherit'},
-        {'kind': 'detect', 'detector': 'cube', 'feeds': 'pick', 'pick_dz': 0.006,
-         'orientation': 'keep', 'approach': 'approach', 'approach_dz': 0.08,
-         'retreat': '', 'retreat_dz': 0.08},
+         'speed': 50, 'tol': 0.1, 'check': 'inherit',
+         'detector': 'cube', 'vdx': 0.01, 'vdy': 0.0, 'vdz': 0.006,
+         'vori': 'keep', 'vori_ref': ''},
     ]
     bp._sync_model()
     app = ctrl.project.application
     assert app.waypoint_by_name('pick').vision.dz == 0.006
+    assert app.waypoint_by_name('pick').vision.dx == 0.01
     assert app.waypoint_by_name('approach').vision.orientation == 'from:pick'
+    # the automatic detect row is visible and names the detector
+    bp._refresh()
+    assert bp.auto_detect.isVisible() or 'cube' in bp.auto_detect.text()
 
     # generate: the bundle carries perception.yaml + the vision tree lines
     with tempfile.TemporaryDirectory() as tmp:

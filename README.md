@@ -73,8 +73,10 @@ source install/setup.bash
 7. **Application blocks** — capture waypoint poses from RViz, motion type + planner +
    speed per move, the **dynamic-object management** (which objects the gripper
    grasps, per-move attached-collision-check, freeze/gravity on release), and — for
-   vision — drop a **Vision block** binding a Step-5 detector to the
-   target/approach/retreat waypoints with their dz offsets.
+   vision (v4.1, D-016) — set **"Guided by camera"** on any Move block: pick a Step-5
+   detector and the waypoint's position comes from the detection at run time
+   (dx/dy/dz offsets, EEF-orientation policy); the sequence shows the automatic
+   "detect at cycle start" row.
 8. **Generate the bundle** — `<robot>_trainit_config` + `<robot>_app` +
    `<robot>_description` + a README. Build it and run — one command brings up the
    cell, one runs the app.

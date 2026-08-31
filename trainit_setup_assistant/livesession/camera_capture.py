@@ -137,3 +137,45 @@ class LiveCameraCapture:
 
     def __exit__(self, *exc):
         self.close()
+
+
+def sniff_camera_topics(timeout_s: float = 2.0) -> dict:
+    """One-shot read of the live ROS graph: find the camera's rgb/depth/camera_info
+    topics by TYPE (sensor_msgs Image/CameraInfo) and NAME heuristics (depth vs
+    color). Returns {'rgb': ..., 'depth': ..., 'camera_info': ...} with '' for
+    anything not found. Own short-lived node; shares an already-init'd context."""
+    import time
+    import rclpy
+    from rclpy.node import Node
+
+    owns = not rclpy.ok()
+    if owns:
+        rclpy.init()
+    node = Node('trainit_topic_sniffer')
+    try:
+        deadline = time.time() + timeout_s
+        images, infos = [], []
+        while time.time() < deadline:
+            pairs = node.get_topic_names_and_types()
+            images = [n for n, ts in pairs if 'sensor_msgs/msg/Image' in ts]
+            infos = [n for n, ts in pairs if 'sensor_msgs/msg/CameraInfo' in ts]
+            if images and infos:
+                break
+            time.sleep(0.2)
+
+        def _is_depth(name: str) -> bool:
+            return 'depth' in name.lower()
+
+        depth = next((n for n in images if _is_depth(n)), '')
+        rgb = next((n for n in images if not _is_depth(n)), '')
+        # prefer the CameraInfo that shares a prefix with the rgb topic
+        info = ''
+        if infos:
+            base = rgb.rsplit('/', 1)[0] if rgb else ''
+            info = next((n for n in infos if base and n.startswith(base)),
+                        next((n for n in infos if not _is_depth(n)), infos[0]))
+        return {'rgb': rgb, 'depth': depth, 'camera_info': info}
+    finally:
+        node.destroy_node()
+        if owns and rclpy.ok():
+            rclpy.shutdown()

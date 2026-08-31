@@ -45,7 +45,23 @@ def launch_setup(context, *args, **kwargs):
         "groot_monitor": LaunchConfiguration("groot_monitor"),
     }
 
+{% if detectors %}
+    perception = os.path.join(pkg, "config", "perception.yaml")
+
+{% endif %}
     return [
+{% for d in detectors %}
+        # One detector_node per entry of config/perception.yaml: it publishes the
+        # perception contract; the tree's DetectObject consumes it.
+        Node(
+            package="trainit_perception",
+            executable="detector_node",
+            name="detector_{{ d }}",
+            output="screen",
+            parameters=[{"config_file": perception, "detector_name": "{{ d }}",
+                         "use_sim_time": use_sim}],
+        ),
+{% endfor %}
         Node(
             package="trainit_motion_runtime",
             executable="trainit_run_bt",

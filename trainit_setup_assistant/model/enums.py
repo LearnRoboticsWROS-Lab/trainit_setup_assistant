@@ -48,13 +48,34 @@ class GripperKind(StrEnum):
 
 
 class AppType(StrEnum):
-    """Application templates. pick_and_place is the MVP; the rest are seams."""
+    """Application templates. pick_and_place is the MVP; the rest are seams.
+
+    Tokens are FROZEN once shipped (they live in every saved project.yaml); only the
+    GUI labels may change — 'pick_and_place' is shown as "Blind pick and place" (D-015).
+    """
 
     PICK_AND_PLACE = 'pick_and_place'
+    VISION_GUIDED_MOTION = 'vision_guided_motion'   # D-015: editable sequence + vision
     GLUING = 'gluing'
     FOLLOW_PATH = 'follow_path'
     WAYPOINT_REPLAY = 'waypoint_replay'
     CNC = 'cnc'
+
+
+class DetectionMethod(StrEnum):
+    """How a detector produces the perception contract (D-014 taxonomy, D-015 kinds).
+
+    COLOR_MASK : pure-python detector in trainit_perception — live-tunable in the
+                 assistant, run by the generated detector_node.
+    CUSTOM     : the expert seam — a user package/executable that emits the contract
+                 (``vision_msgs/Detection3DArray``); config only, never a file upload.
+    PCL_CLUSTER: external-node seam (roadmap) — a C++ PCL node publishing the same
+                 contract; the assistant emits NO detector_node for it.
+    """
+
+    COLOR_MASK = 'color_mask'
+    CUSTOM = 'custom'
+    PCL_CLUSTER = 'pcl_cluster'
 
 
 class SceneObjectSource(StrEnum):

@@ -15,6 +15,9 @@
 
   <!-- framework: planner pipelines + the scene loader node -->
   <exec_depend>trainit_motion_runtime</exec_depend>
+{% if camera_cloud_dep %}
+  <exec_depend>depth_image_proc</exec_depend>
+{% endif %}
 
   <!-- MoveIt + planners -->
   <exec_depend>moveit_configs_utils</exec_depend>

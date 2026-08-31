@@ -7,9 +7,11 @@ from typing import Dict
 from ..model.enums import AppType
 from .base import ApplicationTemplate
 from .pick_and_place import PickAndPlace
+from .vision_guided_motion import VisionGuidedMotion
 
 _REGISTRY: Dict[str, ApplicationTemplate] = {
     AppType.PICK_AND_PLACE.value: PickAndPlace(),
+    AppType.VISION_GUIDED_MOTION.value: VisionGuidedMotion(),
 }
 
 

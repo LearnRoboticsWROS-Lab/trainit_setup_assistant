@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from ...applications import build_bt_params_context, get_application
 from ...model.enums import AppType, GripperKind
+from ..perception_yaml import build_perception_yaml
 from .base import Emitter, GenContext
 
 
@@ -51,6 +52,19 @@ class AppEmitter(Emitter):
         ctx.generate_to(f'{pkg}/bt_trees/{tree_name}', tree_xml,
                         source=f'application:{app.type.value}')
 
+        # --- perception.yaml + the detector list (TSA v4, D-015) ---
+        # Emitted whenever the project HAS detectors, whatever the app type: the
+        # Perception step configures a resource; an app that never binds it simply
+        # runs an idle detector. Pure-python methods get a detector_node in the
+        # launch; external-node methods (C++/PCL, learned) publish the contract
+        # themselves and only appear in perception.yaml for the record.
+        per = project.perception
+        detector_nodes = [d.name for d in per.detectors if d.emits_node] if per else []
+        if per and per.detectors:
+            ctx.generate_to(f'{pkg}/config/perception.yaml',
+                            build_perception_yaml(project),
+                            source='perception_from_project')
+
         # --- launch files (TEMPLATE) ---
         ctx.render_to(f'{pkg}/launch/trainit_bt.launch.py',
                       'app/trainit_bt.launch.py.j2',
@@ -58,7 +72,8 @@ class AppEmitter(Emitter):
                       moveit_config_package=project.bundle.moveit_config_package,
                       app_package=pkg,
                       tree_filename=tree_name,
-                      default_planner_mode=app.global_planner_mode.value)
+                      default_planner_mode=app.global_planner_mode.value,
+                      detectors=detector_nodes)
 
         if robot.base_moveit_config_path:
             # Bundle flow: the trainit_config package HAS a full cell bringup (planners,
@@ -128,6 +143,7 @@ class AppEmitter(Emitter):
                       app_type=app.type.value,
                       moveit_config_package=project.bundle.moveit_config_package,
                       description_package=project.bundle.description_package,
-                      bridge_packages=dep.bridge_packages())
+                      bridge_packages=dep.bridge_packages(),
+                      has_perception=bool(detector_nodes))
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'app/CMakeLists.txt.j2',
                       package_name=pkg, has_gripper_script=gripper_present)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..camera_variant import rewrite_camera_include
 from .base import Emitter, GenContext
 
 
@@ -23,7 +24,19 @@ class DescriptionEmitter(Emitter):
         # COPY the robot MODEL files (*.urdf, *.xacro) — never a verbatim tree:
         # urdf_dir may be a mixed dir (the base moveit_config's config/, or even a
         # workspace root) and build/install/git trees must never be ingested.
-        n_urdf = self._copy_model_files(ctx, urdf_dir, f'{pkg}/urdf')
+        copied = self._copy_model_files(ctx, urdf_dir, f'{pkg}/urdf')
+        n_urdf = len(copied)
+
+        # CAMERA VARIANT (TSA v4, D-015): the same include rewrite the trainit_config
+        # emitter applies — a single-sided rewrite would make the two copies drift.
+        camera = project.perception.camera if project.perception else None
+        if camera is not None:
+            for src, rel_dest in copied:
+                if src.suffix not in ('.urdf', '.xacro'):
+                    continue
+                rewritten = rewrite_camera_include(src.read_text(), camera)
+                if rewritten is not None:
+                    ctx.generate_to(rel_dest, rewritten, source='camera_variant_include')
         has_meshes = False
         if desc.meshes_dir:
             meshes_dir = Path(desc.meshes_dir)
@@ -89,11 +102,12 @@ class DescriptionEmitter(Emitter):
                   '__pycache__', 'node_modules'}
 
     @classmethod
-    def _copy_model_files(cls, ctx: GenContext, src_dir: Path, rel_dest: str) -> int:
+    def _copy_model_files(cls, ctx: GenContext, src_dir: Path, rel_dest: str):
         """COPY only *.urdf / *.xacro (recursive, skipping build trees) — plus the
         ``initial_positions*.yaml`` data files a MoveIt-SA ros2_control xacro loads
-        with a RELATIVE ``load_yaml()`` (without them the copied xacro won't compile)."""
-        count = 0
+        with a RELATIVE ``load_yaml()`` (without them the copied xacro won't compile).
+        Returns the copied (source path, dest rel_path) pairs."""
+        copied = []
         for src in sorted(src_dir.rglob('*')):
             if not src.is_file():
                 continue
@@ -105,6 +119,7 @@ class DescriptionEmitter(Emitter):
             rel = src.relative_to(src_dir)
             if any(part in cls._SKIP_DIRS for part in rel.parts[:-1]):
                 continue
-            ctx.copy_file(src, str(Path(rel_dest) / rel))
-            count += 1
-        return count
+            dest = str(Path(rel_dest) / rel)
+            ctx.copy_file(src, dest)
+            copied.append((src, dest))
+        return copied

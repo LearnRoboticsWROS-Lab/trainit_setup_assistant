@@ -13,6 +13,9 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <exec_depend>trainit_motion_runtime</exec_depend>
+{% if has_perception %}
+  <exec_depend>trainit_perception</exec_depend>
+{% endif %}
   <exec_depend>{{ moveit_config_package }}</exec_depend>
   <exec_depend>{{ description_package }}</exec_depend>
 

@@ -82,6 +82,19 @@ def launch_setup(context, *args, **kwargs):
         nodes.append(spawners[0])
         for prev, nxt in zip(spawners, spawners[1:]):
             nodes.append(RegisterEventHandler(OnProcessExit(target_action=prev, on_exit=[nxt])))
+{% if camera_cloud %}
+        if mode == "isaac":
+            # Coloured cloud built the way the vendor driver builds it: the sim depth
+            # helper emits XYZ only, the real driver publishes this topic as XYZRGB.
+            # isaac only — in real the driver already publishes it.
+            nodes.append(Node(
+                package="depth_image_proc", executable="point_cloud_xyzrgb_node",
+                name="pcl_xyzrgb", output="screen", parameters=[common],
+                remappings=[("rgb/image_rect_color", "{{ camera_cloud.rgb }}"),
+                            ("rgb/camera_info", "{{ camera_cloud.camera_info }}"),
+                            ("depth_registered/image_rect", "{{ camera_cloud.depth }}"),
+                            ("points", "{{ camera_cloud.points }}")]))
+{% endif %}
     else:  # real: no ros2_control — the vendor bridges impersonate the same action names
         if REAL_INCLUDE:
             nodes.append(LogInfo(msg=f"[{ROBOT_NAME} scene_loader] mode=real: launching hardware bringup"))

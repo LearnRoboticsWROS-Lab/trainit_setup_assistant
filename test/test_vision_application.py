@@ -1,0 +1,176 @@
+"""TSA v4 vision integration units: model round-trip, tree emission, validation,
+perception.yaml, camera-variant rewrite. The golden test covers the full bundle;
+these pin the pieces in isolation. ROS-free."""
+
+import pytest
+
+from trainit_setup_assistant.applications import get_application
+from trainit_setup_assistant.generator.camera_variant import rewrite_camera_include
+from trainit_setup_assistant.generator.perception_yaml import build_perception_yaml
+from trainit_setup_assistant.model import (
+    AppType,
+    BundleSpec,
+    CameraSpec,
+    CanonicalProject,
+    DetectorSpec,
+    MotionSegment,
+    PerceptionSpec,
+    ToolAction,
+    VisionBinding,
+    Waypoint,
+)
+from trainit_setup_assistant.model.enums import ToolActionKind, WaypointType
+from trainit_setup_assistant.model.io import load_project, save_project
+from trainit_setup_assistant.model.robot import (
+    ArmControllerSpec, DescriptionSource, GripperSpec, PlanningGroupSpec, RobotSpec)
+
+
+def _project(with_vision=True, loop=-1, with_reset=True) -> CanonicalProject:
+    wps = [
+        Waypoint(name='home', type=WaypointType.JOINT, named='home'),
+        Waypoint(name='pre_pick', type=WaypointType.JOINT, named='pre_pick',
+                 vision=VisionBinding(detector='cube', dz=0.08,
+                                      orientation='from:pick') if with_vision else None),
+        Waypoint(name='pick', type=WaypointType.TCP,
+                 position=[0.56, -0.02, 0.03], orientation=[-0.707, 0.707, 0.0, 0.0],
+                 vision=VisionBinding(detector='cube', dz=0.006,
+                                      orientation='keep') if with_vision else None),
+        Waypoint(name='place', type=WaypointType.TCP,
+                 position=[0.56, -0.24, 0.036], orientation=[-0.707, 0.707, 0.0, 0.0]),
+    ]
+    actions = [ToolAction(at_waypoint='pick', kind=ToolActionKind.GRASP),
+               ToolAction(at_waypoint='place', kind=ToolActionKind.RELEASE)]
+    if with_reset:
+        actions.append(ToolAction(at_waypoint='place', kind=ToolActionKind.RESET_SCENE))
+    p = CanonicalProject(
+        project_name='cell',
+        bundle=BundleSpec.from_prefix('cell'),
+        robot=RobotSpec(
+            robot_name='cell',
+            description=DescriptionSource(urdf_dir='/tmp', top_xacro='x.urdf.xacro'),
+            base_frame='base_link', tip_link='tcp',
+            planning_group=PlanningGroupSpec(name='arm', base_link='base_link',
+                                             tip_link='tcp', joints=['j1']),
+            gripper=GripperSpec(),
+            arm_controller=ArmControllerSpec(),
+        ),
+        perception=PerceptionSpec(
+            camera=CameraSpec(replace_include='$(find x)/a.xacro',
+                              with_include='$(find x)/a_camera.xacro'),
+            detectors=[DetectorSpec(name='cube',
+                                    params={'class_id': 'cube', 'h': [170, 10]})],
+        ),
+    )
+    p.application.type = AppType.VISION_GUIDED_MOTION
+    p.application.waypoints = wps
+    p.application.segments = [MotionSegment(to_waypoint=w.name) for w in wps]
+    p.application.tool_actions = actions
+    p.application.sequence = ['home', 'pre_pick', 'pick', 'place']
+    p.application.loop_cycles = loop
+    p.application.loop_start = 'pre_pick'
+    return p
+
+
+# --- model round-trip ---------------------------------------------------------
+
+def test_perception_round_trips_through_yaml(tmp_path):
+    p = _project()
+    f = tmp_path / 'project.yaml'
+    save_project(p, f)
+    q = load_project(f)
+    assert q.perception.detectors[0].params['h'] == [170, 10]
+    assert q.application.waypoint_by_name('pick').vision.dz == 0.006
+    assert q.schema_version == 2
+
+
+def test_old_projects_without_perception_still_load(tmp_path):
+    p = _project(with_vision=False)
+    p.perception = None
+    f = tmp_path / 'project.yaml'
+    save_project(p, f)
+    text = f.read_text()
+    assert 'vision:' not in text.replace('vision: null', '')
+    q = load_project(f)
+    assert q.perception is None
+
+
+# --- tree emission ------------------------------------------------------------
+
+def test_vision_tree_has_detect_bindings_and_settle():
+    xml = get_application(AppType.VISION_GUIDED_MOTION).build_tree_xml(_project())
+    assert ('<DetectObject detector="cube" class_id="cube" target_frame="base_link" '
+            'timeout_ms="3000" out_key="detected.cube"/>') in xml
+    assert ('<SetWaypointFromDetection waypoint="pre_pick" from="detected.cube" '
+            'dz="0.080" orientation="from:pick"/>') in xml
+    assert ('<SetWaypointFromDetection waypoint="pick" from="detected.cube" '
+            'dz="0.006" orientation="keep"/>') in xml
+    # settle AFTER the reset, inside the cycle
+    reset_at = xml.index('<ResetScene/>')
+    assert '<Sleep msec="1500"/>' in xml[reset_at:]
+    # detection at the TOP of the cycle, before the first move
+    assert xml.index('<DetectObject') < xml.index('<MoveWaypoint waypoint="pre_pick"')
+
+
+def test_vision_tree_without_loop_still_detects_first():
+    xml = get_application(AppType.VISION_GUIDED_MOTION).build_tree_xml(
+        _project(loop=0, with_reset=False))
+    assert xml.index('<DetectObject') < xml.index('<MoveWaypoint waypoint="home"')
+    assert '<Sleep msec="1500"' not in xml            # no reset -> no settle
+
+
+def test_no_bindings_emits_the_blind_tree():
+    p = _project(with_vision=False)
+    xml = get_application(AppType.VISION_GUIDED_MOTION).build_tree_xml(p)
+    assert '<DetectObject' not in xml and 'SetWaypointFromDetection' not in xml
+
+
+# --- validation ---------------------------------------------------------------
+
+def test_validate_flags_unknown_detector_and_bad_orientation():
+    p = _project()
+    p.application.waypoint_by_name('pre_pick').vision.detector = 'ghost'
+    p.application.waypoint_by_name('pick').vision.orientation = 'from:nowhere'
+    problems = get_application(AppType.VISION_GUIDED_MOTION).validate(p)
+    text = '\n'.join(problems)
+    assert 'unknown detector "ghost"' in text
+    assert 'unknown waypoint "nowhere"' in text
+
+
+def test_validate_flags_keep_without_orientation():
+    p = _project()
+    p.application.waypoint_by_name('pre_pick').vision.orientation = 'keep'
+    problems = get_application(AppType.VISION_GUIDED_MOTION).validate(p)
+    assert any('orientation "keep" but the waypoint has none' in x for x in problems)
+
+
+def test_validate_does_not_require_gripper_actions():
+    p = _project()
+    p.application.tool_actions = []
+    problems = get_application(AppType.VISION_GUIDED_MOTION).validate(p)
+    assert not any('grasp' in x or 'release' in x for x in problems)
+
+
+# --- perception.yaml + camera variant -----------------------------------------
+
+def test_perception_yaml_shape():
+    import yaml
+    doc = yaml.safe_load(build_perception_yaml(_project()))
+    cube = doc['detectors']['cube']
+    assert cube['method'] == 'color_mask'
+    assert cube['input']['rgb'] == '/camera/color/image_raw'
+    assert cube['params']['h'] == [170, 10]
+    assert cube['continuous'] is True and cube['rate_hz'] == 10.0
+
+
+def test_camera_include_rewrite():
+    cam = CameraSpec(replace_include='$(find x)/a.xacro',
+                     with_include='$(find x)/a_camera.xacro')
+    text = '<robot>\n    <xacro:include filename="$(find x)/a.xacro" />\n</robot>\n'
+    out = rewrite_camera_include(text, cam)
+    assert 'a_camera.xacro' in out and '"$(find x)/a.xacro"' not in out
+    assert rewrite_camera_include('<robot/>', cam) is None
+    assert rewrite_camera_include(text, None) is None
+
+
+if __name__ == '__main__':
+    raise SystemExit(pytest.main([__file__, '-v']))

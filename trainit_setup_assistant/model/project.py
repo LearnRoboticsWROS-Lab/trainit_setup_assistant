@@ -8,12 +8,17 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from typing import Optional
+
 from .deployment import DeploymentSpec
+from .perception import PerceptionSpec
 from .robot import RobotSpec
 from .scene import SceneSpec
 from .task import ApplicationSpec
 
-SCHEMA_VERSION = 1
+# 2: adds the top-level ``perception`` block + ``Waypoint.vision`` (TSA v4, D-015).
+# Old projects load unchanged (the new fields are optional with None defaults).
+SCHEMA_VERSION = 2
 
 
 class BundleSpec(BaseModel):
@@ -56,5 +61,8 @@ class CanonicalProject(BaseModel):
     meta: ProjectMeta = Field(default_factory=ProjectMeta)
     robot: RobotSpec
     scene: SceneSpec = Field(default_factory=SceneSpec)
+    # Perception is a TOP-LEVEL resource (the dedicated step): the camera + named
+    # detectors, configured once, bound by any application via Waypoint.vision.
+    perception: Optional[PerceptionSpec] = None
     application: ApplicationSpec = Field(default_factory=ApplicationSpec)
     deployment: DeploymentSpec = Field(default_factory=DeploymentSpec)

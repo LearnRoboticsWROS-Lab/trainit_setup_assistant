@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ...model.enums import GripperKind
+from ..camera_variant import rewrite_camera_include
 from ..scene_yaml import build_scene_yaml
 from .base import Emitter, GenContext
 
@@ -63,11 +64,26 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         # 1) COPY the base config/ verbatim (preserves the tuned mode-switch + SRDF).
         ctx.copy_tree(base_config, f'{pkg}/config')
 
+        # 1a) CAMERA VARIANT (TSA v4, D-015): swap the URDF include named by the
+        # project's CameraSpec so TF carries the camera frames DetectObject
+        # transforms from. Copy-then-overwrite, like the SRDF merge below.
+        camera = project.perception.camera if project.perception else None
+        if camera is not None:
+            for src in sorted(base_config.glob('*')):
+                if src.suffix not in ('.xacro', '.urdf') or not src.is_file():
+                    continue
+                rewritten = rewrite_camera_include(src.read_text(), camera)
+                if rewritten is not None:
+                    ctx.generate_to(f'{pkg}/config/{src.name}', rewritten,
+                                    source='camera_variant_include')
+
         # 1b) MERGE assistant-captured named states into the copied SRDF. Waypoints
         # captured live (blind mode: jog with the RViz gizmo, Plan & Execute, capture)
         # exist only in the project — the app's named-target moves resolve against
-        # THIS config's SRDF at runtime, so they must land here too.
-        self._merge_named_states(project, ctx, base_config, pkg)
+        # THIS config's SRDF at runtime, so they must land here too. The same pass
+        # appends the camera mount pair (base↔camera "Never"); every camera-vs-arm
+        # pair stays CHECKED so planning avoids the camera.
+        self._rewrite_srdf(project, ctx, base_config, pkg)
 
         # 2) GENERATE scene.yaml from the SceneSpec.
         ctx.generate_to(f'{pkg}/config/scene.yaml', build_scene_yaml(project),
@@ -77,6 +93,15 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         gripper_present = (robot.gripper.kind is not GripperKind.NONE
                            and bool(robot.gripper.controller_name))
         gripper_action = robot.gripper.gripper_action_ns() if gripper_present else ''
+        # Synthetic coloured cloud (TSA v4): in sim it must be BUILT the way the real
+        # driver publishes it (depth_image_proc, isaac branch only); in real the
+        # driver already provides points_topic.
+        camera_cloud = None
+        if camera is not None and camera.synthetic_cloud_in_sim:
+            camera_cloud = {'rgb': camera.rgb_topic,
+                            'camera_info': camera.camera_info_topic,
+                            'depth': camera.depth_topic,
+                            'points': camera.points_topic}
         ctx.render_to(f'{pkg}/launch/bringup.launch.py',
                       'moveit_config/scene_loader_bringup.launch.py.j2',
                       robot_name=robot.robot_name,
@@ -90,21 +115,28 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                       default_mode=dep.default_mode,
                       modes_human=' | '.join(dep.modes),
                       gripper_mock_action_py=(repr(gripper_action)
-                                              if gripper_present else 'None'))
+                                              if gripper_present else 'None'),
+                      camera_cloud=camera_cloud)
 
         # 4) package.xml + CMakeLists (exec_depend the framework + connector packages).
         ctx.render_to(f'{pkg}/package.xml', 'moveit_config/scene_loader_package.xml.j2',
                       package_name=pkg, meta=project.meta, robot_name=robot.robot_name,
-                      bridge_packages=dep.bridge_packages())
+                      bridge_packages=dep.bridge_packages(),
+                      camera_cloud_dep=bool(camera_cloud))
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'moveit_config/scene_loader_CMakeLists.txt.j2',
                       package_name=pkg)
 
     @staticmethod
-    def _merge_named_states(project, ctx: GenContext, base_config: Path, pkg: str) -> None:
-        """Append project named states missing from the copied SRDF as <group_state>s."""
+    def _rewrite_srdf(project, ctx: GenContext, base_config: Path, pkg: str) -> None:
+        """One rewrite pass over the copied SRDF: append captured named states missing
+        from it, and (with a camera) the mount↔camera disable_collisions pair. A single
+        pass because two generate_to calls on the same rel_path would lose the first."""
         import xml.etree.ElementTree as ET
         srdfs = sorted(base_config.glob('*.srdf'))
-        if not srdfs or not project.robot.named_states:
+        if not srdfs:
+            return
+        camera = project.perception.camera if project.perception else None
+        if not project.robot.named_states and camera is None:
             return
         text = srdfs[0].read_text()
         try:
@@ -113,20 +145,38 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
             ctx.manifest.warn(f'{srdfs[0].name}: parse failed — captured named states '
                               f'NOT merged into the copied SRDF.')
             return
+        if '</robot>' not in text:
+            return
+        additions = []
+
         existing = {(gs.get('name'), gs.get('group')) for gs in root.findall('group_state')}
         missing = [s for s in project.robot.named_states
                    if (s.name, s.group) not in existing]
-        if not missing or '</robot>' not in text:
+        if missing:
+            blocks = []
+            for s in missing:
+                joints = '\n'.join(f'        <joint name="{j}" value="{v:.6g}"/>'
+                                   for j, v in s.joint_values.items())
+                blocks.append(f'    <group_state name="{s.name}" group="{s.group}">\n'
+                              f'{joints}\n    </group_state>')
+            additions.append(
+                '    <!-- named states captured in the TrainIt Setup Assistant -->\n'
+                + '\n'.join(blocks))
+
+        if camera is not None:
+            base_link = project.robot.base_frame
+            pairs = {frozenset((d.get('link1'), d.get('link2')))
+                     for d in root.findall('disable_collisions')}
+            if frozenset((base_link, camera.link)) not in pairs:
+                additions.append(
+                    '    <!-- camera mount (generated): only the mount pair is '
+                    'disabled; every camera-vs-arm pair stays CHECKED so planning '
+                    'avoids the camera -->\n'
+                    f'    <disable_collisions link1="{base_link}" '
+                    f'link2="{camera.link}" reason="Never"/>')
+
+        if not additions:
             return
-        blocks = []
-        for s in missing:
-            joints = '\n'.join(f'        <joint name="{j}" value="{v:.6g}"/>'
-                               for j, v in s.joint_values.items())
-            blocks.append(f'    <group_state name="{s.name}" group="{s.group}">\n'
-                          f'{joints}\n    </group_state>')
-        merged = text.replace(
-            '</robot>',
-            '    <!-- named states captured in the TrainIt Setup Assistant -->\n'
-            + '\n'.join(blocks) + '\n</robot>')
+        merged = text.replace('</robot>', '\n'.join(additions) + '\n</robot>')
         ctx.generate_to(f'{pkg}/config/{srdfs[0].name}', merged,
                         source='srdf_named_state_merge')

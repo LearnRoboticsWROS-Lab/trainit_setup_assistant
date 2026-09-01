@@ -498,9 +498,15 @@ class AssistantController:
                 f'detector_<name> and the topic /perception/<name>/detections — '
                 f'use [A-Za-z][A-Za-z0-9_]*')
         per = self._perception()
+        old = per.detector_by_name(name.strip())
         spec = DetectorSpec(name=name.strip(), method=DetectionMethod(method),
                             params=dict(params or {}), continuous=continuous,
-                            rate_hz=float(rate_hz))
+                            rate_hz=float(rate_hz),
+                            # per-detector topic overrides are hand-edited data the
+                            # GUI cannot set — an upsert must not strip them
+                            rgb_topic=old.rgb_topic if old else None,
+                            depth_topic=old.depth_topic if old else None,
+                            camera_info_topic=old.camera_info_topic if old else None)
         per.detectors = [d for d in per.detectors if d.name != spec.name] + [spec]
 
     def remove_detector(self, name: str) -> None:

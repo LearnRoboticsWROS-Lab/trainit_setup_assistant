@@ -994,11 +994,11 @@ class PerceptionPage(QWizardPage):
     def _add_detector(self) -> None:
         name = self.det_name.text().strip()
         if not name:
-            self.tuner_status.setText('Give the detector a name first.')
+            self._status('Give the detector a name first.')
             return
         import re
         if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', name):
-            self.tuner_status.setText(
+            self._status(
                 f'"{name}" is not a valid detector name: it becomes a ROS node and '
                 'topic name — use letters, digits and underscores, starting with a '
                 'letter (e.g. red_cube).')
@@ -1014,7 +1014,7 @@ class PerceptionPage(QWizardPage):
         name = self.det_list.currentItem().text() if self.det_list.currentItem() else ''
         name = name or self.det_name.text().strip()
         if not name:
-            self.tuner_status.setText('Select (or name) a detector to save into.')
+            self._status('Select (or name) a detector to save into.')
             return
         self._detectors[name] = {'method': 'color_mask',
                                  'params': self._params_from_form(),
@@ -1076,13 +1076,13 @@ class PerceptionPage(QWizardPage):
                                                   '/camera/depth/image_rect_raw',
                                                   '/camera/color/camera_info')))
         except Exception as exc:  # noqa: BLE001
-            self.tuner_status.setText(f'camera capture failed: {exc}')
+            self._status(f'camera capture failed: {exc}')
             self.tune_btn.setChecked(False)
             return
         frame = cap.latest()
         if frame is None:
             err = cap.last_error()
-            self.tuner_status.setText(
+            self._status(
                 f'frames arriving but undecodable: {err}' if err else
                 'waiting for frames… (is the Step-4 bring-up running, with the '
                 'camera publishing?)')
@@ -1098,7 +1098,7 @@ class PerceptionPage(QWizardPage):
             if mask is not None:
                 self._paint(self.mask_view, mask)
         except Exception as exc:  # noqa: BLE001
-            self.tuner_status.setText(f'detector failed: {exc}')
+            self._status(f'detector failed: {exc}')
             self.tune_btn.setChecked(False)
             return
         if detections:
@@ -1112,8 +1112,8 @@ class PerceptionPage(QWizardPage):
                 f'  size ({d.size[0] * 1000:.1f} × {d.size[1] * 1000:.1f}) mm')
         else:
             self._last_detection = None
-            self.tuner_status.setText('no detection — widen the HSV window or lower '
-                                      'the min area')
+            self._status('no detection — widen the HSV window or lower '
+                         'the min area')
 
     def _paint(self, view: QLabel, arr) -> None:  # pragma: no cover - display only
         import numpy as np
@@ -1127,7 +1127,7 @@ class PerceptionPage(QWizardPage):
 
     def _capture_centroid(self):  # pragma: no cover - needs a live ROS session
         if self._last_detection is None:
-            self.tuner_status.setText('no detection to capture — start the tuner first')
+            self._status('no detection to capture — start the tuner first')
             return
         d, frame_id = self._last_detection
         base = self.ctrl.robot_summary()['base_frame']
@@ -1147,12 +1147,12 @@ class PerceptionPage(QWizardPage):
                 f'Pick this detector on a Move block in Step 7 (Camera guidance).',
                 ok=True)
         except Exception as exc:  # noqa: BLE001
-            self.tuner_status.setText(f'TF {base} -> {optical} failed: {exc}')
+            self._status(f'TF {base} -> {optical} failed: {exc}')
 
     def _sniff_topics(self):  # pragma: no cover - needs a live ROS session
         try:
             from ..livesession.camera_capture import sniff_camera_topics
-            found = sniff_camera_topics()
+            found = sniff_camera_topics(timeout_s=0.8)
         except Exception as exc:  # noqa: BLE001
             self._status(f'sniff failed: {exc}')
             return
@@ -1221,7 +1221,7 @@ class PerceptionPage(QWizardPage):
                                           continuous=d['continuous'],
                                           rate_hz=d['rate_hz'])
             except ValueError as exc:
-                self.tuner_status.setText(str(exc))
+                self._status(str(exc))
                 return False
         return True
 
@@ -1863,12 +1863,19 @@ class BlocksPage(QWizardPage):
         self.m_vori_ref.clear()
         self.m_vori_ref.addItems(moves or [''])
         ref = b.get('vori_ref', '')
-        if ref in moves:
+        if ref and ref not in moves:
+            # dangling reference (renamed/removed move): keep it selectable so an
+            # untouched Apply round-trips instead of silently re-pointing it
+            self.m_vori_ref.addItem(ref)
+            self.status.setText(f'orientation references missing waypoint "{ref}" '
+                                '— fix or re-pick it')
+        if ref:
             self.m_vori_ref.setCurrentText(ref)
         self.m_vori_ref.blockSignals(False)
         self.m_vori.setCurrentIndex({'keep': _VORI_KEEP, 'same': _VORI_SAME,
                                      'align': _VORI_ALIGN}.get(b.get('vori', 'keep'),
                                                                _VORI_KEEP))
+        self._filled_vori = self.m_vori.currentIndex()
         # "align to detected object" only when the detector gives an orientation
         # (a colour mask / 3D-only detector publishes identity — object-relative
         # grasping is the future learned-policy path, D-016)
@@ -1963,7 +1970,7 @@ class BlocksPage(QWizardPage):
                         'target': 'named', 'named': '', 'pos': '', 'quat': '0, 0, 0, 1',
                         'motion': 'ptp', 'planner': '', 'speed': 50, 'tol': 0.1, 'check': 'inherit',
                         'detector': '', 'vdx': 0.0, 'vdy': 0.0, 'vdz': 0.0,
-                        'vori': 'keep', 'vori_ref': ''},
+                        'vori': 'keep', 'vori_ref': '', 'vori_raw': ''},
             'gripper': {'kind': 'gripper', 'action': 'close', 'payload': ''},
             'reset':   {'kind': 'reset'},
             'wait':    {'kind': 'wait', 'ms': 500},
@@ -2034,8 +2041,15 @@ class BlocksPage(QWizardPage):
         if b['kind'] == 'move':
             det = self.m_detector.currentText()
             det = '' if det.startswith('(') else det
+            old_det = b.get('detector', '')
             vori = {_VORI_KEEP: 'keep', _VORI_SAME: 'same',
                     _VORI_ALIGN: 'align'}[self.m_vori.currentIndex()]
+            # a literal-quaternion orientation (hand-edited project) is carried in
+            # vori_raw; it survives an untouched Apply and is dropped only when the
+            # user actually changes the policy combo
+            if self.m_vori.currentIndex() != getattr(self, '_filled_vori',
+                                                     self.m_vori.currentIndex()):
+                b.pop('vori_raw', None)
             b.update(name=self.m_name.text().strip() or b['name'],
                      target='named' if self.m_target.currentIndex() == 0 else 'tcp',
                      named=self.m_named.text().strip(),
@@ -2048,12 +2062,20 @@ class BlocksPage(QWizardPage):
                      vdz=self.m_dz.value(), vori=vori,
                      vori_ref=self.m_vori_ref.currentText().strip())
             # a vision goal lands anywhere: the travel into it must be
-            # collision-aware, so default ptp/pilz away when the camera takes over
-            if det and b['motion'] == 'ptp' and b['planner'] in ('', 'pilz'):
+            # collision-aware — so when the camera FIRST takes this move over,
+            # default a resolved ptp/pilz to free/OMPL. A later deliberate
+            # ptp/pilz re-choice is respected (validate() still flags it).
+            switch_msg = ''
+            try:
+                eff = (b['planner'] or
+                       self.ctrl.project.application.global_planner_mode.value)
+            except Exception:  # noqa: BLE001
+                eff = b['planner'] or 'pilz'
+            if det and not old_det and b['motion'] == 'ptp' and eff == 'pilz':
                 b.update(motion='free', planner='ompl')
-                self.status.setText(f"'{b['name']}': motion set to free/OMPL — a "
-                                    'vision-driven move needs a collision-aware '
-                                    'planner (Pilz PTP cannot avoid the camera).')
+                switch_msg = (f"'{b['name']}': motion set to free/OMPL — a "
+                              'vision-driven move needs a collision-aware '
+                              'planner (Pilz PTP cannot avoid the camera).')
         elif b['kind'] == 'gripper':
             b.update(action=('close', 'open', 'attach', 'detach')[self.g_action.currentIndex()],
                      payload=self.g_payload.text().strip())
@@ -2064,6 +2086,8 @@ class BlocksPage(QWizardPage):
             b.update(cycles=-1 if self.l_forever.isChecked() else self.l_cycles.value(),
                      to='' if to == '(end)' else to)
         self._refresh(select=row)
+        if b['kind'] == 'move' and switch_msg:
+            self.status.setText(switch_msg)   # after _refresh, or the fold clears it
 
     # ---- live capture (blind mode) ------------------------------------------
     def capture_joints(self):  # pragma: no cover - needs a live ROS session
@@ -2104,8 +2128,9 @@ class BlocksPage(QWizardPage):
             chk = '' if b['check'] == 'inherit' else f"  · chk {b['check'].upper()}"
             cam = ''
             if b.get('detector'):
+                vdz = b.get('vdz', 0.0)
                 cam = (f"  · \U0001F4F7 {b['detector']}"
-                       f" +{b.get('vdz', 0.0) * 1000:.0f}mm")
+                       + (f" {vdz * 1000:+.0f}mm" if vdz else ''))
             return (f"{b['name']}   [{b['motion']}"
                     f"{('/' + b['planner']) if b['planner'] else ''} {b['speed']}%]"
                     f"  → {tgt}{chk}{cam}")
@@ -2199,7 +2224,9 @@ class BlocksPage(QWizardPage):
                     if b.get('detector'):
                         vori = b.get('vori', 'keep')
                         ref = b.get('vori_ref', '')
-                        if vori == 'same' and ref:
+                        if b.get('vori_raw'):
+                            orientation = b['vori_raw']   # literal quaternion, verbatim
+                        elif vori == 'same' and ref:
                             orientation = f'from:{ref}'
                         elif vori == 'align':
                             orientation = 'detected'
@@ -2266,8 +2293,8 @@ class BlocksPage(QWizardPage):
             blocks.append({'kind': 'move', 'name': name,
                            'target': 'named' if wp.type.value == 'joint' else 'tcp',
                            'named': wp.named or '',
-                           'pos': ', '.join(f'{v:.4f}' for v in (wp.position or [])),
-                           'quat': ', '.join(f'{v:.4f}' for v in (wp.orientation or [0, 0, 0, 1])),
+                           'pos': ', '.join(format(v, 'g') for v in (wp.position or [])),
+                           'quat': ', '.join(format(v, 'g') for v in (wp.orientation or [0, 0, 0, 1])),
                            'motion': seg.motion.value if seg else 'ptp',
                            'planner': (seg.planner.value if seg and seg.planner else ''),
                            'speed': seg.speed if seg else 50,
@@ -2287,6 +2314,11 @@ class BlocksPage(QWizardPage):
                                           else 'keep')),
                            'vori_ref': (wp.vision.orientation.split(':', 1)[1]
                                         if wp.vision and
+                                        wp.vision.orientation.startswith('from:')
+                                        else ''),
+                           'vori_raw': (wp.vision.orientation
+                                        if wp.vision and wp.vision.orientation
+                                        not in ('keep', 'detected') and not
                                         wp.vision.orientation.startswith('from:')
                                         else '')})
             acts = app.actions_at(name)

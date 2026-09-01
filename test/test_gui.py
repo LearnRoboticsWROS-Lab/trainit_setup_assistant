@@ -541,3 +541,48 @@ def test_blocks_page_preserves_golden_loop_start_and_tree(qapp):
     after = get_application(ctrl.project.application.type).build_tree_xml(ctrl.project)
     from trainit_setup_assistant.verify.equivalence import tree_diffs
     assert not tree_diffs(after, before), tree_diffs(after, before)[:5]
+
+
+def test_blocks_page_no_edit_apply_is_identity_on_the_golden(qapp):
+    """v4.1 regression: selecting a vision-bound move and clicking Apply with NO
+    edits must not mutate the model (the auto free/OMPL switch fires only when the
+    detector is NEWLY set; a literal orientation would ride vori_raw)."""
+    GOLDEN_PROJECT = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
+                      'fr3wml_suction_tsa_32_bundle/project.yaml')
+    if not os.path.isfile(GOLDEN_PROJECT):
+        pytest.skip('golden bundle not present')
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    ctrl.open_project(GOLDEN_PROJECT)
+    wiz = SetupWizard(ctrl)
+    bp = wiz.blocks_page
+    bp.initializePage()
+    before = ctrl.project.model_dump(mode='json')
+    row = next(i for i, b in enumerate(bp.blocks)
+               if b['kind'] == 'move' and b.get('detector'))
+    bp.seq.setCurrentRow(row)
+    bp.apply_inspector()
+    assert bp.validatePage()
+    assert ctrl.project.model_dump(mode='json') == before
+
+
+def test_literal_quaternion_binding_survives_step7(qapp):
+    """A hand-edited literal orientation must survive page entry AND an untouched
+    Apply (it rides the block's vori_raw passthrough)."""
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    ctrl.upsert_detector('red_cube', params={'class_id': 'cube'})
+    ctrl.add_move('pick', position=[0.5, 0.0, 0.03],
+                  orientation=[-0.707, 0.707, 0.0, 0.0], motion='lin', planner='pilz')
+    ctrl.bind_vision('pick', 'red_cube', dz=0.006, orientation='0;0;0;1')
+    wiz = SetupWizard(ctrl)
+    bp = wiz.blocks_page
+    bp.initializePage()
+    assert ctrl.project.application.waypoint_by_name('pick').vision.orientation == '0;0;0;1'
+    row = next(i for i, b in enumerate(bp.blocks)
+               if b['kind'] == 'move' and b['name'] == 'pick')
+    bp.seq.setCurrentRow(row)
+    bp.apply_inspector()
+    assert bp.validatePage()
+    assert ctrl.project.application.waypoint_by_name('pick').vision.orientation == '0;0;0;1'

@@ -237,3 +237,32 @@ def test_validate_flags_ptp_pilz_into_a_vision_goal():
 def test_align_policy_gated_by_detector_metadata():
     d = DetectorSpec(name='cube')
     assert d.gives_orientation is False        # colour mask: identity only
+
+
+# --- v4.1 verification-pass regressions -----------------------------------------
+
+def test_ptp_with_inherited_ompl_is_not_flagged():
+    from trainit_setup_assistant.model.enums import MotionType, PlannerId
+    p = _project()
+    p.application.global_planner_mode = PlannerId.OMPL
+    seg = p.application.segment_for('pick')
+    seg.motion = MotionType.PTP
+    seg.planner = None                      # inherit -> OMPL: collision-aware, fine
+    problems = get_application(AppType.VISION_GUIDED_MOTION).validate(p)
+    assert not any('ptp/pilz' in x for x in problems)
+
+
+def test_subresolution_offsets_are_omitted_not_zeroed():
+    p = _project()
+    p.application.waypoint_by_name('pick').vision.dx = 0.0004   # rounds to 0.000
+    xml = get_application(AppType.VISION_GUIDED_MOTION).build_tree_xml(p)
+    assert 'dx="0.000"' not in xml and 'dx="-0.000"' not in xml
+
+
+def test_upsert_detector_preserves_topic_overrides():
+    from trainit_setup_assistant.gui.controller import AssistantController
+    p = _project()
+    p.perception.detectors[0].rgb_topic = '/other/color/image_raw'
+    ctrl = AssistantController(p)
+    ctrl.upsert_detector('cube', params={'class_id': 'cube'})
+    assert p.perception.detector_by_name('cube').rgb_topic == '/other/color/image_raw'

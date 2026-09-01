@@ -116,7 +116,8 @@ class VisionGuidedMotion(PickAndPlace):
                 b = wp.vision
                 # dx/dy only when set, so the golden (dz-only) stays byte-stable
                 offsets = ''.join(f'{k}="{v:.3f}" ' for k, v in
-                                  (('dx', b.dx), ('dy', b.dy)) if v != 0.0)
+                                  (('dx', b.dx), ('dy', b.dy))
+                                  if round(v, 3) != 0.0)
                 lines.append(
                     f'{indent}<SetWaypointFromDetection waypoint="{wp.name}" '
                     f'from="{out_key}" {offsets}dz="{b.dz:.3f}" '

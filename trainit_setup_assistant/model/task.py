@@ -58,6 +58,17 @@ class MotionSegment(BaseModel):
     wait_after_ms: int = Field(default=0, ge=0)
 
 
+class DetectPoint(BaseModel):
+    """An EXPLICIT camera-sampling point in the flow (D-018): DetectObject for
+    ``detector`` runs immediately BEFORE the move to ``before_waypoint``, updating
+    every Move bound to that detector. Its position answers "WHEN does vision
+    fire" — several detectors may sample at different points of one cycle. With no
+    DetectPoint for a detector, sampling is automatic at cycle start."""
+
+    detector: str
+    before_waypoint: str
+
+
 class ToolAction(BaseModel):
     """A tool/scene side-effect anchored at a waypoint (in tree order)."""
 
@@ -77,6 +88,8 @@ class ApplicationSpec(BaseModel):
     waypoints: List[Waypoint] = Field(default_factory=list)
     segments: List[MotionSegment] = Field(default_factory=list)
     tool_actions: List[ToolAction] = Field(default_factory=list)
+    # explicit camera-sampling points (D-018); empty = automatic at cycle start
+    detections: List[DetectPoint] = Field(default_factory=list)
     # Explicit tree order (waypoint-name references, repeats allowed — e.g. home at
     # start AND end). Empty => the application template derives order from roles.
     # Each waypoint is DEFINED once (bt_params) but may be VISITED multiple times.

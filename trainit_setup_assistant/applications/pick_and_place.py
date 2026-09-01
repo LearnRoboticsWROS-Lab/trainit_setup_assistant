@@ -141,6 +141,9 @@ class PickAndPlace(ApplicationTemplate):
             elif loop == 0 and i == 0:
                 # no loop: the prologue still lands before the first move
                 out.extend(self._cycle_prologue(project, body_indent))
+            # explicit camera-sampling hook (D-018): fires before the move to this
+            # waypoint (vision: DetectObject + the bound waypoints' updates)
+            out.extend(self._before_move(project, wp_name, body_indent))
             # per-move planning-collision check for held objects (SetBool service): ON
             # before a transfer that must route the payload around the static meshes.
             seg = app.segment_for(wp_name)
@@ -185,6 +188,11 @@ class PickAndPlace(ApplicationTemplate):
 
     def _after_scene_reset(self, project: CanonicalProject, indent: str) -> List[str]:
         """Lines emitted right after a <ResetScene/> (still inside the cycle)."""
+        return []
+
+    def _before_move(self, project: CanonicalProject, wp_name: str,
+                     indent: str) -> List[str]:
+        """Lines emitted immediately before the move to ``wp_name``."""
         return []
 
     # --- helpers ---

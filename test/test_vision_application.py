@@ -349,3 +349,56 @@ def test_relative_round_trips_through_yaml(tmp_path):
     q = load_project(f)
     r = q.application.waypoint_by_name('post_pick').relative
     assert r.step == 'pick' and r.dz == 0.08
+
+
+# --- D-018 (v4.3): explicit camera-sampling points ------------------------------
+
+def test_explicit_detect_point_moves_the_sampling_and_suppresses_the_automatic():
+    from trainit_setup_assistant.model import DetectPoint
+    p = _project()
+    p.application.detections = [DetectPoint(detector='cube',
+                                            before_waypoint='pre_pick')]
+    xml = get_application(AppType.VISION_GUIDED_MOTION).build_tree_xml(p)
+    assert xml.count('<DetectObject') == 1               # not doubled
+    # the group sits immediately before the pre_pick move, inside the cycle
+    d = xml.index('<DetectObject')
+    assert d > xml.index('<Repeat')
+    assert d < xml.index('<MoveWaypoint waypoint="pre_pick"')
+    assert xml.index('SetWaypointFromDetection waypoint="pick"') < xml.index(
+        '<MoveWaypoint waypoint="pre_pick"')
+
+
+def test_relative_follows_its_reference_group_at_the_explicit_point():
+    from trainit_setup_assistant.model import DetectPoint
+    p = _add_relative_post_pick(_project())
+    p.application.detections = [DetectPoint(detector='cube',
+                                            before_waypoint='pre_pick')]
+    xml = get_application(AppType.VISION_GUIDED_MOTION).build_tree_xml(p)
+    rel = xml.index('<SetWaypointRelative waypoint="post_pick"')
+    assert rel > xml.index('SetWaypointFromDetection waypoint="pick"')
+    assert rel < xml.index('<MoveWaypoint waypoint="pre_pick"')
+
+
+def test_detect_point_ordering_validation():
+    from trainit_setup_assistant.model import DetectPoint
+    p = _project()
+    # anchor AFTER the bound moves: pre_pick/pick would run on the fallback
+    p.application.detections = [DetectPoint(detector='cube',
+                                            before_waypoint='place')]
+    text = '\n'.join(get_application(AppType.VISION_GUIDED_MOTION).validate(p))
+    assert "BEFORE that detector's Detect block" in text
+    p.application.detections = [DetectPoint(detector='ghost',
+                                            before_waypoint='nowhere')]
+    text = '\n'.join(get_application(AppType.VISION_GUIDED_MOTION).validate(p))
+    assert 'unknown detector "ghost"' in text and 'unknown waypoint "nowhere"' in text
+
+
+def test_detect_points_round_trip(tmp_path):
+    from trainit_setup_assistant.model import DetectPoint
+    p = _project()
+    p.application.detections = [DetectPoint(detector='cube',
+                                            before_waypoint='pre_pick')]
+    f = tmp_path / 'project.yaml'
+    save_project(p, f)
+    q = load_project(f)
+    assert q.application.detections[0].before_waypoint == 'pre_pick'

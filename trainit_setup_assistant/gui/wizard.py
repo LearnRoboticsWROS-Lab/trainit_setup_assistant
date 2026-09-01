@@ -1623,6 +1623,7 @@ _BLOCK_META = {
     'move':    ('\U0001F9BE', '#1565c0', 'Move (robot)'),
     'gripper': ('✊',     '#2e7d32', 'Gripper'),
     'reset':   ('♻',     '#2e7d32', 'Reset scene'),
+    'detect':  ('\U0001F4F7', '#6a1b9a', 'Detect'),
     'wait':    ('⏱',     '#ef6c00', 'Wait'),
     'loop':    ('\U0001F501', '#ef6c00', 'Loop'),
 }
@@ -1700,12 +1701,15 @@ class BlocksPage(QWizardPage):
         pal.addWidget(QLabel('Layer 2 — Gripper / objects'))
         pal.addWidget(pal_btn('gripper', 'Gripper'))
         pal.addWidget(pal_btn('reset', 'Reset scene (sim)'))
-        note = QLabel('Vision lives on the MOVE block: pick a detector in its '
-                      'properties and the waypoint is guided by the camera.')
+        pal.addWidget(QLabel('Layer 3 — Vision'))
+        pal.addWidget(pal_btn('detect', 'Detect (sample the camera)'))
+        note = QLabel('WHERE this block sits is WHEN the camera is sampled; the '
+                      'Move blocks bound to its detector (Camera guidance) update '
+                      'there. No Detect block = automatic at cycle start.')
         note.setWordWrap(True)
         note.setStyleSheet('color:#6a1b9a;')
         pal.addWidget(note)
-        pal.addWidget(QLabel('Layer 3 — Process'))
+        pal.addWidget(QLabel('Layer 4 — Process'))
         pal.addWidget(pal_btn('wait', 'Wait / delay'))
         pal.addWidget(pal_btn('loop', 'Loop sequence'))
         pal.addWidget(QLabel('Roadmap'))
@@ -1756,6 +1760,7 @@ class BlocksPage(QWizardPage):
         self.stack.addWidget(self._wait_form())      # 3
         self.stack.addWidget(self._loop_form())      # 4
         self.stack.addWidget(self._reset_form())     # 5
+        self.stack.addWidget(self._detect_form())    # 6
         insp.addWidget(self.stack, 1)
         apply_btn = QPushButton('Apply to block')
         apply_btn.clicked.connect(self.apply_inspector)
@@ -1980,6 +1985,33 @@ class BlocksPage(QWizardPage):
         v.addStretch(1)
         return w
 
+    def _detect_form(self) -> QWidget:
+        w = QWidget()
+        f = QFormLayout(w)
+        self.dp_detector = QComboBox()
+        f.addRow('Detector (Step 5)', self.dp_detector)
+        note = QLabel('Samples the camera AT THIS POINT of the flow: DetectObject '
+                      'runs here and updates every Move guided by this detector. '
+                      'Place it where the scene is visible (e.g. at ready, before '
+                      'the approach). A cycle may hold several Detect blocks with '
+                      'different detectors.')
+        note.setWordWrap(True)
+        f.addRow(note)
+        return w
+
+    def _fill_detect_point(self, b: dict) -> None:
+        names = []
+        try:
+            names = self.ctrl.detector_names()
+        except Exception:  # noqa: BLE001
+            pass
+        self.dp_detector.blockSignals(True)
+        self.dp_detector.clear()
+        self.dp_detector.addItems(names or ['(configure one in Step 5)'])
+        if b.get('detector') in names:
+            self.dp_detector.setCurrentText(b['detector'])
+        self.dp_detector.blockSignals(False)
+
     def _fill_loop_to(self, current=''):
         """Move blocks the loop may end on. Rebuilt on selection so it always matches
         the current sequence."""
@@ -2024,6 +2056,7 @@ class BlocksPage(QWizardPage):
                         'rroll': 0.0, 'rpitch': 0.0, 'ryaw': 0.0},
             'gripper': {'kind': 'gripper', 'action': 'close', 'payload': ''},
             'reset':   {'kind': 'reset'},
+            'detect':  {'kind': 'detect', 'detector': ''},
             'wait':    {'kind': 'wait', 'ms': 500},
             'loop':    {'kind': 'loop', 'cycles': -1},
         }[kind]
@@ -2058,8 +2091,11 @@ class BlocksPage(QWizardPage):
             self.stack.setCurrentIndex(0)
             return
         b = self.blocks[row]
-        idx = {'move': 1, 'gripper': 2, 'wait': 3, 'loop': 4, 'reset': 5}[b['kind']]
+        idx = {'move': 1, 'gripper': 2, 'wait': 3, 'loop': 4, 'reset': 5,
+               'detect': 6}[b['kind']]
         self.stack.setCurrentIndex(idx)
+        if b['kind'] == 'detect':
+            self._fill_detect_point(b)
         if b['kind'] == 'move':
             self._fill_move_vision(b)
             self.m_name.setText(b['name'])
@@ -2144,6 +2180,9 @@ class BlocksPage(QWizardPage):
                      payload=self.g_payload.text().strip())
         elif b['kind'] == 'wait':
             b.update(ms=self.w_ms.value())
+        elif b['kind'] == 'detect':
+            det = self.dp_detector.currentText()
+            b.update(detector='' if det.startswith('(') else det)
         elif b['kind'] == 'loop':
             to = self.l_to.currentText()
             b.update(cycles=-1 if self.l_forever.isChecked() else self.l_cycles.value(),
@@ -2208,6 +2247,8 @@ class BlocksPage(QWizardPage):
             return f"Gripper {names[b['action']]}"
         if b['kind'] == 'reset':
             return 'Reset scene → initial poses (sim)'
+        if b['kind'] == 'detect':
+            return f"Detect {b.get('detector') or '?'} — sample the camera here"
         if b['kind'] == 'wait':
             return f"Wait {b['ms']} ms"
         times = 'forever' if b['cycles'] == -1 else f"{b['cycles']}×"
@@ -2246,12 +2287,16 @@ class BlocksPage(QWizardPage):
         self.seq.blockSignals(False)
         if 0 <= select < self.seq.count():
             self.seq.setCurrentRow(select)
-        dets = sorted({b['detector'] for b in self.blocks
-                       if b['kind'] == 'move' and b.get('detector')})
+        bound = {b['detector'] for b in self.blocks
+                 if b['kind'] == 'move' and b.get('detector')}
+        explicit = {b['detector'] for b in self.blocks
+                    if b['kind'] == 'detect' and b.get('detector')}
+        dets = sorted(bound - explicit)
         if dets:
             self.auto_detect.setText(
                 '\U0001F4F7 Detect ' + ', '.join(dets) + ' — automatic, at cycle '
-                'start; after a Reset scene the Step-5 settle pause is emitted.')
+                'start (add a Detect block to choose the moment); after a Reset '
+                'scene the Step-5 settle pause is emitted.')
         self.auto_detect.setVisible(bool(dets))
         self._sync_model()
 
@@ -2355,6 +2400,20 @@ class BlocksPage(QWizardPage):
                                    droll=dr, dpitch=dp, dyaw=dyw)
             except Exception as exc:  # noqa: BLE001 - dangling names while editing
                 warn = f'relative binding: {exc}'
+        # explicit Detect blocks (D-018): the anchor is the NEXT move below them
+        for i, b in enumerate(self.blocks):
+            if b['kind'] != 'detect':
+                continue
+            if not b.get('detector'):
+                warn = 'a Detect block needs a detector (Step 5)'
+                continue
+            nxt = next((x['name'] for x in self.blocks[i + 1:]
+                        if x['kind'] == 'move'), None)
+            if nxt is None:
+                warn = f"Detect '{b['detector']}': no Move below it — put it above " \
+                       'the move it should precede'
+                continue
+            ctrl.add_detect_point(b['detector'], nxt)
         self.status.setText(warn)
 
     # ---- lifecycle -----------------------------------------------------------
@@ -2438,6 +2497,17 @@ class BlocksPage(QWizardPage):
                 blocks.insert(idx, lb)
             else:
                 blocks.append(lb)
+        # rebuild the explicit Detect blocks (D-018) before their anchor moves;
+        # reversed so repeated inserts at the same index keep the declared order
+        for pt in reversed(app.detections):
+            idx = next((i for i, blk in enumerate(blocks)
+                        if blk['kind'] == 'move' and blk['name'] == pt.before_waypoint),
+                       None)
+            db = {'kind': 'detect', 'detector': pt.detector}
+            if idx is None:
+                blocks.append(db)
+            else:
+                blocks.insert(idx, db)
         self.blocks = blocks
         self._refresh()
 

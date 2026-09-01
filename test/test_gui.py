@@ -617,3 +617,32 @@ def test_blocks_page_folds_and_reopens_relative_steps(qapp):
     bp.initializePage()
     rb = next(b for b in bp.blocks if b.get('name') == 'post_pick')
     assert rb['rel_step'] == 'pick' and rb['rdz'] == 0.08 and rb['ryaw'] == 45.0
+
+
+def test_blocks_page_folds_and_reopens_detect_blocks(qapp):
+    """D-018: a Detect block anchors to the next Move; reopen rebuilds it there."""
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    ctrl.upsert_detector('red_cube', params={'class_id': 'cube'})
+    wiz = SetupWizard(ctrl)
+    bp = wiz.blocks_page
+    mv = {'kind': 'move', 'target': 'named', 'named': 'home', 'pos': '',
+          'quat': '0, 0, 0, 1', 'motion': 'ptp', 'planner': '', 'speed': 50,
+          'tol': 0.1, 'check': 'inherit', 'detector': '', 'vdx': 0.0, 'vdy': 0.0,
+          'vdz': 0.0, 'vori': 'keep', 'vori_ref': '', 'vori_raw': '',
+          'rel_step': '', 'rdx': 0.0, 'rdy': 0.0, 'rdz': 0.0,
+          'rroll': 0.0, 'rpitch': 0.0, 'ryaw': 0.0}
+    bp.blocks = [dict(mv, name='ready'),
+                 {'kind': 'detect', 'detector': 'red_cube'},
+                 dict(mv, name='approach')]
+    bp._sync_model()
+    pts = ctrl.project.application.detections
+    assert len(pts) == 1
+    assert pts[0].detector == 'red_cube' and pts[0].before_waypoint == 'approach'
+    bp.blocks = []
+    bp.initializePage()
+    kinds = [(b['kind'], b.get('name') or b.get('detector')) for b in bp.blocks]
+    assert ('detect', 'red_cube') in kinds
+    di = kinds.index(('detect', 'red_cube'))
+    assert kinds[di + 1] == ('move', 'approach')

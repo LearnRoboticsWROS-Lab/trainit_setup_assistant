@@ -35,7 +35,8 @@ from .robot import (
     RobotSpec,
 )
 from .scene import Payload, SceneObject, SceneSpec
-from .task import ApplicationSpec, MotionSegment, ToolAction, Waypoint
+from .task import (ApplicationSpec, DetectPoint, MotionSegment, ToolAction,
+                   Waypoint)
 
 __all__ = [
     'SCHEMA_VERSION',
@@ -70,6 +71,7 @@ __all__ = [
     'DetectorSpec',
     'VisionBinding',
     'RelativeBinding',
+    'DetectPoint',
     'DetectionMethod',
     # enums
     'WaypointType',

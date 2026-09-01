@@ -57,6 +57,33 @@ class VisionGuidedMotion(PickAndPlace):
                                 'runtime pose (it must be a tcp waypoint with an '
                                 'orientation, or camera-guided)')
 
+        # --- explicit sampling points (D-018) ---
+        seq = project.application.sequence or self._derived_sequence(project)
+
+        def _first(n):
+            return seq.index(n) if n in seq else 10 ** 9
+
+        det_names = {d.name for d in per.detectors} if per else set()
+        first_anchor: dict = {}
+        for pt in project.application.detections:
+            if pt.detector not in det_names:
+                problems.append(f'Detect block samples unknown detector '
+                                f'"{pt.detector}"')
+            if pt.before_waypoint not in names:
+                problems.append(f'Detect block for "{pt.detector}" is anchored to '
+                                f'unknown waypoint "{pt.before_waypoint}"')
+            else:
+                idx = _first(pt.before_waypoint)
+                first_anchor[pt.detector] = min(
+                    first_anchor.get(pt.detector, idx), idx)
+        for wp in bound:
+            det = wp.vision.detector
+            if det in first_anchor and _first(wp.name) < first_anchor[det]:
+                problems.append(
+                    f'waypoint "{wp.name}" is guided by "{det}" but its move comes '
+                    f'BEFORE that detector\'s Detect block — it would run on the '
+                    'captured fallback. Move the Detect block earlier.')
+
         if per is None or not per.detectors:
             if not rel:
                 problems.append(f'{self.app_type}: no perception block '
@@ -120,54 +147,82 @@ class VisionGuidedMotion(PickAndPlace):
 
     # --- tree hooks -------------------------------------------------------------
     def _cycle_prologue(self, project: CanonicalProject, indent: str) -> List[str]:
+        """Cycle start: taught-reference relatives + the AUTOMATIC detector groups
+        (detectors with bindings but no explicit DetectPoint — D-018)."""
+        lines: List[str] = []
+        taught_rel = []
+        for wp in self._relative_waypoints(project):
+            ref = project.application.waypoint_by_name(wp.relative.step)
+            if ref is not None and ref.vision is None:
+                taught_rel.append(wp)
+        if taught_rel:
+            lines.append(f'{indent}<!-- Relative steps (D-017): pose derived from '
+                         "another step's pose at run time. -->")
+            lines += [self._relative_line(wp, indent) for wp in taught_rel]
         per = project.perception
         bound = self._vision_waypoints(project)
-        lines: List[str] = []
-        if per is None or not bound:
-            return lines + self._relative_lines(project, indent)
-        lines.append(
-            f'{indent}<!-- Vision (D-014): these waypoints are overwritten from the '
-            'camera each cycle; bt_params keeps the captured poses as fallback. -->')
-        for det_name, waypoints in self._by_detector(bound).items():
-            d = per.detector_by_name(det_name)
-            if d is None:
-                continue
-            out_key = f'detected.{d.name}'
-            lines.append(
-                f'{indent}<DetectObject detector="{d.name}" class_id="{d.class_id}" '
-                f'target_frame="{project.robot.base_frame}" '
-                f'timeout_ms="{per.detect_timeout_ms}" out_key="{out_key}"/>')
-            for wp in waypoints:
-                b = wp.vision
-                # dx/dy only when set, so the golden (dz-only) stays byte-stable
-                offsets = ''.join(f'{k}="{v:.3f}" ' for k, v in
-                                  (('dx', b.dx), ('dy', b.dy))
-                                  if round(v, 3) != 0.0)
+        if per is not None and bound:
+            explicit = {pt.detector for pt in project.application.detections}
+            auto = [d for d in self._by_detector(bound) if d not in explicit]
+            if auto:
                 lines.append(
-                    f'{indent}<SetWaypointFromDetection waypoint="{wp.name}" '
-                    f'from="{out_key}" {offsets}dz="{b.dz:.3f}" '
-                    f'orientation="{b.orientation}"/>')
-        return lines + self._relative_lines(project, indent)
-
-    def _relative_lines(self, project: CanonicalProject, indent: str) -> List[str]:
-        """Step-relative waypoints (D-017), emitted AFTER the vision lines so the
-        reference pose is already final when SetWaypointRelative reads it."""
-        rel = self._relative_waypoints(project)
-        if not rel:
-            return []
-        lines = [f'{indent}<!-- Relative steps (D-017): pose derived from another '
-                 "step's FINAL pose (vision included), at run time. -->"]
-        for wp in rel:
-            r = wp.relative
-            offs = ''.join(f'{k}="{v:.3f}" ' for k, v in
-                           (('dx', r.dx), ('dy', r.dy)) if round(v, 3) != 0.0)
-            angs = ''.join(f'{k}="{v:.1f}" ' for k, v in
-                           (('droll', r.droll), ('dpitch', r.dpitch),
-                            ('dyaw', r.dyaw)) if round(v, 1) != 0.0)
-            lines.append(
-                f'{indent}<SetWaypointRelative waypoint="{wp.name}" '
-                f'from="{r.step}" {offs}dz="{r.dz:.3f}" {angs}'.rstrip() + '/>')
+                    f'{indent}<!-- Vision (D-014): these waypoints are overwritten '
+                    'from the camera each cycle; bt_params keeps the captured poses '
+                    'as fallback. -->')
+                for det in auto:
+                    lines += self._detector_group(project, det, indent)
         return lines
+
+    def _before_move(self, project: CanonicalProject, wp_name: str,
+                     indent: str) -> List[str]:
+        """Explicit sampling points (D-018): the Detect block's position IS the
+        sampling instant — DetectObject fires here and updates its bound moves."""
+        lines: List[str] = []
+        for pt in project.application.detections:
+            if pt.before_waypoint == wp_name:
+                lines += self._detector_group(project, pt.detector, indent)
+        return lines
+
+    def _detector_group(self, project: CanonicalProject, det_name: str,
+                        indent: str) -> List[str]:
+        """One sampling: DetectObject + this detector's waypoint updates + the
+        relative steps whose reference those updates just finalized."""
+        per = project.perception
+        d = per.detector_by_name(det_name) if per else None
+        if d is None:
+            return []
+        bound = [wp for wp in self._vision_waypoints(project)
+                 if wp.vision.detector == det_name]
+        out_key = f'detected.{d.name}'
+        lines = [
+            f'{indent}<DetectObject detector="{d.name}" class_id="{d.class_id}" '
+            f'target_frame="{project.robot.base_frame}" '
+            f'timeout_ms="{per.detect_timeout_ms}" out_key="{out_key}"/>']
+        for wp in bound:
+            b = wp.vision
+            # dx/dy only when set, so the golden (dz-only) stays byte-stable
+            offsets = ''.join(f'{k}="{v:.3f}" ' for k, v in
+                              (('dx', b.dx), ('dy', b.dy))
+                              if round(v, 3) != 0.0)
+            lines.append(
+                f'{indent}<SetWaypointFromDetection waypoint="{wp.name}" '
+                f'from="{out_key}" {offsets}dz="{b.dz:.3f}" '
+                f'orientation="{b.orientation}"/>')
+        ref_names = {wp.name for wp in bound}
+        for r_wp in self._relative_waypoints(project):
+            if r_wp.relative.step in ref_names:
+                lines.append(self._relative_line(r_wp, indent))
+        return lines
+
+    def _relative_line(self, wp: Waypoint, indent: str) -> str:
+        r = wp.relative
+        offs = ''.join(f'{k}="{v:.3f}" ' for k, v in
+                       (('dx', r.dx), ('dy', r.dy)) if round(v, 3) != 0.0)
+        angs = ''.join(f'{k}="{v:.1f}" ' for k, v in
+                       (('droll', r.droll), ('dpitch', r.dpitch),
+                        ('dyaw', r.dyaw)) if round(v, 1) != 0.0)
+        return (f'{indent}<SetWaypointRelative waypoint="{wp.name}" '
+                f'from="{r.step}" {offs}dz="{r.dz:.3f}" {angs}'.rstrip() + '/>')
 
     def _after_scene_reset(self, project: CanonicalProject, indent: str) -> List[str]:
         per = project.perception

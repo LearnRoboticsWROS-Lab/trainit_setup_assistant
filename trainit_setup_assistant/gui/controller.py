@@ -454,6 +454,14 @@ class AssistantController:
     def clear_application(self) -> None:
         app = self._require().application
         app.waypoints, app.segments, app.tool_actions, app.sequence = [], [], [], []
+        app.detections = []
+
+    def add_detect_point(self, detector: str, before_waypoint: str) -> None:
+        """Explicit camera sampling (D-018): DetectObject for ``detector`` fires
+        immediately before the move to ``before_waypoint``."""
+        from ..model import DetectPoint
+        self._require().application.detections.append(
+            DetectPoint(detector=detector, before_waypoint=before_waypoint))
 
     # ---- perception (the dedicated Perception step, TSA v4 / D-015) ----
     def _perception(self) -> PerceptionSpec:

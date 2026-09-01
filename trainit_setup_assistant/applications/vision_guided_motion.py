@@ -84,6 +84,15 @@ class VisionGuidedMotion(PickAndPlace):
                     f'BEFORE that detector\'s Detect block — it would run on the '
                     'captured fallback. Move the Detect block earlier.')
 
+        from ..model.enums import WaypointType as _WT
+        for wp in project.application.waypoints:
+            if (wp.type is _WT.TCP and not wp.position
+                    and wp.vision is None and wp.relative is None):
+                problems.append(
+                    f'waypoint "{wp.name}" is a tcp move with NO captured pose and '
+                    'no runtime binding — capture a pose, or guide it by camera / '
+                    'make it relative to a step')
+
         if per is None or not per.detectors:
             if not rel:
                 problems.append(f'{self.app_type}: no perception block '

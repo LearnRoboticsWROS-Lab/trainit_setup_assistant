@@ -377,7 +377,8 @@ class GeneratePage(QWizardPage):
         try:
             manifest = self.ctrl.generate(out_dir)
         except Exception as exc:  # noqa: BLE001
-            self.result.setPlainText(f'ERROR: {exc}')
+            import traceback
+            self.result.setPlainText(f'ERROR: {exc}\n\n{traceback.format_exc()}')
             return
         info = manifest.as_dict()
         b = self.ctrl.project.bundle
@@ -2330,8 +2331,11 @@ class BlocksPage(QWizardPage):
                     if b['target'] == 'named':
                         kwargs['named'] = b['named'] or b['name']
                     else:
-                        kwargs['position'] = _parse_floats(b['pos'])
-                        kwargs['orientation'] = _parse_floats(b['quat'])
+                        # an EMPTY pose is legal for a camera-guided or relative
+                        # move (the pose is written at run time); it stays tcp
+                        kwargs['position'] = _parse_floats(b['pos']) or None
+                        kwargs['orientation'] = _parse_floats(b['quat']) or None
+                        kwargs['tcp'] = True
                     ctrl.add_move(**kwargs)
                     prev_move = b['name']
                     if b.get('detector'):

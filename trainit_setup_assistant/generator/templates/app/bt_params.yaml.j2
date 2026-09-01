@@ -25,8 +25,15 @@
       {{ wp.name }}:
         type: {{ wp.type }}
 {% if wp.is_tcp %}
+{% if wp.position %}
         position:    {{ wp.position | fmtlist }}
+{% endif %}
+{% if wp.orientation %}
         orientation: {{ wp.orientation | fmtlist }}
+{% endif %}
+{% if not wp.position %}
+        # pose written at RUN TIME by this waypoint's vision/relative binding
+{% endif %}
 {% elif wp.named %}
         named: "{{ wp.named }}"
 {% elif wp.joints %}

@@ -398,7 +398,8 @@ class AssistantController:
                  aux=None, aux_is_center: bool = False,
                  allowed_start_tolerance: float = 0.1,
                  attached_collision_check: Optional[bool] = None,
-                 wait_after_ms: int = 0) -> None:
+                 wait_after_ms: int = 0,
+                 tcp: Optional[bool] = None) -> None:
         """Define a waypoint + its incoming motion segment and append it to the tree.
 
         TCP target if ``position`` is given; else a joint target (``named``/``joints``).
@@ -412,11 +413,18 @@ class AssistantController:
         transparent; None => inherit the current runtime state.
         """
         app = self._require().application
-        wtype = WaypointType.TCP if position is not None else WaypointType.JOINT
+        # ``tcp`` forces the type: a camera-guided or step-relative move may carry
+        # NO captured pose (it is written at run time) yet must stay a tcp goal.
+        if tcp is None:
+            wtype = WaypointType.TCP if position else WaypointType.JOINT
+        else:
+            wtype = WaypointType.TCP if tcp else WaypointType.JOINT
+        position = list(position) if position else None
+        orientation = list(orientation) if orientation else None
         wp = Waypoint(
             name=name, type=wtype,
-            position=list(position) if position is not None else None,
-            orientation=list(orientation) if orientation is not None else None,
+            position=position,
+            orientation=orientation,
             joints=list(joints) if joints is not None else None,
             named=named, role=WaypointRole(role),
             allowed_start_tolerance=allowed_start_tolerance)

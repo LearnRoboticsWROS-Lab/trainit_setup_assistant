@@ -402,3 +402,32 @@ def test_detect_points_round_trip(tmp_path):
     save_project(p, f)
     q = load_project(f)
     assert q.application.detections[0].before_waypoint == 'pre_pick'
+
+
+# --- regression: the user's Step-8 crash (tcp move with a runtime-only pose) ----
+
+def test_poseless_relative_tcp_waypoint_generates_instead_of_crashing(tmp_path):
+    """A relative (or camera-guided) move may carry NO captured pose: bt_params
+    must comment it, not crash on fmtlist(None) — the live Step-8 failure."""
+    from trainit_setup_assistant.applications import build_bt_params_context
+    from trainit_setup_assistant.generator.determinism import build_jinja_env
+    p = _add_relative_post_pick(_project())
+    wp = p.application.waypoint_by_name('post_pick')
+    wp.position = None
+    wp.orientation = None
+    ctx = build_bt_params_context(p)
+    text = build_jinja_env().get_template('app/bt_params.yaml.j2').render(**ctx)
+    assert 'pose written at RUN TIME' in text
+    import yaml
+    yaml.safe_load(text)                       # still valid YAML
+    problems = get_application(AppType.VISION_GUIDED_MOTION).validate(p)
+    assert not any('post_pick' in x and 'NO captured pose' in x for x in problems)
+
+
+def test_poseless_tcp_waypoint_without_binding_is_flagged():
+    p = _project()
+    p.application.waypoints.append(Waypoint(name='orphan', type=WaypointType.TCP))
+    p.application.sequence.append('orphan')
+    p.application.segments.append(MotionSegment(to_waypoint='orphan'))
+    problems = get_application(AppType.VISION_GUIDED_MOTION).validate(p)
+    assert any('orphan' in x and 'NO captured pose' in x for x in problems)

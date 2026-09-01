@@ -53,7 +53,7 @@ source install/setup.bash
 ```bash
 ros2 run trainit_setup_assistant trainit_verify \
   ~/fr5_ws/src/trainit_setup_assistant/examples/fr3wml_project.yaml \
-  --golden ~/fr5_ws/src/fr3wml_digital_twin/fr3wml_suction_tsa_32_bundle --build
+  --golden ~/fr5_ws/src/fr3wml_digital_twin/fr3wml_suction_camera_tsa_4_1_bundle --build
 ```
 **Expect:** `21/21 checks passed`, `EQUIVALENCE: PASS`, `BUILD: PASS`.
 
@@ -116,7 +116,7 @@ gizmo (Test C) is optional.
    ros2 launch fr3wml_gui_test trainit_bt.launch.py planner_mode:=pilz
    ```
    **Expect:** RViz opens with FR3WML; the robot runs the validated pick&place of
-   the `fr3wml_suction_tsa_32_bundle` golden (ready → pre_pick → pick → suction →
+   the `fr3wml_suction_camera_tsa_4_1_bundle` golden (vision-guided: detect → approach → pick → suction →
    … ). Then `mode:=isaac`.
 
 ---

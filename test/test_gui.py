@@ -58,7 +58,7 @@ def test_mock_gripper_server_generated_for_bootstrap():
 
 
 GOLDEN_SRDF = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-               'fr3wml_suction_moveit_config/config/fr3wml_suction.srdf')
+               'fr3wml_suction_camera_moveit_config/config/fr3wml_suction.srdf')
 
 
 @pytest.mark.skipif(not os.path.isfile(GOLDEN_SRDF), reason='golden SRDF not present')
@@ -67,8 +67,8 @@ def test_controller_import_collision_matrix():
     ctrl.open_project(EXAMPLE)
     ctrl.project.robot.disable_collisions = None
     n = ctrl.import_collision_matrix_from_srdf(GOLDEN_SRDF)
-    assert n == 13
-    assert len(ctrl.project.robot.disable_collisions) == 13
+    assert n == 14                      # 13 arm pairs + the camera mount pair
+    assert len(ctrl.project.robot.disable_collisions) == 14
 
 
 # NOTE: test_controller_rebuilds_golden_app was removed on 2026-08-24 together with the
@@ -526,18 +526,19 @@ def test_blocks_page_preserves_golden_loop_start_and_tree(qapp):
     project must not fold loop_start away — the regenerated tree must still equal
     the golden's shape (Repeat opening at pre_pick, detection inside the cycle)."""
     GOLDEN_PROJECT = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-                      'fr3wml_suction_tsa_32_bundle/project.yaml')
+                      'fr3wml_suction_camera_tsa_4_1_bundle/project.yaml')
     if not os.path.isfile(GOLDEN_PROJECT):
         pytest.skip('golden bundle not present')
     from trainit_setup_assistant.applications import get_application
     from trainit_setup_assistant.gui.wizard import SetupWizard
     ctrl = AssistantController()
     ctrl.open_project(GOLDEN_PROJECT)
+    loop_start_before = ctrl.project.application.loop_start
     before = get_application(ctrl.project.application.type).build_tree_xml(ctrl.project)
     wiz = SetupWizard(ctrl)
     wiz.blocks_page.initializePage()           # enter Step 7 (this used to null it)
     assert wiz.blocks_page.validatePage()
-    assert ctrl.project.application.loop_start == 'pre_pick'
+    assert ctrl.project.application.loop_start == loop_start_before
     after = get_application(ctrl.project.application.type).build_tree_xml(ctrl.project)
     from trainit_setup_assistant.verify.equivalence import tree_diffs
     assert not tree_diffs(after, before), tree_diffs(after, before)[:5]
@@ -548,7 +549,7 @@ def test_blocks_page_no_edit_apply_is_identity_on_the_golden(qapp):
     edits must not mutate the model (the auto free/OMPL switch fires only when the
     detector is NEWLY set; a literal orientation would ride vori_raw)."""
     GOLDEN_PROJECT = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-                      'fr3wml_suction_tsa_32_bundle/project.yaml')
+                      'fr3wml_suction_camera_tsa_4_1_bundle/project.yaml')
     if not os.path.isfile(GOLDEN_PROJECT):
         pytest.skip('golden bundle not present')
     from trainit_setup_assistant.gui.wizard import SetupWizard

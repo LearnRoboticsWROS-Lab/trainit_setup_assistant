@@ -25,14 +25,18 @@ from trainit_setup_assistant.verify.equivalence import APP, DESCRIPTION, MOVEIT
 
 HERE = os.path.dirname(__file__)
 EXAMPLE = os.path.join(HERE, os.pardir, 'examples', 'fr3wml_project.yaml')
+# Re-blessed 2026-09-01 (D-018 complete): the golden is the WORKING vision
+# bundle the user generated end-to-end through the TSA v4.3.1 GUI and validated
+# live in Isaac (camera base config, Perception step, camera guidance,
+# step-relative post_pick, an explicit Detect point).
 GOLDEN_ROOT = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-               'fr3wml_suction_tsa_32_bundle')
+               'fr3wml_suction_camera_tsa_4_1_bundle')
 GOLDEN_PROJECT = os.path.join(GOLDEN_ROOT, 'project.yaml')
 
 GOLDEN_PACKAGES = {
-    DESCRIPTION: 'fr3wml_suction_tsa_32_description',
-    MOVEIT: 'fr3wml_suction_tsa_32_trainit_config',
-    APP: 'fr3wml_suction_tsa_32_app',
+    DESCRIPTION: 'fr3wml_suction_camera_tsa_4_1_description',
+    MOVEIT: 'fr3wml_suction_camera_tsa_4_1_trainit_config',
+    APP: 'fr3wml_suction_camera_tsa_4_1_app',
 }
 
 

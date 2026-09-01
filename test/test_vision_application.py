@@ -266,3 +266,86 @@ def test_upsert_detector_preserves_topic_overrides():
     ctrl = AssistantController(p)
     ctrl.upsert_detector('cube', params={'class_id': 'cube'})
     assert p.perception.detector_by_name('cube').rgb_topic == '/other/color/image_raw'
+
+
+# --- D-017 (v4.2): step-relative waypoints --------------------------------------
+
+def _add_relative_post_pick(p):
+    from trainit_setup_assistant.model import RelativeBinding
+    wp = Waypoint(name='post_pick', type=WaypointType.TCP,
+                  relative=RelativeBinding(step='pick', dz=0.08))
+    p.application.waypoints.append(wp)
+    p.application.segments.append(MotionSegment(to_waypoint='post_pick'))
+    p.application.sequence.insert(3, 'post_pick')
+    return p
+
+
+def test_relative_line_emitted_after_the_vision_lines():
+    p = _add_relative_post_pick(_project())
+    xml = get_application(AppType.VISION_GUIDED_MOTION).build_tree_xml(p)
+    assert ('<SetWaypointRelative waypoint="post_pick" from="pick" dz="0.080"/>'
+            in xml)
+    assert xml.index('<SetWaypointRelative') > xml.index(
+        '<SetWaypointFromDetection waypoint="pick"')
+    assert xml.index('<SetWaypointRelative') < xml.index(
+        '<MoveWaypoint waypoint="pre_pick"')      # still in the cycle prologue
+
+
+def test_relative_angles_emitted_only_when_set():
+    p = _add_relative_post_pick(_project())
+    p.application.waypoint_by_name('post_pick').relative.dyaw = 45.0
+    xml = get_application(AppType.VISION_GUIDED_MOTION).build_tree_xml(p)
+    assert 'dz="0.080" dyaw="45.0"/>' in xml
+    assert 'droll=' not in xml and 'dpitch=' not in xml
+
+
+def test_relative_only_app_is_valid_without_a_camera():
+    p = _add_relative_post_pick(_project(with_vision=False))
+    p.perception = None
+    problems = get_application(AppType.VISION_GUIDED_MOTION).validate(p)
+    assert not any('no perception block' in x for x in problems)
+    xml = get_application(AppType.VISION_GUIDED_MOTION).build_tree_xml(p)
+    assert '<SetWaypointRelative' in xml and '<DetectObject' not in xml
+
+
+def test_relative_validation_rules():
+    from trainit_setup_assistant.model import RelativeBinding
+    p = _add_relative_post_pick(_project())
+    wp = p.application.waypoint_by_name('post_pick')
+    wp.relative.step = 'ghost'
+    text = '\n'.join(get_application(AppType.VISION_GUIDED_MOTION).validate(p))
+    assert 'relative to unknown step "ghost"' in text
+    # chain: relative -> relative is refused
+    wp.relative.step = 'pick'
+    p.application.waypoint_by_name('pick').vision = None
+    p.application.waypoint_by_name('pick').relative = RelativeBinding(step='home')
+    text = '\n'.join(get_application(AppType.VISION_GUIDED_MOTION).validate(p))
+    assert 'chains are not supported' in text
+    # both bindings on one waypoint is refused
+    p2 = _add_relative_post_pick(_project())
+    p2.application.waypoint_by_name('post_pick').vision = VisionBinding(
+        detector='cube', dz=0.08)
+    text = '\n'.join(get_application(AppType.VISION_GUIDED_MOTION).validate(p2))
+    assert 'BOTH a vision and a relative binding' in text
+
+
+def test_bind_relative_and_vision_are_mutually_exclusive():
+    from trainit_setup_assistant.gui.controller import AssistantController
+    p = _add_relative_post_pick(_project())
+    ctrl = AssistantController(p)
+    ctrl.bind_vision('post_pick', 'cube', dz=0.05)
+    wp = p.application.waypoint_by_name('post_pick')
+    assert wp.relative is None and wp.vision is not None
+    ctrl.bind_relative('post_pick', 'pick', dz=0.08)
+    assert wp.vision is None and wp.relative.step == 'pick'
+    with pytest.raises(ValueError):
+        ctrl.bind_relative('post_pick', 'post_pick')
+
+
+def test_relative_round_trips_through_yaml(tmp_path):
+    p = _add_relative_post_pick(_project())
+    f = tmp_path / 'project.yaml'
+    save_project(p, f)
+    q = load_project(f)
+    r = q.application.waypoint_by_name('post_pick').relative
+    assert r.step == 'pick' and r.dz == 0.08

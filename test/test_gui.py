@@ -586,3 +586,34 @@ def test_literal_quaternion_binding_survives_step7(qapp):
     bp.apply_inspector()
     assert bp.validatePage()
     assert ctrl.project.application.waypoint_by_name('pick').vision.orientation == '0;0;0;1'
+
+
+def test_blocks_page_folds_and_reopens_relative_steps(qapp):
+    """D-017: a Move with 'Relative to step' folds into Waypoint.relative and a
+    reopened project rebuilds the block fields."""
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    ctrl.upsert_detector('red_cube', params={'class_id': 'cube'})
+    wiz = SetupWizard(ctrl)
+    bp = wiz.blocks_page
+    base_move = {'kind': 'move', 'target': 'tcp', 'named': '',
+                 'quat': '-0.707, 0.707, 0, 0', 'motion': 'lin', 'planner': 'pilz',
+                 'speed': 50, 'tol': 0.1, 'check': 'inherit', 'detector': '',
+                 'vdx': 0.0, 'vdy': 0.0, 'vdz': 0.0, 'vori': 'keep', 'vori_ref': '',
+                 'vori_raw': '', 'rel_step': '', 'rdx': 0.0, 'rdy': 0.0, 'rdz': 0.0,
+                 'rroll': 0.0, 'rpitch': 0.0, 'ryaw': 0.0}
+    pick = dict(base_move, name='pick', pos='0.5, 0.0, 0.03',
+                detector='red_cube', vdz=0.006)
+    post = dict(base_move, name='post_pick', pos='0.5, 0.0, 0.11',
+                rel_step='pick', rdz=0.08, ryaw=45.0)
+    bp.blocks = [pick, post]
+    bp._sync_model()
+    wp = ctrl.project.application.waypoint_by_name('post_pick')
+    assert wp.relative.step == 'pick' and wp.relative.dz == 0.08
+    assert wp.relative.dyaw == 45.0 and wp.vision is None
+    # reopen: the block dict comes back with the same fields
+    bp.blocks = []
+    bp.initializePage()
+    rb = next(b for b in bp.blocks if b.get('name') == 'post_pick')
+    assert rb['rel_step'] == 'pick' and rb['rdz'] == 0.08 and rb['ryaw'] == 45.0

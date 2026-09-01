@@ -529,6 +529,7 @@ class AssistantController:
         wp = self._require().application.waypoint_by_name(waypoint)
         if wp is None:
             raise ValueError(f'no waypoint named "{waypoint}"')
+        wp.relative = None                 # mutually exclusive with a relative binding
         wp.vision = VisionBinding(detector=detector, dx=float(dx), dy=float(dy),
                                   dz=float(dz), orientation=orientation)
 
@@ -536,6 +537,28 @@ class AssistantController:
         wp = self._require().application.waypoint_by_name(waypoint)
         if wp is not None:
             wp.vision = None
+
+    def bind_relative(self, waypoint: str, step: str, *, dx: float = 0.0,
+                      dy: float = 0.0, dz: float = 0.0, droll: float = 0.0,
+                      dpitch: float = 0.0, dyaw: float = 0.0) -> None:
+        """Make a waypoint STEP-RELATIVE (D-017): its pose is derived at run time
+        from another step's final pose (vision included) + offsets. Clears any
+        vision binding (the two are mutually exclusive)."""
+        from ..model import RelativeBinding
+        wp = self._require().application.waypoint_by_name(waypoint)
+        if wp is None:
+            raise ValueError(f'no waypoint named "{waypoint}"')
+        if step == waypoint:
+            raise ValueError(f'"{waypoint}" cannot be relative to itself')
+        wp.vision = None
+        wp.relative = RelativeBinding(step=step, dx=float(dx), dy=float(dy),
+                                      dz=float(dz), droll=float(droll),
+                                      dpitch=float(dpitch), dyaw=float(dyaw))
+
+    def unbind_relative(self, waypoint: str) -> None:
+        wp = self._require().application.waypoint_by_name(waypoint)
+        if wp is not None:
+            wp.relative = None
 
     # ---- scene (S3) ----
     def set_payload(self, obj_id: str, dims, attach_link: Optional[str] = None,

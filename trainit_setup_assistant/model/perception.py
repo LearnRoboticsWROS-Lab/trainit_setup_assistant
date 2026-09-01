@@ -104,6 +104,24 @@ class VisionBinding(BaseModel):
     orientation: str = 'keep'
 
 
+class RelativeBinding(BaseModel):
+    """A waypoint DERIVED from another step's FINAL pose (D-017): position =
+    reference + dx/dy/dz (base-frame metres), orientation = rpy delta (DEGREES,
+    extrinsic base-frame) composed onto the reference orientation. Resolved at RUN
+    TIME by ``SetWaypointRelative`` from the blackboard — so it follows the
+    reference wherever vision sent it this cycle. The canonical use: the retreat
+    (post_pick = pick + 8 cm) without a second detection, since at retreat time the
+    arm occludes the object anyway. Mutually exclusive with ``Waypoint.vision``."""
+
+    step: str                                   # the reference waypoint name
+    dx: float = 0.0
+    dy: float = 0.0
+    dz: float = 0.0
+    droll: float = 0.0                          # degrees
+    dpitch: float = 0.0
+    dyaw: float = 0.0
+
+
 class PerceptionSpec(BaseModel):
     camera: Optional[CameraSpec] = None
     detectors: List[DetectorSpec] = Field(default_factory=list)

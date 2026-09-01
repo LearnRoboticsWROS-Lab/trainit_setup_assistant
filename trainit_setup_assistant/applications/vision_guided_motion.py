@@ -32,14 +32,39 @@ class VisionGuidedMotion(PickAndPlace):
         # NO grasp/release requirement: a vision-guided motion may carry no gripper.
         per = project.perception
         bound = self._vision_waypoints(project)
+        rel = self._relative_waypoints(project)
+        names = {wp.name for wp in project.application.waypoints}
+
+        # --- step-relative bindings (D-017) ---
+        for wp in rel:
+            r = wp.relative
+            if wp.vision is not None:
+                problems.append(f'waypoint "{wp.name}" has BOTH a vision and a '
+                                'relative binding — pick one')
+            if r.step not in names:
+                problems.append(f'waypoint "{wp.name}" is relative to unknown '
+                                f'step "{r.step}"')
+                continue
+            if r.step == wp.name:
+                problems.append(f'waypoint "{wp.name}" cannot be relative to itself')
+                continue
+            ref = project.application.waypoint_by_name(r.step)
+            if ref.relative is not None:
+                problems.append(f'waypoint "{wp.name}": reference "{r.step}" is '
+                                'itself relative — chains are not supported yet')
+            elif ref.vision is None and not (ref.position and ref.orientation):
+                problems.append(f'waypoint "{wp.name}": reference "{r.step}" has no '
+                                'runtime pose (it must be a tcp waypoint with an '
+                                'orientation, or camera-guided)')
+
         if per is None or not per.detectors:
-            problems.append(f'{self.app_type}: no perception block '
-                            '(configure a detector in the Perception step)')
+            if not rel:
+                problems.append(f'{self.app_type}: no perception block '
+                                '(configure a detector in the Perception step)')
             return problems
-        if not bound:
+        if not bound and not rel:
             problems.append(f'{self.app_type}: no waypoint has a vision binding '
                             '(the application would be blind)')
-        names = {wp.name for wp in project.application.waypoints}
         for wp in bound:
             b = wp.vision
             if per.detector_by_name(b.detector) is None:
@@ -97,12 +122,12 @@ class VisionGuidedMotion(PickAndPlace):
     def _cycle_prologue(self, project: CanonicalProject, indent: str) -> List[str]:
         per = project.perception
         bound = self._vision_waypoints(project)
+        lines: List[str] = []
         if per is None or not bound:
-            return []
-        lines: List[str] = [
+            return lines + self._relative_lines(project, indent)
+        lines.append(
             f'{indent}<!-- Vision (D-014): these waypoints are overwritten from the '
-            'camera each cycle; bt_params keeps the captured poses as fallback. -->'
-        ]
+            'camera each cycle; bt_params keeps the captured poses as fallback. -->')
         for det_name, waypoints in self._by_detector(bound).items():
             d = per.detector_by_name(det_name)
             if d is None:
@@ -122,6 +147,26 @@ class VisionGuidedMotion(PickAndPlace):
                     f'{indent}<SetWaypointFromDetection waypoint="{wp.name}" '
                     f'from="{out_key}" {offsets}dz="{b.dz:.3f}" '
                     f'orientation="{b.orientation}"/>')
+        return lines + self._relative_lines(project, indent)
+
+    def _relative_lines(self, project: CanonicalProject, indent: str) -> List[str]:
+        """Step-relative waypoints (D-017), emitted AFTER the vision lines so the
+        reference pose is already final when SetWaypointRelative reads it."""
+        rel = self._relative_waypoints(project)
+        if not rel:
+            return []
+        lines = [f'{indent}<!-- Relative steps (D-017): pose derived from another '
+                 "step's FINAL pose (vision included), at run time. -->"]
+        for wp in rel:
+            r = wp.relative
+            offs = ''.join(f'{k}="{v:.3f}" ' for k, v in
+                           (('dx', r.dx), ('dy', r.dy)) if round(v, 3) != 0.0)
+            angs = ''.join(f'{k}="{v:.1f}" ' for k, v in
+                           (('droll', r.droll), ('dpitch', r.dpitch),
+                            ('dyaw', r.dyaw)) if round(v, 1) != 0.0)
+            lines.append(
+                f'{indent}<SetWaypointRelative waypoint="{wp.name}" '
+                f'from="{r.step}" {offs}dz="{r.dz:.3f}" {angs}'.rstrip() + '/>')
         return lines
 
     def _after_scene_reset(self, project: CanonicalProject, indent: str) -> List[str]:
@@ -136,6 +181,20 @@ class VisionGuidedMotion(PickAndPlace):
         ]
 
     # --- helpers ----------------------------------------------------------------
+    def _relative_waypoints(self, project: CanonicalProject) -> List[Waypoint]:
+        """Relative-bound waypoints in SEQUENCE order (first occurrence)."""
+        app = project.application
+        seq = app.sequence or self._derived_sequence(project)
+        seen, out = set(), []
+        for name in seq:
+            if name in seen:
+                continue
+            seen.add(name)
+            wp = app.waypoint_by_name(name)
+            if wp is not None and wp.relative is not None:
+                out.append(wp)
+        return out
+
     def _vision_waypoints(self, project: CanonicalProject) -> List[Waypoint]:
         """Vision-bound waypoints in SEQUENCE order (first occurrence)."""
         app = project.application

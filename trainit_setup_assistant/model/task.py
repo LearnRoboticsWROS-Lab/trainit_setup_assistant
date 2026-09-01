@@ -13,7 +13,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 from .enums import AppType, MotionType, PlannerId, ToolActionKind, WaypointRole, WaypointType
-from .perception import VisionBinding
+from .perception import RelativeBinding, VisionBinding
 
 
 class Waypoint(BaseModel):
@@ -28,6 +28,9 @@ class Waypoint(BaseModel):
     # position (and, for a joint waypoint, promotes it to tcp) at RUN TIME via
     # SetWaypointFromDetection; the captured pose below stays as the recorded fallback.
     vision: Optional[VisionBinding] = None
+    # Step-relative waypoint (D-017): pose derived at RUN TIME from another step's
+    # final pose via SetWaypointRelative. Mutually exclusive with `vision`.
+    relative: Optional[RelativeBinding] = None
     # Start-state tolerance (rad) for the move that REACHES this waypoint: how far the
     # current state may drift from the trajectory's first point before execution is
     # refused. Tuned per waypoint (tight-space moves want more slack); 0.0 disables the

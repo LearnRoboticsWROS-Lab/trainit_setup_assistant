@@ -1838,6 +1838,34 @@ class BlocksPage(QWizardPage):
         f.addRow('EEF orientation', self.m_vori)
         self.m_vori_ref = QComboBox()
         f.addRow('…same as', self.m_vori_ref)
+
+        # --- relative to step (D-017): this move's pose is DERIVED at run time
+        # from another step's final pose (vision included) + offsets — the retreat
+        # case: post_pick = pick + 8 cm, wherever the camera sent pick, with no
+        # second detection (the arm occludes the object at retreat time anyway).
+        f.addRow(QLabel('<b>Relative to step</b>'))
+        self.m_rel = QComboBox()
+        self.m_rel.setToolTip('The step this move follows. (none) = not relative. '
+                              'Mutually exclusive with camera guidance.')
+        f.addRow('Relative to', self.m_rel)
+        roff = QHBoxLayout()
+        self.m_rdx = QDoubleSpinBox(); self.m_rdy = QDoubleSpinBox()
+        self.m_rdz = QDoubleSpinBox()
+        for sb in (self.m_rdx, self.m_rdy, self.m_rdz):
+            sb.setRange(-1.0, 1.0); sb.setDecimals(3); sb.setSingleStep(0.005)
+        for lbl, sb in (('dx', self.m_rdx), ('dy', self.m_rdy), ('dz', self.m_rdz)):
+            roff.addWidget(QLabel(lbl)); roff.addWidget(sb)
+        f.addRow('Offset from step (m)', roff)
+        rang = QHBoxLayout()
+        self.m_rroll = QDoubleSpinBox(); self.m_rpitch = QDoubleSpinBox()
+        self.m_ryaw = QDoubleSpinBox()
+        for sb in (self.m_rroll, self.m_rpitch, self.m_ryaw):
+            sb.setRange(-180.0, 180.0); sb.setDecimals(1); sb.setSingleStep(5.0)
+        for lbl, sb in (('Δroll', self.m_rroll), ('Δpitch', self.m_rpitch),
+                        ('Δyaw', self.m_ryaw)):
+            rang.addWidget(QLabel(lbl)); rang.addWidget(sb)
+        rang_note = QHBoxLayout()
+        f.addRow('Δ orientation (°)', rang)
         return w
 
     def _fill_move_vision(self, b: dict) -> None:
@@ -1892,6 +1920,27 @@ class BlocksPage(QWizardPage):
                         'This detector publishes no object orientation (3D-only). '
                         'Object-relative grasping will come from a learned grasp '
                         'policy (roadmap).')
+        # relative-to-step widgets (D-017) + mutual exclusion with camera guidance
+        rel_step = b.get('rel_step', '')
+        self.m_rel.blockSignals(True)
+        self.m_rel.clear()
+        self.m_rel.addItem('(none)')
+        self.m_rel.addItems(moves)
+        if rel_step and rel_step not in moves:
+            self.m_rel.addItem(rel_step)      # dangling ref stays selectable
+            self.status.setText(f'relative step "{rel_step}" no longer exists — '
+                                'fix or re-pick it')
+        self.m_rel.setCurrentText(rel_step if rel_step else '(none)')
+        self.m_rel.blockSignals(False)
+        self.m_rdx.setValue(float(b.get('rdx', 0.0)))
+        self.m_rdy.setValue(float(b.get('rdy', 0.0)))
+        self.m_rdz.setValue(float(b.get('rdz', 0.0)))
+        self.m_rroll.setValue(float(b.get('rroll', 0.0)))
+        self.m_rpitch.setValue(float(b.get('rpitch', 0.0)))
+        self.m_ryaw.setValue(float(b.get('ryaw', 0.0)))
+        # one master per move: camera or step, not both — the other side greys out
+        self.m_rel.setEnabled(not b.get('detector'))
+        self.m_detector.setEnabled(not rel_step)
 
     def _gripper_form(self) -> QWidget:
         w = QWidget()
@@ -1970,7 +2019,9 @@ class BlocksPage(QWizardPage):
                         'target': 'named', 'named': '', 'pos': '', 'quat': '0, 0, 0, 1',
                         'motion': 'ptp', 'planner': '', 'speed': 50, 'tol': 0.1, 'check': 'inherit',
                         'detector': '', 'vdx': 0.0, 'vdy': 0.0, 'vdz': 0.0,
-                        'vori': 'keep', 'vori_ref': '', 'vori_raw': ''},
+                        'vori': 'keep', 'vori_ref': '', 'vori_raw': '',
+                        'rel_step': '', 'rdx': 0.0, 'rdy': 0.0, 'rdz': 0.0,
+                        'rroll': 0.0, 'rpitch': 0.0, 'ryaw': 0.0},
             'gripper': {'kind': 'gripper', 'action': 'close', 'payload': ''},
             'reset':   {'kind': 'reset'},
             'wait':    {'kind': 'wait', 'ms': 500},
@@ -2041,6 +2092,14 @@ class BlocksPage(QWizardPage):
         if b['kind'] == 'move':
             det = self.m_detector.currentText()
             det = '' if det.startswith('(') else det
+            rel_step = self.m_rel.currentText()
+            rel_step = '' if rel_step.startswith('(') else rel_step
+            if det and rel_step:
+                # one master per move: keep the camera, drop the relative selection
+                rel_step = ''
+                self.status.setText(f"'{b['name']}': a move follows EITHER the "
+                                    'camera OR a step — kept the camera; set the '
+                                    'detector to (none) first to make it relative.')
             old_det = b.get('detector', '')
             vori = {_VORI_KEEP: 'keep', _VORI_SAME: 'same',
                     _VORI_ALIGN: 'align'}[self.m_vori.currentIndex()]
@@ -2060,7 +2119,11 @@ class BlocksPage(QWizardPage):
                      check=self.m_check.currentText(),
                      detector=det, vdx=self.m_dx.value(), vdy=self.m_dy.value(),
                      vdz=self.m_dz.value(), vori=vori,
-                     vori_ref=self.m_vori_ref.currentText().strip())
+                     vori_ref=self.m_vori_ref.currentText().strip(),
+                     rel_step=rel_step, rdx=self.m_rdx.value(),
+                     rdy=self.m_rdy.value(), rdz=self.m_rdz.value(),
+                     rroll=self.m_rroll.value(), rpitch=self.m_rpitch.value(),
+                     ryaw=self.m_ryaw.value())
             # a vision goal lands anywhere: the travel into it must be
             # collision-aware — so when the camera FIRST takes this move over,
             # default a resolved ptp/pilz to free/OMPL. A later deliberate
@@ -2131,6 +2194,10 @@ class BlocksPage(QWizardPage):
                 vdz = b.get('vdz', 0.0)
                 cam = (f"  · \U0001F4F7 {b['detector']}"
                        + (f" {vdz * 1000:+.0f}mm" if vdz else ''))
+            elif b.get('rel_step'):
+                rdz = b.get('rdz', 0.0)
+                cam = (f"  · ⇢ {b['rel_step']}"
+                       + (f" {rdz * 1000:+.0f}mm" if rdz else ''))
             return (f"{b['name']}   [{b['motion']}"
                     f"{('/' + b['planner']) if b['planner'] else ''} {b['speed']}%]"
                     f"  → {tgt}{chk}{cam}")
@@ -2200,6 +2267,7 @@ class BlocksPage(QWizardPage):
         loop = 0
         loop_from = loop_to = None
         bindings = []                 # (waypoint, detector, dx, dy, dz, orientation)
+        relatives = []                # (waypoint, step, dx, dy, dz, dr, dp, dyw)
         warn = ''
         for b in self.blocks:
             if b['kind'] == 'move':
@@ -2236,6 +2304,14 @@ class BlocksPage(QWizardPage):
                                          float(b.get('vdx', 0.0)),
                                          float(b.get('vdy', 0.0)),
                                          float(b.get('vdz', 0.0)), orientation))
+                    elif b.get('rel_step'):
+                        relatives.append((b['name'], b['rel_step'],
+                                          float(b.get('rdx', 0.0)),
+                                          float(b.get('rdy', 0.0)),
+                                          float(b.get('rdz', 0.0)),
+                                          float(b.get('rroll', 0.0)),
+                                          float(b.get('rpitch', 0.0)),
+                                          float(b.get('ryaw', 0.0))))
                 except Exception:  # noqa: BLE001 - incomplete block, keep editing
                     warn = f"block '{b['name']}': incomplete target (set pose or named state)"
             elif b['kind'] == 'gripper':
@@ -2273,6 +2349,12 @@ class BlocksPage(QWizardPage):
                                  orientation=orientation)
             except Exception as exc:  # noqa: BLE001 - dangling names while editing
                 warn = f'vision binding: {exc}'
+        for name, step, dx, dy, dz, dr, dp, dyw in relatives:
+            try:
+                ctrl.bind_relative(name, step, dx=dx, dy=dy, dz=dz,
+                                   droll=dr, dpitch=dp, dyaw=dyw)
+            except Exception as exc:  # noqa: BLE001 - dangling names while editing
+                warn = f'relative binding: {exc}'
         self.status.setText(warn)
 
     # ---- lifecycle -----------------------------------------------------------
@@ -2320,7 +2402,14 @@ class BlocksPage(QWizardPage):
                                         if wp.vision and wp.vision.orientation
                                         not in ('keep', 'detected') and not
                                         wp.vision.orientation.startswith('from:')
-                                        else '')})
+                                        else ''),
+                           'rel_step': (wp.relative.step if wp.relative else ''),
+                           'rdx': (wp.relative.dx if wp.relative else 0.0),
+                           'rdy': (wp.relative.dy if wp.relative else 0.0),
+                           'rdz': (wp.relative.dz if wp.relative else 0.0),
+                           'rroll': (wp.relative.droll if wp.relative else 0.0),
+                           'rpitch': (wp.relative.dpitch if wp.relative else 0.0),
+                           'ryaw': (wp.relative.dyaw if wp.relative else 0.0)})
             acts = app.actions_at(name)
             for act in acts:
                 if act.kind.value == 'reset_scene':

@@ -17,7 +17,8 @@ from .enums import (
 )
 from .deployment import DeploymentSpec, LaunchNodeSpec, RealIncludeSpec
 from .io import load_project, project_to_dict, save_project
-from .perception import CameraSpec, DetectorSpec, PerceptionSpec, VisionBinding
+from .perception import (CameraSpec, DetectorSpec, PerceptionSpec,
+                         RelativeBinding, VisionBinding)
 from .project import BundleSpec, CanonicalProject, ProjectMeta, SCHEMA_VERSION
 from .robot import (
     ArmControllerSpec,
@@ -68,6 +69,7 @@ __all__ = [
     'CameraSpec',
     'DetectorSpec',
     'VisionBinding',
+    'RelativeBinding',
     'DetectionMethod',
     # enums
     'WaypointType',

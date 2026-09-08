@@ -52,6 +52,12 @@ class AppEmitter(Emitter):
         ctx.generate_to(f'{pkg}/bt_trees/{tree_name}', tree_xml,
                         source=f'application:{app.type.value}')
 
+        # --- learned-policy files + runtime launch (ADR-0005) ---
+        # Only when the task uses a policy step; otherwise nothing is emitted and a
+        # deterministic bundle stays byte-identical.
+        if app.policies:
+            self._emit_policies(project, ctx, pkg)
+
         # --- perception.yaml + the detector list (TSA v4, D-015) ---
         # Emitted whenever the project HAS detectors, whatever the app type: the
         # Perception step configures a resource; an app that never binds it simply
@@ -162,3 +168,70 @@ class AppEmitter(Emitter):
                       perception_min_version=('0.2.0' if needs_v02 else None))
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'app/CMakeLists.txt.j2',
                       package_name=pkg, has_gripper_script=gripper_present)
+
+    def _emit_policies(self, project, ctx: GenContext, pkg: str) -> None:
+        """Ship each policy step's card + exported policy file into the bundle
+        (policies/<name>/) and emit a launch that starts the runtime per policy.
+
+        The card is a DATA contract (POLICY_EXECUTION.md) copied verbatim; its
+        relative `files:` still resolve because the .pt/.onnx are shipped beside it.
+        The generated CMakeLists installs the whole package `share`, so policies/ ships
+        with it. No torch here — TSA only moves files (ADR-0003)."""
+        import os
+
+        import yaml
+
+        app = project.application
+        shipped = []
+        for pol in app.policies:
+            dest_dir = f'{pkg}/policies/{pol.name}'
+            if not pol.card or not os.path.isfile(pol.card):
+                ctx.manifest.warn(
+                    f'policy "{pol.name}": card not found at "{pol.card}" — not shipped; '
+                    f'add it under {dest_dir}/ by hand')
+                continue
+            ctx.copy_file(pol.card, f'{dest_dir}/policy_card.yaml')
+            try:
+                card = (yaml.safe_load(open(pol.card)) or {}).get('policy_card', {})
+            except Exception:                       # pragma: no cover - defensive
+                card = {}
+            files = card.get('files', {}) or {}
+            card_dir = os.path.dirname(os.path.abspath(pol.card))
+            shipped_any = False
+            for key in ('onnx', 'jit'):
+                rel = files.get(key)
+                if not rel:
+                    continue
+                src = os.path.join(card_dir, rel)
+                if os.path.isfile(src):
+                    ctx.copy_file(src, f'{dest_dir}/{os.path.basename(rel)}')
+                    shipped_any = True
+                else:
+                    ctx.manifest.warn(
+                        f'policy "{pol.name}": card lists "{rel}" but it is not beside the '
+                        f'card — ship it into {dest_dir}/ by hand')
+            if not shipped_any:
+                ctx.manifest.warn(
+                    f'policy "{pol.name}": no exported policy file (.pt/.onnx) shipped — '
+                    f'the runtime will not load until one is placed in {dest_dir}/')
+            shipped.append(pol)
+
+        if not shipped:
+            return
+        single = len(shipped) == 1
+        policies_ctx = [{
+            'name': p.name,
+            'mode': p.mode.value,
+            # one policy -> the default node name (its ~/ services match the RunPolicy
+            # defaults TSA emitted); several -> distinct names (set the PolicyStep
+            # run_service/status_topic/target_topic to match).
+            'node_name': 'trainit_policy_runtime' if single
+                         else f'trainit_policy_runtime_{p.name}',
+        } for p in shipped]
+        if not single:
+            ctx.manifest.warn(
+                'multiple policy steps: each runtime node has a distinct name; set each '
+                'PolicyStep run_service/status_topic/target_topic to that node namespace.')
+        ctx.render_to(f'{pkg}/launch/policy_runtime.launch.py',
+                      'app/policy_runtime.launch.py.j2',
+                      app_package=pkg, policies=policies_ctx)

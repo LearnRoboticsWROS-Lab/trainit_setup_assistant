@@ -142,3 +142,30 @@ def test_validation_flags_unknown_waypoint_and_missing_card():
     problems = app.validate(_project(pol))
     assert any('unknown waypoint' in m for m in problems)
     assert any('card not found' in m for m in problems)
+
+
+# --- bundle shipping: card + .pt/.onnx + a runtime launch ---------------------
+
+def test_bundle_ships_policy_files_and_launch(tmp_path):
+    from trainit_setup_assistant.generator.determinism import build_jinja_env
+    from trainit_setup_assistant.generator.emitters.app_pkg import AppEmitter
+    from trainit_setup_assistant.generator.emitters.base import GenContext
+    from trainit_setup_assistant.generator.manifest import GenerationManifest
+
+    card = _write_card(tmp_path)
+    (tmp_path / 'policy.onnx').write_bytes(b'ONNX')     # exported file beside the card
+    pol = PolicyStep(name='grasp2preplace', before_waypoint='pre_place',
+                     mode=PolicyMode.HYBRID, card=card)
+    project = _project(pol)
+    out = tmp_path / 'out'
+    ctx = GenContext(out, build_jinja_env(), GenerationManifest('test', 'cell'))
+    pkg = project.bundle.app_package
+    AppEmitter()._emit_policies(project, ctx, pkg)
+
+    base = out / pkg / 'policies' / 'grasp2preplace'
+    assert (base / 'policy_card.yaml').is_file()
+    assert (base / 'policy.onnx').is_file()             # shipped beside the card
+    launch = (out / pkg / 'launch' / 'policy_runtime.launch.py').read_text()
+    assert 'policy_runtime_node' in launch
+    assert '"hybrid"' in launch
+    assert 'grasp2preplace' in launch

@@ -1625,6 +1625,7 @@ _BLOCK_META = {
     'gripper': ('✊',     '#2e7d32', 'Gripper'),
     'reset':   ('♻',     '#2e7d32', 'Reset scene'),
     'detect':  ('\U0001F4F7', '#6a1b9a', 'Detect'),
+    'policy':  ('\U0001F9E0', '#00838f', 'Policy (learned)'),
     'wait':    ('⏱',     '#ef6c00', 'Wait'),
     'loop':    ('\U0001F501', '#ef6c00', 'Loop'),
 }
@@ -1713,9 +1714,17 @@ class BlocksPage(QWizardPage):
         pal.addWidget(QLabel('Layer 4 — Process'))
         pal.addWidget(pal_btn('wait', 'Wait / delay'))
         pal.addWidget(pal_btn('loop', 'Loop sequence'))
+        pal.addWidget(QLabel('Layer 5 — Physical AI'))
+        pal.addWidget(pal_btn('policy', 'Policy (learned)'))
+        pnote = QLabel('A trained policy produces the move into the NEXT Move block: '
+                       'hybrid decides the target (deterministic runtime executes it), '
+                       'pure drives the robot, residual corrects a nominal move. Load '
+                       'its .pt + card; a robot-state check is added after.')
+        pnote.setWordWrap(True)
+        pnote.setStyleSheet('color:#00838f;')
+        pal.addWidget(pnote)
         pal.addWidget(QLabel('Roadmap'))
-        for soon in ('PLC trigger (in/out)',
-                     'Policy (ONNX/PT)', 'Modbus / TCP-IP'):
+        for soon in ('PLC trigger (in/out)', 'Modbus / TCP-IP'):
             g = QPushButton(f'⚪  {soon}')
             g.setEnabled(False)
             g.setToolTip('Coming soon — the UX is ready for it')
@@ -1762,6 +1771,7 @@ class BlocksPage(QWizardPage):
         self.stack.addWidget(self._loop_form())      # 4
         self.stack.addWidget(self._reset_form())     # 5
         self.stack.addWidget(self._detect_form())    # 6
+        self.stack.addWidget(self._policy_form())    # 7
         insp.addWidget(self.stack, 1)
         apply_btn = QPushButton('Apply to block')
         apply_btn.clicked.connect(self.apply_inspector)
@@ -2013,6 +2023,79 @@ class BlocksPage(QWizardPage):
             self.dp_detector.setCurrentText(b['detector'])
         self.dp_detector.blockSignals(False)
 
+    def _policy_form(self) -> QWidget:
+        w = QWidget()
+        f = QFormLayout(w)
+        self.p_name = QLineEdit()
+        f.addRow('Name', self.p_name)
+        self.p_mode = QComboBox()
+        self.p_mode.addItems(['hybrid', 'pure', 'residual'])
+        self.p_mode.setToolTip('hybrid: the policy decides the target and the '
+                               'deterministic runtime moves there (recommended). '
+                               'pure: the policy drives the robot. residual: the '
+                               'policy corrects a nominal move.')
+        f.addRow('Mode', self.p_mode)
+        self.p_card = QLineEdit()
+        self.p_card.setReadOnly(True)
+        browse = QPushButton('Load policy card (.yaml, .pt beside it)…')
+        browse.clicked.connect(self._browse_policy_card)
+        r = QHBoxLayout(); r.addWidget(self.p_card); r.addWidget(browse)
+        f.addRow('Policy card', r)
+        self.p_info = QLabel('Load a policy card to see what it was trained for and '
+                             'where it leaves the robot.')
+        self.p_info.setWordWrap(True)
+        self.p_info.setStyleSheet('color:#00838f;')
+        f.addRow(self.p_info)
+        self.p_check = QCheckBox('Check the tcp reaches the card end pose afterwards')
+        self.p_check.setChecked(True)
+        f.addRow(self.p_check)
+        self.p_attach = QCheckBox('Require the object attached (suction) afterwards')
+        f.addRow(self.p_attach)
+        self.p_attach_topic = QLineEdit('/suction/attached')
+        f.addRow('Attached topic (std_msgs/Bool)', self.p_attach_topic)
+        note = QLabel('Place this block ABOVE the Move it produces: the policy brings '
+                      'the robot into that next Move (e.g. pre-place with the cube '
+                      'held). A CheckRobotState is emitted right after to confirm the '
+                      'end state before the next step runs.')
+        note.setWordWrap(True)
+        f.addRow(note)
+        return w
+
+    def _browse_policy_card(self):  # pragma: no cover - file dialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, 'Select the policy card (YAML)', '',
+            'Policy card (*.yaml *.yml);;All files (*)')
+        if not path:
+            return
+        self.p_card.setText(path)
+        self.p_info.setText(self._policy_card_summary(path))
+
+    @staticmethod
+    def _policy_card_summary(path: str) -> str:
+        import yaml
+        try:
+            card = (yaml.safe_load(open(path)) or {}).get('policy_card', {})
+        except Exception:  # noqa: BLE001
+            return 'Could not read this card.'
+        trained = (card.get('trained_for') or '').strip()
+        es = card.get('end_state', {}) or {}
+        tcp = es.get('tcp_pose_base')
+        end = ''
+        if tcp and len(tcp) >= 3:
+            end = (f'\nEnds ~({tcp[0]:.3f}, {tcp[1]:.3f}, {tcp[2]:.3f}) m'
+                   + (', object HELD' if es.get('object_attached') else ', empty'))
+        return f"Trained for: {trained or '(unnamed)'}{end}"
+
+    def _fill_policy(self, b: dict) -> None:
+        self.p_name.setText(b.get('name', ''))
+        self.p_mode.setCurrentText(b.get('mode', 'hybrid'))
+        self.p_card.setText(b.get('card', ''))
+        self.p_check.setChecked(bool(b.get('check_position', True)))
+        self.p_attach.setChecked(bool(b.get('require_attached', False)))
+        self.p_attach_topic.setText(b.get('attached_topic', '') or '/suction/attached')
+        self.p_info.setText(self._policy_card_summary(b['card']) if b.get('card')
+                            else 'Load a policy card to see its training + end state.')
+
     def _fill_loop_to(self, current=''):
         """Move blocks the loop may end on. Rebuilt on selection so it always matches
         the current sequence."""
@@ -2058,6 +2141,10 @@ class BlocksPage(QWizardPage):
             'gripper': {'kind': 'gripper', 'action': 'close', 'payload': ''},
             'reset':   {'kind': 'reset'},
             'detect':  {'kind': 'detect', 'detector': ''},
+            'policy':  {'kind': 'policy',
+                        'name': f'policy_{sum(1 for b in self.blocks if b["kind"] == "policy") + 1}',
+                        'mode': 'hybrid', 'card': '', 'check_position': True,
+                        'require_attached': False, 'attached_topic': '/suction/attached'},
             'wait':    {'kind': 'wait', 'ms': 500},
             'loop':    {'kind': 'loop', 'cycles': -1},
         }[kind]
@@ -2093,10 +2180,12 @@ class BlocksPage(QWizardPage):
             return
         b = self.blocks[row]
         idx = {'move': 1, 'gripper': 2, 'wait': 3, 'loop': 4, 'reset': 5,
-               'detect': 6}[b['kind']]
+               'detect': 6, 'policy': 7}[b['kind']]
         self.stack.setCurrentIndex(idx)
         if b['kind'] == 'detect':
             self._fill_detect_point(b)
+        if b['kind'] == 'policy':
+            self._fill_policy(b)
         if b['kind'] == 'move':
             self._fill_move_vision(b)
             self.m_name.setText(b['name'])
@@ -2184,6 +2273,13 @@ class BlocksPage(QWizardPage):
         elif b['kind'] == 'detect':
             det = self.dp_detector.currentText()
             b.update(detector='' if det.startswith('(') else det)
+        elif b['kind'] == 'policy':
+            b.update(name=self.p_name.text().strip() or b['name'],
+                     mode=self.p_mode.currentText(),
+                     card=self.p_card.text().strip(),
+                     check_position=self.p_check.isChecked(),
+                     require_attached=self.p_attach.isChecked(),
+                     attached_topic=self.p_attach_topic.text().strip())
         elif b['kind'] == 'loop':
             to = self.l_to.currentText()
             b.update(cycles=-1 if self.l_forever.isChecked() else self.l_cycles.value(),
@@ -2250,6 +2346,11 @@ class BlocksPage(QWizardPage):
             return 'Reset scene → initial poses (sim)'
         if b['kind'] == 'detect':
             return f"Detect {b.get('detector') or '?'} — sample the camera here"
+        if b['kind'] == 'policy':
+            card = b.get('card', '')
+            cname = card.rsplit('/', 1)[-1] if card else 'no card'
+            return (f"\U0001F9E0 Policy {b.get('name', '?')} "
+                    f"[{b.get('mode', 'hybrid')}] → next move · {cname}")
         if b['kind'] == 'wait':
             return f"Wait {b['ms']} ms"
         times = 'forever' if b['cycles'] == -1 else f"{b['cycles']}×"
@@ -2418,6 +2519,25 @@ class BlocksPage(QWizardPage):
                        'the move it should precede'
                 continue
             ctrl.add_detect_point(b['detector'], nxt)
+        # learned-policy steps (ADR-0005): the policy produces the move into the NEXT
+        # move below it (same anchoring as a Detect block).
+        for i, b in enumerate(self.blocks):
+            if b['kind'] != 'policy':
+                continue
+            nxt = next((x['name'] for x in self.blocks[i + 1:]
+                        if x['kind'] == 'move'), None)
+            if nxt is None:
+                warn = (f"Policy '{b.get('name', '?')}': no Move below it — put it "
+                        'above the move it should produce')
+                continue
+            try:
+                ctrl.add_policy(b.get('name') or f'policy_{i}', nxt,
+                                mode=b.get('mode', 'hybrid'), card=b.get('card', ''),
+                                require_attached=bool(b.get('require_attached', False)),
+                                attached_topic=b.get('attached_topic', ''),
+                                check_position=bool(b.get('check_position', True)))
+            except Exception as exc:  # noqa: BLE001 - dangling names while editing
+                warn = f'policy step: {exc}'
         self.status.setText(warn)
 
     # ---- lifecycle -----------------------------------------------------------
@@ -2512,6 +2632,19 @@ class BlocksPage(QWizardPage):
                 blocks.append(db)
             else:
                 blocks.insert(idx, db)
+        # rebuild the learned-policy steps (ADR-0005) before their anchor moves
+        for pol in reversed(app.policies):
+            idx = next((i for i, blk in enumerate(blocks)
+                        if blk['kind'] == 'move' and blk['name'] == pol.before_waypoint),
+                       None)
+            pb = {'kind': 'policy', 'name': pol.name, 'mode': pol.mode.value,
+                  'card': pol.card, 'check_position': pol.check_position,
+                  'require_attached': pol.require_attached,
+                  'attached_topic': pol.attached_topic or ''}
+            if idx is None:
+                blocks.append(pb)
+            else:
+                blocks.insert(idx, pb)
         self.blocks = blocks
         self._refresh()
 

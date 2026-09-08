@@ -169,3 +169,34 @@ def test_bundle_ships_policy_files_and_launch(tmp_path):
     assert 'policy_runtime_node' in launch
     assert '"hybrid"' in launch
     assert 'grasp2preplace' in launch
+
+
+# --- model persistence (what the GUI relies on) -------------------------------
+
+def test_policy_step_round_trips_through_yaml(tmp_path):
+    from trainit_setup_assistant.model.io import load_project, save_project
+    pol = PolicyStep(name='p1', before_waypoint='pre_place', mode=PolicyMode.PURE,
+                     card='/tmp/c.yaml', require_attached=True,
+                     attached_topic='/suction/attached', check_position=False)
+    p = _project(pol)
+    f = tmp_path / 'project.yaml'
+    save_project(p, f)
+    q = load_project(f)
+    assert len(q.application.policies) == 1
+    got = q.application.policies[0]
+    assert got.name == 'p1' and got.mode is PolicyMode.PURE
+    assert got.before_waypoint == 'pre_place'
+    assert got.require_attached is True and got.check_position is False
+    assert q.application.policy_before('pre_place').card == '/tmp/c.yaml'
+
+
+def test_controller_add_policy_and_clear():
+    from trainit_setup_assistant.gui.controller import AssistantController
+    ctrl = AssistantController()
+    ctrl.project = _project()
+    ctrl.add_policy('p', 'pre_place', mode='hybrid', card='/tmp/c.yaml',
+                    require_attached=True, attached_topic='/suction/attached')
+    assert len(ctrl.project.application.policies) == 1
+    assert ctrl.project.application.policies[0].attached_topic == '/suction/attached'
+    ctrl.clear_application()
+    assert ctrl.project.application.policies == []

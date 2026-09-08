@@ -463,6 +463,7 @@ class AssistantController:
         app = self._require().application
         app.waypoints, app.segments, app.tool_actions, app.sequence = [], [], [], []
         app.detections = []
+        app.policies = []
 
     def add_detect_point(self, detector: str, before_waypoint: str) -> None:
         """Explicit camera sampling (D-018): DetectObject for ``detector`` fires
@@ -470,6 +471,19 @@ class AssistantController:
         from ..model import DetectPoint
         self._require().application.detections.append(
             DetectPoint(detector=detector, before_waypoint=before_waypoint))
+
+    def add_policy(self, name: str, before_waypoint: str, *, mode: str = 'hybrid',
+                   card: str = '', require_attached: bool = False,
+                   attached_topic: str = '', check_position: bool = True) -> None:
+        """Learned-policy step (ADR-0005): the policy produces the move INTO
+        ``before_waypoint`` in the chosen mode. TSA reads the card at generation time
+        to show/check the end_state and ships the files with the bundle."""
+        from ..model import PolicyStep
+        self._require().application.policies.append(
+            PolicyStep(name=name, before_waypoint=before_waypoint, mode=mode,
+                       card=card, require_attached=require_attached,
+                       attached_topic=(attached_topic or None),
+                       check_position=check_position))
 
     # ---- perception (the dedicated Perception step, TSA v4 / D-015) ----
     def _perception(self) -> PerceptionSpec:

@@ -7,6 +7,7 @@ from .enums import (
     IsaacGraspMethod,
     MotionType,
     PlannerId,
+    PolicyMode,
     ReleasePolicy,
     SceneObjectCategory,
     SceneObjectSource,
@@ -35,8 +36,8 @@ from .robot import (
     RobotSpec,
 )
 from .scene import Payload, SceneObject, SceneSpec
-from .task import (ApplicationSpec, DetectPoint, MotionSegment, ToolAction,
-                   Waypoint)
+from .task import (ApplicationSpec, DetectPoint, MotionSegment, PolicyStep,
+                   ToolAction, Waypoint)
 
 __all__ = [
     'SCHEMA_VERSION',
@@ -62,6 +63,7 @@ __all__ = [
     'Waypoint',
     'MotionSegment',
     'ToolAction',
+    'PolicyStep',
     'DeploymentSpec',
     'LaunchNodeSpec',
     'RealIncludeSpec',
@@ -86,6 +88,7 @@ __all__ = [
     'IsaacGraspMethod',
     'WaypointRole',
     'ToolActionKind',
+    'PolicyMode',
     # io
     'load_project',
     'save_project',

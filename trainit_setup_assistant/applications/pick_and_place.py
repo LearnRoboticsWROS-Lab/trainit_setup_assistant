@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import List
 
 from ..model import CanonicalProject
-from ..model.enums import AppType, ToolActionKind
+from ..model.enums import AppType, PolicyMode, ToolActionKind
 from .base import (
     ApplicationTemplate,
     payload_dims_key,
@@ -47,7 +47,8 @@ class PickAndPlace(ApplicationTemplate):
     def validate(self, project: CanonicalProject) -> List[str]:
         return (self._validate_sequence(project)
                 + self._validate_gripper_actions(project)
-                + self._validate_payload_refs(project))
+                + self._validate_payload_refs(project)
+                + self._validate_policies(project))
 
     def _validate_sequence(self, project: CanonicalProject) -> List[str]:
         app = project.application
@@ -150,7 +151,18 @@ class PickAndPlace(ApplicationTemplate):
             if seg is not None and seg.attached_collision_check is not None:
                 val = 'true' if seg.attached_collision_check else 'false'
                 out.append(f'{body_indent}<SetAttachedCollisionCheck value="{val}"/>')
-            out.append(f'{body_indent}<MoveWaypoint waypoint="{wp_name}"/>')
+            # Learned policy producing the move INTO this waypoint (ADR-0005). Empty
+            # `policies` => policy is None => the two branches below are inert, so a
+            # deterministic project emits the exact same tree as before.
+            policy = app.policy_before(wp_name)
+            if policy is not None:
+                out.extend(self._policy_before_move(project, policy, wp_name, body_indent))
+            # pure drives the robot itself (no deterministic move); hybrid/residual keep
+            # the MoveWaypoint (hybrid executes the decided target, residual the nominal).
+            if policy is None or policy.mode is not PolicyMode.PURE:
+                out.append(f'{body_indent}<MoveWaypoint waypoint="{wp_name}"/>')
+            if policy is not None:
+                out.extend(self._policy_check_after(project, policy, body_indent))
             acts = app.actions_at(wp_name)
             for action in acts:
                 if action.kind is not ToolActionKind.RESET_SCENE:
@@ -194,6 +206,107 @@ class PickAndPlace(ApplicationTemplate):
                      indent: str) -> List[str]:
         """Lines emitted immediately before the move to ``wp_name``."""
         return []
+
+    # --- learned-policy emission (ADR-0005; shared by every subclass) ---
+    def _policy_before_move(self, project: CanonicalProject, policy, wp_name: str,
+                            indent: str) -> List[str]:
+        """Trigger the policy and, for hybrid, wire its decided target into the move.
+
+        RunPolicy speaks to the Pro package trainit_policy_runtime over a ROS contract;
+        TMR (and TSA) stay torch-free. hybrid then reuses the perception path — the
+        policy publishes a target on the Detection3D contract, DetectObject reads it,
+        SetWaypointFromDetection points the waypoint at it, the existing MoveWaypoint
+        executes it smoothly.
+        """
+        lines = [
+            f'{indent}<!-- Learned policy "{policy.name}" ({policy.mode.value}) into '
+            f'"{wp_name}" (ADR-0005). -->',
+            f'{indent}<RunPolicy service="{policy.run_service}" '
+            f'status_topic="{policy.status_topic}" mode="{policy.mode.value}" '
+            f'timeout_ms="{policy.timeout_ms}"/>',
+        ]
+        if policy.mode is PolicyMode.HYBRID:
+            out_key = f'policy_{policy.name}'
+            lines.append(
+                f'{indent}<DetectObject topic="{policy.target_topic}" '
+                f'class_id="{policy.name}:target" '
+                f'target_frame="{project.robot.base_frame}" '
+                f'timeout_ms="{policy.timeout_ms}" out_key="{out_key}"/>')
+            lines.append(
+                f'{indent}<SetWaypointFromDetection waypoint="{wp_name}" '
+                f'from="{out_key}" orientation="detected"/>')
+        elif policy.mode is PolicyMode.RESIDUAL:
+            lines.append(
+                f'{indent}<!-- residual: RunPolicy publishes clamped corrections while '
+                'the MoveWaypoint below runs the nominal trajectory. Needs a '
+                'correction-aware executor + a residual-trained policy '
+                '(POLICY_EXECUTION.md). -->')
+        return lines
+
+    def _policy_check_after(self, project: CanonicalProject, policy,
+                            indent: str) -> List[str]:
+        """Assert the card's end_state after the policy (fail-safe, ADR-0005)."""
+        attrs: List[str] = []
+        if policy.check_position:
+            xyz, _ = self._card_end_state(policy)
+            if xyz is not None:
+                attrs.append(f'position="{_semicolon(xyz)}"')
+                attrs.append(f'position_tolerance="{_fmt_num(policy.position_tolerance)}"')
+        if policy.require_attached:
+            attrs.append('require_attached="true"')
+            if policy.attached_topic:
+                attrs.append(f'attached_topic="{policy.attached_topic}"')
+        if not attrs:
+            return []
+        return [
+            f'{indent}<!-- assert the policy left the robot in the card\'s end_state -->',
+            f'{indent}<CheckRobotState {" ".join(attrs)}/>',
+        ]
+
+    @staticmethod
+    def _card_end_state(policy):
+        """Read the policy card YAML for the end_state TSA shows/checks. The card is a
+        DATA contract (POLICY_EXECUTION.md) — TSA parses the YAML directly and does NOT
+        import the Pro runtime (ADR-0003). Returns (tcp_xyz | None, trained_for)."""
+        import os
+        import yaml
+        if not policy.card or not os.path.isfile(policy.card):
+            return None, ''
+        try:
+            with open(policy.card) as f:
+                card = (yaml.safe_load(f) or {}).get('policy_card', {})
+            tcp = (card.get('end_state', {}) or {}).get('tcp_pose_base')
+            return (list(tcp[:3]) if tcp else None), card.get('trained_for', '')
+        except Exception:
+            return None, ''
+
+    def _validate_policies(self, project: CanonicalProject) -> List[str]:
+        import os
+        app = project.application
+        problems: List[str] = []
+        names = {wp.name for wp in app.waypoints}
+        seen: set = set()
+        for p in app.policies:
+            if p.before_waypoint not in names:
+                problems.append(f'policy "{p.name}" is anchored to unknown waypoint '
+                                f'"{p.before_waypoint}"')
+            if p.before_waypoint in seen:
+                problems.append(f'waypoint "{p.before_waypoint}" has more than one '
+                                'policy step')
+            seen.add(p.before_waypoint)
+            wp = app.waypoint_by_name(p.before_waypoint)
+            if wp is not None and wp.vision is not None:
+                problems.append(f'policy "{p.name}" and a vision binding both target '
+                                f'"{p.before_waypoint}" — pick one')
+            if not p.card or not os.path.isfile(p.card):
+                problems.append(f'policy "{p.name}": card not found at "{p.card}"')
+            elif p.check_position and self._card_end_state(p)[0] is None:
+                problems.append(f'policy "{p.name}": check_position set but the card has '
+                                'no end_state.tcp_pose_base')
+            if p.require_attached and not p.attached_topic:
+                problems.append(f'policy "{p.name}": require_attached set but no '
+                                'attached_topic')
+        return problems
 
     # --- helpers ---
     def _derived_sequence(self, project: CanonicalProject) -> List[str]:

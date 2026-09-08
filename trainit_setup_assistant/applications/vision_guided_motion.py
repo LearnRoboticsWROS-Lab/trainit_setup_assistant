@@ -29,6 +29,7 @@ class VisionGuidedMotion(PickAndPlace):
     def validate(self, project: CanonicalProject) -> List[str]:
         problems = self._validate_sequence(project)
         problems += self._validate_payload_refs(project)
+        problems += self._validate_policies(project)
         # NO grasp/release requirement: a vision-guided motion may carry no gripper.
         per = project.perception
         bound = self._vision_waypoints(project)

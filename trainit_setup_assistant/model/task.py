@@ -12,7 +12,15 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from .enums import AppType, MotionType, PlannerId, ToolActionKind, WaypointRole, WaypointType
+from .enums import (
+    AppType,
+    MotionType,
+    PlannerId,
+    PolicyMode,
+    ToolActionKind,
+    WaypointRole,
+    WaypointType,
+)
 from .perception import RelativeBinding, VisionBinding
 
 
@@ -77,6 +85,38 @@ class ToolAction(BaseModel):
     payload_ref: Optional[str] = None          # SceneSpec.payload.id for attach/detach
 
 
+class PolicyStep(BaseModel):
+    """A learned-policy step that produces the motion INTO ``before_waypoint``
+    (POLICY_EXECUTION.md, ADR-0005). The Pro package ``trainit_policy_runtime`` loads
+    the policy + its card and runs it; TMR's ``RunPolicy`` / ``CheckRobotState`` nodes
+    drive and check it. TSA stays config-only: it emits the nodes, reads the card for
+    what to show/check, and ships the policy files with the bundle.
+
+    Placement mirrors ``DetectPoint``: the step is anchored to the waypoint whose
+    incoming motion the policy produces. By mode:
+    - ``hybrid``   : the policy publishes a target pose; the deterministic MoveWaypoint
+      into ``before_waypoint`` executes it (kept).
+    - ``pure`` / ``residual`` : the policy drives the robot into ``before_waypoint``; the
+      deterministic MoveWaypoint is suppressed.
+    A ``CheckRobotState`` after asserts the card's ``end_state`` (fail-safe).
+    """
+
+    name: str                                   # unique id; also the run namespace
+    before_waypoint: str                        # the policy produces the move into this wp
+    mode: PolicyMode = PolicyMode.HYBRID
+    card: str                                   # path to the policy card YAML (.pt sits beside it)
+    # runtime wiring (defaults match trainit_policy_runtime's launch)
+    run_service: str = '/trainit_policy_runtime/run'
+    status_topic: str = '/trainit_policy_runtime/status'
+    target_topic: str = '/trainit_policy_runtime/target_detections'   # hybrid
+    timeout_ms: int = Field(default=10000, ge=100)
+    # end_state check emitted as CheckRobotState AFTER the policy
+    check_position: bool = True                 # assert tcp near the card's end_state pose
+    position_tolerance: float = Field(default=0.03, gt=0.0)
+    require_attached: bool = False              # assert the object is held (suction)
+    attached_topic: Optional[str] = None        # std_msgs/Bool, true while held
+
+
 class ApplicationSpec(BaseModel):
     type: AppType = AppType.PICK_AND_PLACE
     global_planner_mode: PlannerId = PlannerId.PILZ
@@ -90,6 +130,8 @@ class ApplicationSpec(BaseModel):
     tool_actions: List[ToolAction] = Field(default_factory=list)
     # explicit camera-sampling points (D-018); empty = automatic at cycle start
     detections: List[DetectPoint] = Field(default_factory=list)
+    # learned-policy steps (ADR-0005); empty = fully deterministic (unchanged behaviour)
+    policies: List[PolicyStep] = Field(default_factory=list)
     # Explicit tree order (waypoint-name references, repeats allowed — e.g. home at
     # start AND end). Empty => the application template derives order from roles.
     # Each waypoint is DEFINED once (bt_params) but may be VISITED multiple times.
@@ -120,3 +162,10 @@ class ApplicationSpec(BaseModel):
     def actions_at(self, waypoint_name: str) -> List[ToolAction]:
         """Tool actions anchored at a waypoint, in declared order."""
         return [a for a in self.tool_actions if a.at_waypoint == waypoint_name]
+
+    def policy_before(self, waypoint_name: str) -> Optional['PolicyStep']:
+        """The learned-policy step producing the move into a waypoint, if any."""
+        for p in self.policies:
+            if p.before_waypoint == waypoint_name:
+                return p
+        return None

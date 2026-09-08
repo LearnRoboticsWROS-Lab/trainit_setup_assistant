@@ -170,3 +170,21 @@ class ToolActionKind(StrEnum):
     ATTACH = 'attach'    # AttachObject (payload follows the tcp)
     DETACH = 'detach'    # DetachObject
     RESET_SCENE = 'reset_scene'  # ResetScene: dynamic objects -> initial poses (sim loop)
+
+
+class PolicyMode(StrEnum):
+    """How a trained (learned) policy is executed at a step — POLICY_EXECUTION.md,
+    ADR-0005. Tokens match the trainit_policy_runtime node's `mode` and TMR's RunPolicy.
+
+    PURE     : the policy DRIVES the robot to its end state; it replaces the
+               deterministic move into the anchored waypoint.
+    HYBRID   : the policy DECIDES a target pose; the deterministic runtime moves there
+               (reuses DetectObject + SetWaypointFromDetection + MoveWaypoint) — smooth
+               motion for free. Recommended for pick-place.
+    RESIDUAL : the deterministic move runs and the policy adds a small clamped
+               correction on top.
+    """
+
+    PURE = 'pure'
+    HYBRID = 'hybrid'
+    RESIDUAL = 'residual'

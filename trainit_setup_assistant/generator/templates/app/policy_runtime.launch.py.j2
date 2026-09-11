@@ -33,6 +33,21 @@ def generate_launch_description():
         parameters=[{
             "policy_card": os.path.join(share, "policies", "{{ p.name }}", "policy_card.yaml"),
             "mode": "{{ p.mode }}",
+{%- if p.detection_topic %}
+            "detection_topic": "{{ p.detection_topic }}",           # the CELL detector (ADR-0006)
+            "detection_class_id": "{{ p.detection_class_id }}",
+{%- endif %}
+{%- if p.tcp_frame %}
+            "tcp_frame": "{{ p.tcp_frame }}",
+{%- endif %}
+{%- if p.suction_state_topic %}
+            "suction_state_topic": "{{ p.suction_state_topic }}",
+{%- endif %}
+{%- if p.calibration_offset %}
+            # deploy calibration (ADR-0006): post-hoc SYSTEMATIC-bias fix, not a policy fix.
+            "calibration_offset": {{ p.calibration_offset }},
+            "calibration_frame": "{{ p.calibration_frame }}",
+{%- endif %}
         }],
     ))
 {% endfor %}

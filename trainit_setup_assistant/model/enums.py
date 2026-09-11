@@ -188,3 +188,43 @@ class PolicyMode(StrEnum):
     PURE = 'pure'
     HYBRID = 'hybrid'
     RESIDUAL = 'residual'
+
+
+class PolicyCategory(StrEnum):
+    """WHAT a learned policy does (its skill/intent) — ADR-0006. Orthogonal to PolicyMode
+    (how it executes) and the end-effector (which tool). Declared in the policy CARD
+    (intrinsic to the policy), read by TSA for validation/UI. Only REACH_GRASP is
+    implemented; the rest are RESERVED — a new skill is a card value + one runtime branch,
+    not a rewrite. Tokens match trainit_policy_runtime's policy_card.CATEGORIES.
+    """
+
+    REACH_GRASP = 'reach_grasp'    # reach a detected object and grasp it (implemented)
+    PLACE = 'place'                # reserved: place a held object at a target
+    INSERT = 'insert'              # reserved: contact-rich insertion (typically residual)
+    PUSH = 'push'                  # reserved: non-prehensile push/align
+    VISUAL_SERVO = 'visual_servo'  # reserved: servo the tcp to a viewpoint
+
+
+# Categories TSA will emit/accept today; the rest are reserved (ADR-0006).
+IMPLEMENTED_POLICY_CATEGORIES = (PolicyCategory.REACH_GRASP,)
+
+
+class EndEffector(StrEnum):
+    """WHICH tool a learned policy was trained with (ADR-0006) — intrinsic to the policy
+    (declared in the card, inferred from grasp.model when absent). Only SUCTION is
+    implemented; the rest are reserved. Tokens match trainit_policy_runtime's
+    policy_card.END_EFFECTORS."""
+
+    SUCTION = 'suction'                # implemented (attach-on-contact)
+    PARALLEL_GRIPPER = 'parallel_gripper'   # reserved
+    NONE = 'none'                      # reserved (non-prehensile)
+
+
+IMPLEMENTED_END_EFFECTORS = (EndEffector.SUCTION,)
+
+
+class CalibrationFrame(StrEnum):
+    """Frame a deploy calibration offset is expressed in (ADR-0006)."""
+
+    BASE = 'base_link'
+    TCP = 'tcp'

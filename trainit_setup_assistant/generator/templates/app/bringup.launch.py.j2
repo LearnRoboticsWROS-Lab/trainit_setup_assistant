@@ -7,7 +7,10 @@
 # move_group + OMPL/Pilz/CHOMP + mock/isaac/real wiring + gripper bridges + the
 # scene loader + RViz), then starts the BehaviorTree application on top
 # (trainit_run_bt, TrainIt Motion Runtime).
-#
+{% if has_policies %}# It ALSO starts the learned-policy runtime(s) (policy_runtime.launch.py) WITH the
+# cell, so the BT's RunPolicy finds its service — one command runs everything.
+# Disable with policy:=false (then run policy_runtime.launch.py yourself).
+{% endif %}#
 #   ros2 launch {{ app_package }} bringup.launch.py mode:={{ default_mode }}
 #   ros2 launch {{ app_package }} bringup.launch.py mode:=mock bt:=false   # cell only
 # -----------------------------------------------------------------------------
@@ -46,6 +49,14 @@ def launch_setup(context, *args, **kwargs):
                 os.path.join(cfg_share, "launch", "bringup.launch.py")),
             launch_arguments={"mode": mode, "rviz": rviz}.items()),
     ]
+{% if has_policies %}
+    if LaunchConfiguration("policy").perform(context).lower() in ("true", "1"):
+        # learned-policy runtime(s) (ADR-0005): must be up before the BT's RunPolicy
+        # ticks, so start them WITH the cell (the BT starts later, after bt_delay).
+        actions.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(app_share, "launch", "policy_runtime.launch.py"))))
+{% endif %}
     if run_bt:
         # give move_group + the scene loader time to come up, then run the application
         actions.append(TimerAction(period=bt_delay, actions=[IncludeLaunchDescription(
@@ -68,6 +79,10 @@ def generate_launch_description():
                               description="Run the BehaviorTree application"),
         DeclareLaunchArgument("bt_delay", default_value="8.0",
                               description="Seconds to wait for the cell before the BT starts"),
+{% if has_policies %}
+        DeclareLaunchArgument("policy", default_value="true",
+                              description="Start the learned-policy runtime(s) with the cell"),
+{% endif %}
         DeclareLaunchArgument("planner_mode", default_value="{{ default_planner_mode }}",
                               description="pilz | ompl | ompl_chomp"),
         OpaqueFunction(function=launch_setup),

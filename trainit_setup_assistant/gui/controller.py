@@ -474,16 +474,30 @@ class AssistantController:
 
     def add_policy(self, name: str, before_waypoint: str, *, mode: str = 'hybrid',
                    card: str = '', require_attached: bool = False,
-                   attached_topic: str = '', check_position: bool = True) -> None:
+                   attached_topic: str = '', check_position: bool = True,
+                   calibration: str = '', calibration_frame: str = 'base_link',
+                   calibration_note: str = '') -> None:
         """Learned-policy step (ADR-0005): the policy produces the move INTO
         ``before_waypoint`` in the chosen mode. TSA reads the card at generation time
-        to show/check the end_state and ships the files with the bundle."""
+        to show/check the end_state and ships the files with the bundle. ``calibration``
+        is an optional deploy bias offset (ADR-0006): a "dx,dy,dz,droll,dpitch,dyaw"
+        string, empty for none."""
         from ..model import PolicyStep
+        offset = None
+        s = (calibration or '').strip()
+        if s:
+            parts = [p for p in s.replace(';', ',').split(',') if p.strip()]
+            offset = [float(p) for p in parts]     # PolicyStep validates len == 6
+            if not any(abs(x) > 1e-9 for x in offset):
+                offset = None                      # all-zero == no calibration (byte-stable)
         self._require().application.policies.append(
             PolicyStep(name=name, before_waypoint=before_waypoint, mode=mode,
                        card=card, require_attached=require_attached,
                        attached_topic=(attached_topic or None),
-                       check_position=check_position))
+                       check_position=check_position,
+                       calibration_offset=offset,
+                       calibration_frame=calibration_frame,
+                       calibration_note=calibration_note))
 
     # ---- perception (the dedicated Perception step, TSA v4 / D-015) ----
     def _perception(self) -> PerceptionSpec:

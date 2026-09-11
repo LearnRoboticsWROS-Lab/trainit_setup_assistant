@@ -5,6 +5,11 @@ find_package(ament_cmake REQUIRED)
 
 install(DIRECTORY launch config bt_trees groot2
   DESTINATION share/${PROJECT_NAME})
+{% if has_policies %}
+# learned-policy assets: the card + exported .pt/.onnx the runtime loads (ADR-0005)
+install(DIRECTORY policies
+  DESTINATION share/${PROJECT_NAME})
+{% endif %}
 {% if has_gripper_script %}
 # mock gripper action server (no-op, used in mock mode)
 install(PROGRAMS scripts/mock_gripper_action_server.py

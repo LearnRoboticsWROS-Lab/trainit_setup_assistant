@@ -2030,6 +2030,13 @@ class BlocksPage(QWizardPage):
         f.addRow('Name', self.p_name)
         self.p_mode = QComboBox()
         self.p_mode.addItems(['hybrid', 'pure', 'residual'])
+        # residual is SHOWN but NOT selectable — it needs a residual-trained policy and a
+        # correction-aware executor (ADR-0006).
+        _ridx = self.p_mode.findText('residual')
+        if _ridx >= 0:
+            self.p_mode.model().item(_ridx).setEnabled(False)
+            self.p_mode.setItemData(_ridx, 'requires a residual-trained policy (not yet)',
+                                    Qt.ToolTipRole)
         self.p_mode.setToolTip('hybrid: the policy decides the target and the '
                                'deterministic runtime moves there (recommended). '
                                'pure: the policy drives the robot. residual: the '
@@ -2053,6 +2060,20 @@ class BlocksPage(QWizardPage):
         f.addRow(self.p_attach)
         self.p_attach_topic = QLineEdit('/suction/attached')
         f.addRow('Attached topic (std_msgs/Bool)', self.p_attach_topic)
+        self.p_calib = QLineEdit()
+        self.p_calib.setPlaceholderText('dx, dy, dz, droll, dpitch, dyaw — empty = none')
+        f.addRow('Deploy calibration (optional)', self.p_calib)
+        self.p_calib_frame = QComboBox()
+        self.p_calib_frame.addItems(['base_link', 'tcp'])
+        f.addRow('Calibration frame', self.p_calib_frame)
+        self.p_calib_note = QLineEdit()
+        self.p_calib_note.setPlaceholderText('why (e.g. systematic +2cm x bias, run-7)')
+        f.addRow('Calibration note', self.p_calib_note)
+        cnote = QLabel('Calibration is a POST-HOC fix for a SYSTEMATIC policy bias — use '
+                       'only if the error is consistent; the clean fix is retraining.')
+        cnote.setWordWrap(True)
+        cnote.setStyleSheet('color:#8a6d3b;')
+        f.addRow(cnote)
         note = QLabel('Place this block ABOVE the Move it produces: the policy brings '
                       'the robot into that next Move (e.g. pre-place with the cube '
                       'held). A CheckRobotState is emitted right after to confirm the '
@@ -2078,13 +2099,16 @@ class BlocksPage(QWizardPage):
         except Exception:  # noqa: BLE001
             return 'Could not read this card.'
         trained = (card.get('trained_for') or '').strip()
+        cat = card.get('category', 'reach_grasp')
+        eef = card.get('end_effector', '')
+        head = f"Category: {cat}" + (f" · end-effector: {eef}" if eef else "")
         es = card.get('end_state', {}) or {}
         tcp = es.get('tcp_pose_base')
         end = ''
         if tcp and len(tcp) >= 3:
             end = (f'\nEnds ~({tcp[0]:.3f}, {tcp[1]:.3f}, {tcp[2]:.3f}) m'
                    + (', object HELD' if es.get('object_attached') else ', empty'))
-        return f"Trained for: {trained or '(unnamed)'}{end}"
+        return f"{head}\nTrained for: {trained or '(unnamed)'}{end}"
 
     def _fill_policy(self, b: dict) -> None:
         self.p_name.setText(b.get('name', ''))
@@ -2093,6 +2117,9 @@ class BlocksPage(QWizardPage):
         self.p_check.setChecked(bool(b.get('check_position', True)))
         self.p_attach.setChecked(bool(b.get('require_attached', False)))
         self.p_attach_topic.setText(b.get('attached_topic', '') or '/suction/attached')
+        self.p_calib.setText(b.get('calibration', ''))
+        self.p_calib_frame.setCurrentText(b.get('calibration_frame', 'base_link'))
+        self.p_calib_note.setText(b.get('calibration_note', ''))
         self.p_info.setText(self._policy_card_summary(b['card']) if b.get('card')
                             else 'Load a policy card to see its training + end state.')
 
@@ -2144,7 +2171,9 @@ class BlocksPage(QWizardPage):
             'policy':  {'kind': 'policy',
                         'name': f'policy_{sum(1 for b in self.blocks if b["kind"] == "policy") + 1}',
                         'mode': 'hybrid', 'card': '', 'check_position': True,
-                        'require_attached': False, 'attached_topic': '/suction/attached'},
+                        'require_attached': False, 'attached_topic': '/suction/attached',
+                        'calibration': '', 'calibration_frame': 'base_link',
+                        'calibration_note': ''},
             'wait':    {'kind': 'wait', 'ms': 500},
             'loop':    {'kind': 'loop', 'cycles': -1},
         }[kind]
@@ -2279,7 +2308,10 @@ class BlocksPage(QWizardPage):
                      card=self.p_card.text().strip(),
                      check_position=self.p_check.isChecked(),
                      require_attached=self.p_attach.isChecked(),
-                     attached_topic=self.p_attach_topic.text().strip())
+                     attached_topic=self.p_attach_topic.text().strip(),
+                     calibration=self.p_calib.text().strip(),
+                     calibration_frame=self.p_calib_frame.currentText(),
+                     calibration_note=self.p_calib_note.text().strip())
         elif b['kind'] == 'loop':
             to = self.l_to.currentText()
             b.update(cycles=-1 if self.l_forever.isChecked() else self.l_cycles.value(),
@@ -2535,7 +2567,10 @@ class BlocksPage(QWizardPage):
                                 mode=b.get('mode', 'hybrid'), card=b.get('card', ''),
                                 require_attached=bool(b.get('require_attached', False)),
                                 attached_topic=b.get('attached_topic', ''),
-                                check_position=bool(b.get('check_position', True)))
+                                check_position=bool(b.get('check_position', True)),
+                                calibration=b.get('calibration', ''),
+                                calibration_frame=b.get('calibration_frame', 'base_link'),
+                                calibration_note=b.get('calibration_note', ''))
             except Exception as exc:  # noqa: BLE001 - dangling names while editing
                 warn = f'policy step: {exc}'
         self.status.setText(warn)

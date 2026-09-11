@@ -108,6 +108,7 @@ class AppEmitter(Emitter):
                           valid_modes_py=repr(tuple(dep.modes)),
                           default_mode=dep.default_mode,
                           modes_human=' | '.join(dep.modes),
+                          has_policies=bool(app.policies),
                           default_planner_mode=app.global_planner_mode.value)
         else:
             # From-scratch bootstrap: no base config bringup exists — the app bringup
@@ -125,6 +126,7 @@ class AppEmitter(Emitter):
                                            if dep.real_include else 'None'),
                           default_mode=dep.default_mode,
                           modes_human=' | '.join(dep.modes),
+                          has_policies=bool(app.policies),
                           # mock gripper: run the generated no-op server in mock mode when
                           # a gripper exists but no cell bridge serves it (empty bridges).
                           gripper_mock_action_py=(repr(gripper_action)
@@ -167,7 +169,8 @@ class AppEmitter(Emitter):
                       has_perception=bool(detector_nodes),
                       perception_min_version=('0.2.0' if needs_v02 else None))
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'app/CMakeLists.txt.j2',
-                      package_name=pkg, has_gripper_script=gripper_present)
+                      package_name=pkg, has_gripper_script=gripper_present,
+                      has_policies=bool(project.application.policies))
 
     def _emit_policies(self, project, ctx: GenContext, pkg: str) -> None:
         """Ship each policy step's card + exported policy file into the bundle
@@ -214,20 +217,42 @@ class AppEmitter(Emitter):
                 ctx.manifest.warn(
                     f'policy "{pol.name}": no exported policy file (.pt/.onnx) shipped — '
                     f'the runtime will not load until one is placed in {dest_dir}/')
-            shipped.append(pol)
+            shipped.append((pol, card))
 
         if not shipped:
             return
         single = len(shipped) == 1
-        policies_ctx = [{
-            'name': p.name,
-            'mode': p.mode.value,
-            # one policy -> the default node name (its ~/ services match the RunPolicy
-            # defaults TSA emitted); several -> distinct names (set the PolicyStep
-            # run_service/status_topic/target_topic to match).
-            'node_name': 'trainit_policy_runtime' if single
-                         else f'trainit_policy_runtime_{p.name}',
-        } for p in shipped]
+        # Detection wiring comes from the CELL detector (ADR-0006), not the card's
+        # portable placeholder: a single detector is wired straight; with several the
+        # topic/class_id is left at the runtime default and a warning asks the user to set
+        # it (per policy) by hand.
+        per = getattr(project, 'perception', None)
+        dets = list(getattr(per, 'detectors', []) or []) if per else []
+        det_topic = f'/perception/{dets[0].name}/detections' if len(dets) == 1 else None
+        det_class = dets[0].class_id if len(dets) == 1 else None
+        if len(dets) > 1:
+            ctx.manifest.warn(
+                'policy runtime: the cell has several detectors — detection topic/class_id '
+                'was left at the runtime default; set it per policy by hand if a specific '
+                'detector must feed the policy obs.')
+        policies_ctx = []
+        for p, card in shipped:
+            action = card.get('action', {}) or {}
+            policies_ctx.append({
+                'name': p.name,
+                'mode': p.mode.value,
+                # one policy -> the default node name (its ~/ services match the RunPolicy
+                # defaults TSA emitted); several -> distinct names (set the PolicyStep
+                # run_service/status_topic/target_topic to match).
+                'node_name': 'trainit_policy_runtime' if single
+                             else f'trainit_policy_runtime_{p.name}',
+                'detection_topic': det_topic,
+                'detection_class_id': det_class,
+                'tcp_frame': action.get('body') or None,          # card's action.body
+                'suction_state_topic': p.attached_topic or None,
+                'calibration_offset': p.calibration_offset,       # None/[] => not emitted
+                'calibration_frame': p.calibration_frame.value,
+            })
         if not single:
             ctx.manifest.warn(
                 'multiple policy steps: each runtime node has a distinct name; set each '

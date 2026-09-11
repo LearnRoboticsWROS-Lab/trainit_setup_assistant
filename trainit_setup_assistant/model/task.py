@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .enums import (
     AppType,
+    CalibrationFrame,
     MotionType,
     PlannerId,
     PolicyMode,
@@ -115,6 +116,20 @@ class PolicyStep(BaseModel):
     position_tolerance: float = Field(default=0.03, gt=0.0)
     require_attached: bool = False              # assert the object is held (suction)
     attached_topic: Optional[str] = None        # std_msgs/Bool, true while held
+    # deploy calibration (ADR-0006) — a post-hoc correction of a SYSTEMATIC policy bias,
+    # applied by the runtime to the policy's decided/driven pose. A band-aid: prefer
+    # retraining. None = no calibration (the golden bundle stays byte-identical).
+    calibration_offset: Optional[List[float]] = None   # [dx,dy,dz, droll,dpitch,dyaw]
+    calibration_frame: CalibrationFrame = CalibrationFrame.BASE
+    calibration_note: str = ''                  # why it is set (for the record)
+
+    @field_validator('calibration_offset')
+    @classmethod
+    def _check_calibration(cls, v):
+        if v is not None and len(v) != 6:
+            raise ValueError('calibration_offset needs 6 values '
+                             '[dx, dy, dz, droll, dpitch, dyaw]')
+        return v
 
 
 class ApplicationSpec(BaseModel):

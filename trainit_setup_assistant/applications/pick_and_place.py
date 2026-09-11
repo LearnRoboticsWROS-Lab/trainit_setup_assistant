@@ -11,7 +11,8 @@ from __future__ import annotations
 from typing import List
 
 from ..model import CanonicalProject
-from ..model.enums import AppType, PolicyMode, ToolActionKind
+from ..model.enums import (AppType, IMPLEMENTED_END_EFFECTORS,
+                           IMPLEMENTED_POLICY_CATEGORIES, PolicyMode, ToolActionKind)
 from .base import (
     ApplicationTemplate,
     payload_dims_key,
@@ -227,9 +228,12 @@ class PickAndPlace(ApplicationTemplate):
         ]
         if policy.mode is PolicyMode.HYBRID:
             out_key = f'policy_{policy.name}'
+            # The runtime tags its decided target with '<card name>:target' (the policy's
+            # INTRINSIC name), so DetectObject must match on the card name, not the step
+            # name — they can differ. Both sides read the same card => always agree.
             lines.append(
                 f'{indent}<DetectObject topic="{policy.target_topic}" '
-                f'class_id="{policy.name}:target" '
+                f'class_id="{self._card_name(policy)}:target" '
                 f'target_frame="{project.robot.base_frame}" '
                 f'timeout_ms="{policy.timeout_ms}" out_key="{out_key}"/>')
             lines.append(
@@ -245,7 +249,18 @@ class PickAndPlace(ApplicationTemplate):
 
     def _policy_check_after(self, project: CanonicalProject, policy,
                             indent: str) -> List[str]:
-        """Assert the card's end_state after the policy (fail-safe, ADR-0005)."""
+        """Assert the card's end_state after the policy (fail-safe, ADR-0005). Only for
+        modes that DRIVE the robot to the end_state (pure/residual). HYBRID decides only a
+        GRASP pose: the deterministic MoveWaypoint that executes it already fails loudly if
+        unreachable, and the card end_state is the FULL-SKILL (pure) end (e.g. pre-place),
+        NOT the grasp — asserting it right after the grasp would wrongly fail (ADR-0006).
+        The attach fail-safe for a hybrid grasp belongs AFTER the gripper, not here."""
+        if policy.mode is PolicyMode.HYBRID:
+            return [
+                f'{indent}<!-- hybrid: the policy decided the grasp; the MoveWaypoint above '
+                'is self-checking. The card end_state (pure/full-skill end) is not asserted '
+                'here — it does not describe the grasp (ADR-0006). -->',
+            ]
         attrs: List[str] = []
         if policy.check_position:
             xyz, _ = self._card_end_state(policy)
@@ -280,6 +295,47 @@ class PickAndPlace(ApplicationTemplate):
         except Exception:
             return None, ''
 
+    @staticmethod
+    def _card_meta(policy):
+        """(category, end_effector) from the card, for validation (ADR-0006). Parsed
+        straight from the YAML — TSA does not import the Pro runtime (ADR-0003). Category
+        defaults to 'reach_grasp'; end_effector is read explicit or inferred from
+        grasp.model (suction/gripper), '' when neither is present."""
+        import os
+        import yaml
+        if not policy.card or not os.path.isfile(policy.card):
+            return '', ''
+        try:
+            with open(policy.card) as f:
+                card = (yaml.safe_load(f) or {}).get('policy_card', {})
+            cat = str(card.get('category', 'reach_grasp'))
+            eef = str(card.get('end_effector', '') or '')
+            if not eef:
+                model = str((card.get('grasp', {}) or {}).get('model', '')).lower()
+                eef = ('suction' if ('suction' in model or 'vacuum' in model)
+                       else 'parallel_gripper' if ('grip' in model or 'finger' in model)
+                       else '')
+            return cat, eef
+        except Exception:
+            return '', ''
+
+    @staticmethod
+    def _card_name(policy):
+        """The policy's INTRINSIC name from the card — the runtime tags its decided target
+        detection with '<this>:target'. Falls back to the step name if the card is
+        unreadable. Parsed straight from the YAML (ADR-0003, no Pro import)."""
+        import os
+        import yaml
+        if policy.card and os.path.isfile(policy.card):
+            try:
+                with open(policy.card) as f:
+                    card = (yaml.safe_load(f) or {}).get('policy_card', {})
+                if card.get('name'):
+                    return str(card['name'])
+            except Exception:
+                pass
+        return policy.name
+
     def _validate_policies(self, project: CanonicalProject) -> List[str]:
         import os
         app = project.application
@@ -306,6 +362,20 @@ class PickAndPlace(ApplicationTemplate):
             if p.require_attached and not p.attached_topic:
                 problems.append(f'policy "{p.name}": require_attached set but no '
                                 'attached_topic')
+            cat, eef = self._card_meta(p)
+            impl_cat = {c.value for c in IMPLEMENTED_POLICY_CATEGORIES}
+            if cat and cat not in impl_cat:
+                problems.append(f'policy "{p.name}": card category "{cat}" is reserved '
+                                f'but not implemented (implemented: {sorted(impl_cat)}; '
+                                'ADR-0006)')
+            impl_eef = {e.value for e in IMPLEMENTED_END_EFFECTORS}
+            if eef and eef not in impl_eef:
+                problems.append(f'policy "{p.name}": card end-effector "{eef}" is not '
+                                f'implemented (implemented: {sorted(impl_eef)}; ADR-0006)')
+            if p.mode is PolicyMode.RESIDUAL:
+                problems.append(f'policy "{p.name}": mode "residual" needs a residual-'
+                                'trained policy + a correction-aware executor, not '
+                                'available yet (ADR-0006) — use hybrid or pure')
         return problems
 
     # --- helpers ---

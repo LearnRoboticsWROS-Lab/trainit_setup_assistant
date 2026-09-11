@@ -2,11 +2,14 @@
 
 from .enums import (
     AppType,
+    CalibrationFrame,
     DetectionMethod,
+    EndEffector,
     GripperKind,
     IsaacGraspMethod,
     MotionType,
     PlannerId,
+    PolicyCategory,
     PolicyMode,
     ReleasePolicy,
     SceneObjectCategory,
@@ -89,6 +92,9 @@ __all__ = [
     'WaypointRole',
     'ToolActionKind',
     'PolicyMode',
+    'PolicyCategory',
+    'EndEffector',
+    'CalibrationFrame',
     # io
     'load_project',
     'save_project',

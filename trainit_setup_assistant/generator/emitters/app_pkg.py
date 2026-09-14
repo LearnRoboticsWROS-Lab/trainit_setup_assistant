@@ -8,7 +8,7 @@ project is generated metadata.
 from __future__ import annotations
 
 from ...applications import build_bt_params_context, get_application
-from ...model.enums import AppType, GripperKind
+from ...model.enums import AppType, Backend, GripperKind
 from ..perception_yaml import build_perception_yaml
 from .base import Emitter, GenContext
 
@@ -109,6 +109,7 @@ class AppEmitter(Emitter):
                           default_mode=dep.default_mode.value,
                           modes_human=' | '.join(m.value for m in dep.modes),
                           has_policies=bool(app.policies),
+                          gazebo_supported=(Backend.GAZEBO in dep.modes),
                           default_planner_mode=app.global_planner_mode.value)
         else:
             # From-scratch bootstrap: no base config bringup exists — the app bringup
@@ -127,6 +128,11 @@ class AppEmitter(Emitter):
                           default_mode=dep.default_mode.value,
                           modes_human=' | '.join(m.value for m in dep.modes),
                           has_policies=bool(app.policies),
+                          gazebo_supported=(Backend.GAZEBO in dep.modes),
+                          gazebo_gripper_controller=(
+                              robot.gripper.controller_name
+                              if gripper_present and robot.gripper.kind is GripperKind.PARALLEL
+                              else None),
                           # mock gripper: run the generated no-op server in mock mode when
                           # a gripper exists but no cell bridge serves it (empty bridges).
                           gripper_mock_action_py=(repr(gripper_action)

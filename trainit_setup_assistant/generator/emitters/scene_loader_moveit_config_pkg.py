@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...model.enums import GripperKind
+from ...model.enums import Backend, GripperKind
 from ..camera_variant import rewrite_camera_include
 from ..scene_yaml import build_scene_yaml
 from .base import Emitter, GenContext
@@ -120,7 +120,16 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                       modes_human=' | '.join(m.value for m in dep.modes),
                       gripper_mock_action_py=(repr(gripper_action)
                                               if gripper_present else 'None'),
-                      camera_cloud=camera_cloud)
+                      camera_cloud=camera_cloud,
+                      # Gazebo backend (ADR-0008 F2): gated so mock/isaac/real stay
+                      # byte-identical. A parallel gripper is a ros2_control controller
+                      # spawned against the in-gzserver plugin CM; suction grasps via a
+                      # LinkAttacher bridge (a normal DeploymentSpec.bridges entry).
+                      gazebo_supported=(Backend.GAZEBO in dep.modes),
+                      gazebo_gripper_controller=(
+                          robot.gripper.controller_name
+                          if gripper_present and robot.gripper.kind is GripperKind.PARALLEL
+                          else None))
 
         # 4) package.xml + CMakeLists (exec_depend the framework + connector packages).
         ctx.render_to(f'{pkg}/package.xml', 'moveit_config/scene_loader_package.xml.j2',

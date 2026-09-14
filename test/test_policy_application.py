@@ -281,7 +281,7 @@ def test_app_bringup_includes_policy_runtime_only_when_policies_exist():
     tpl = build_jinja_env().get_template('app/bringup.launch.py.j2')
     ctx = dict(robot_name='r', moveit_config_package='r_cfg', app_package='r_app',
                valid_modes_py="('isaac',)", default_mode='isaac', modes_human='isaac',
-               default_planner_mode='ompl')
+               gazebo_supported=False, default_planner_mode='ompl')
     with_pol = tpl.render(has_policies=True, **ctx)
     assert 'policy_runtime.launch.py' in with_pol
     assert 'DeclareLaunchArgument("policy"' in with_pol

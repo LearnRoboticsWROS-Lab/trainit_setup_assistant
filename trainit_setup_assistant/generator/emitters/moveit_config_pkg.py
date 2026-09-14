@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
-from ...model.enums import GripperKind
+from ...model.enums import Backend, GripperKind
 from ...robotmodel.srdf_builder import DisablePair, build_srdf
 from .base import Emitter, GenContext
 
@@ -20,6 +20,8 @@ class MoveitConfigEmitter(Emitter):
         robot = project.robot
         pkg = project.bundle.moveit_config_package
         group = robot.planning_group
+        # Gazebo backend (ADR-0008 F2): gated so mock/isaac/real xacros stay byte-identical.
+        gazebo_supported = Backend.GAZEBO in project.deployment.modes
 
         def cfg(name: str) -> str:
             return f'{pkg}/config/{name}'
@@ -60,10 +62,13 @@ class MoveitConfigEmitter(Emitter):
                       description_package=project.bundle.description_package,
                       moveit_config_package=pkg,
                       top_xacro=robot.description.top_xacro,
-                      ros2_control_name=ros2_control_name)
+                      ros2_control_name=ros2_control_name,
+                      gazebo_supported=gazebo_supported)
         ctx.render_to(cfg(f'{robot.robot_name}.ros2_control.xacro'),
                       'moveit_config/robot.ros2_control.xacro.j2',
                       robot_name=robot.robot_name, joints=group.joints,
+                      moveit_config_package=pkg,
+                      gazebo_supported=gazebo_supported,
                       gripper_command_joint=(robot.gripper.command_joint
                                              if gripper_present else None))
         ctx.render_to(cfg('moveit.rviz'), 'moveit_config/moveit.rviz.j2',

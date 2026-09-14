@@ -28,9 +28,10 @@ def test_backend_tokens_are_frozen():
     assert ' | '.join(Backend) == 'mock | isaac | gazebo | real'
 
 
-def test_only_mock_isaac_real_are_implemented():
-    assert IMPLEMENTED_BACKENDS == (Backend.MOCK, Backend.ISAAC, Backend.REAL)
-    assert Backend.GAZEBO not in IMPLEMENTED_BACKENDS
+def test_all_four_backends_are_implemented():
+    # GAZEBO joined mock/isaac/real once the generator emitted it (ADR-0008 F2).
+    assert IMPLEMENTED_BACKENDS == (
+        Backend.MOCK, Backend.ISAAC, Backend.GAZEBO, Backend.REAL)
 
 
 # --- BackendProfile: facts must match today's template/xacro behaviour --------
@@ -56,10 +57,10 @@ def test_profiles_match_current_generated_behaviour():
     assert real.implemented is True
 
 
-def test_gazebo_profile_is_reserved_but_declared():
+def test_gazebo_profile_facts():
     gz = profile_for(Backend.GAZEBO)
     assert isinstance(gz, BackendProfile)
-    assert gz.implemented is False              # reserved: wired in TSA v6 (F2)
+    assert gz.implemented is True               # generator emits it (ADR-0008 F2)
     assert gz.use_sim_time is True              # sim clock, like isaac
     assert gz.controller_manager == CM_EXTERNAL_PLUGIN   # the in-gzserver plugin owns the CM
     assert gz.hardware_plugin == 'gazebo_ros2_control/GazeboSystem'

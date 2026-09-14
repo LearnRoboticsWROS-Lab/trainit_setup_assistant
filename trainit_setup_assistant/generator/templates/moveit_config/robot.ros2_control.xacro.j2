@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-    <xacro:macro name="{{ robot_name }}_ros2_control" params="name initial_positions_file use_isaac">
+    <xacro:macro name="{{ robot_name }}_ros2_control" params="name initial_positions_file use_isaac{% if gazebo_supported %} use_gazebo:=false{% endif %}">
         <xacro:property name="initial_positions" value="${load_yaml(initial_positions_file)['initial_positions']}"/>
 
         <!-- isaac -> TopicBasedSystem bridge ; otherwise -> mock (RViz only). -->
@@ -12,7 +12,16 @@
                     <param name="joint_states_topic">/isaac_joint_states</param>
                 </xacro:if>
                 <xacro:unless value="${use_isaac}">
+{% if gazebo_supported %}
+                    <xacro:if value="${use_gazebo}">
+                        <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+                    </xacro:if>
+                    <xacro:unless value="${use_gazebo}">
+                        <plugin>mock_components/GenericSystem</plugin>
+                    </xacro:unless>
+{% else %}
                     <plugin>mock_components/GenericSystem</plugin>
+{% endif %}
                 </xacro:unless>
             </hardware>
 {% for j in joints %}
@@ -23,6 +32,18 @@
             </joint>
 {% endfor %}
         </ros2_control>
+{% if gazebo_supported %}
+        <!-- Gazebo Classic: the gazebo_ros2_control plugin creates /controller_manager
+             INSIDE gzserver (ADR-0008). Its <parameters> single-source the controllers the
+             spawners load; the bring-up launches spawners only, no standalone node. -->
+        <xacro:if value="${use_gazebo}">
+            <gazebo>
+                <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
+                    <parameters>$(find {{ moveit_config_package }})/config/ros2_controllers.yaml</parameters>
+                </plugin>
+            </gazebo>
+        </xacro:if>
+{% endif %}
 {% if gripper_command_joint %}
 
         <!-- NOTE: '{{ gripper_command_joint }}' is intentionally NOT in ros2_control.

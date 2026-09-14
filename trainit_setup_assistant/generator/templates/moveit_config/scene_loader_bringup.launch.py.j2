@@ -41,7 +41,7 @@ def launch_setup(context, *args, **kwargs):
         raise RuntimeError(f"Unknown mode '{mode}'. Valid: {', '.join(VALID_MODES)}")
 
     use_isaac = (mode == "isaac")
-    common = {"use_sim_time": use_isaac}
+    common = {"use_sim_time": use_isaac{% if gazebo_supported %} or mode == "gazebo"{% endif %}}
 
     # Live knob for the "plans but won't execute" tuning: override the start-state
     # tolerance without rebuilding (start_tolerance:=0.0 disables the check).
@@ -51,7 +51,7 @@ def launch_setup(context, *args, **kwargs):
 
     params, mc = build_move_group_params(
         robot_name=ROBOT_NAME, moveit_config_package=MOVEIT_CONFIG_PACKAGE,
-        use_isaac=use_isaac, trajectory_execution=traj_exec)
+        use_isaac=use_isaac,{% if gazebo_supported %} backend=mode,{% endif %} trajectory_execution=traj_exec)
 
     share = get_package_share_directory(MOVEIT_CONFIG_PACKAGE)
     ros2_controllers_path = os.path.join(share, "config", "ros2_controllers.yaml")
@@ -94,6 +94,37 @@ def launch_setup(context, *args, **kwargs):
                             ("rgb/camera_info", "{{ camera_cloud.camera_info }}"),
                             ("depth_registered/image_rect", "{{ camera_cloud.depth }}"),
                             ("points", "{{ camera_cloud.points }}")]))
+{% endif %}
+{% if gazebo_supported %}
+    elif mode == "gazebo":
+        # Gazebo Classic (ADR-0008): the gazebo_ros2_control plugin declared in the URDF
+        # <gazebo> tag OWNS /controller_manager inside gzserver -> spawners ONLY, never a
+        # standalone ros2_control_node. One robot_state_publisher + one move_group (above),
+        # one robot_description (GazeboSystem via backend=mode), one controller_manager
+        # (the plugin). A LinkAttacher grasp bridge, if any, runs via BRIDGES below.
+        world = LaunchConfiguration("world").perform(context)
+        gz_args = {"gui": LaunchConfiguration("gui").perform(context),
+                   "pause": "true", "verbose": "true"}
+        if world:
+            gz_args["world"] = world
+        nodes.append(IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(
+                get_package_share_directory("gazebo_ros"), "launch", "gazebo.launch.py")),
+            launch_arguments=gz_args.items()))
+        nodes.append(Node(package="gazebo_ros", executable="spawn_entity.py", output="screen",
+                          arguments=["-entity", ROBOT_NAME, "-topic", "robot_description"]))
+        gz_controllers = ["joint_state_broadcaster", ARM_CONTROLLER]
+{% if gazebo_gripper_controller %}
+        gz_controllers.append("{{ gazebo_gripper_controller }}")
+{% endif %}
+        gz_spawners = [
+            Node(package="controller_manager", executable="spawner",
+                 arguments=[c, "--controller-manager", "/controller_manager",
+                            "--controller-manager-timeout", "120"], output="screen")
+            for c in gz_controllers]
+        nodes.append(gz_spawners[0])
+        for prev, nxt in zip(gz_spawners, gz_spawners[1:]):
+            nodes.append(RegisterEventHandler(OnProcessExit(target_action=prev, on_exit=[nxt])))
 {% endif %}
     else:  # real: no ros2_control — the vendor bridges impersonate the same action names
         if REAL_INCLUDE:
@@ -147,5 +178,12 @@ def generate_launch_description():
         DeclareLaunchArgument("start_tolerance", default_value="",
                               description="override trajectory_execution.allowed_start_tolerance "
                                           "(rad); empty=framework default 0.1, 0.0=disable check"),
+{% if gazebo_supported %}
+        DeclareLaunchArgument("world", default_value="",
+                              description="Gazebo .world file (mode:=gazebo); empty=Gazebo's "
+                                          "default empty world. Point it at the cell world."),
+        DeclareLaunchArgument("gui", default_value="true",
+                              description="Gazebo client GUI (mode:=gazebo); gui:=false = headless"),
+{% endif %}
         OpaqueFunction(function=launch_setup),
     ])

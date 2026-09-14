@@ -239,16 +239,17 @@ class Backend(StrEnum):
     ``VALID_MODES``.
 
     Tokens are FROZEN (they live in every saved ``project.yaml`` and every generated
-    bring-up). Only MOCK/ISAAC/REAL are implemented today; GAZEBO is RESERVED — the
-    backend the ROS2ML distribution needs, wired into the generator in TSA v6
-    (ADR-0008 F2). Its per-backend facts live in ``model/backend.py`` (``BackendProfile``).
+    bring-up). MOCK/ISAAC/GAZEBO/REAL are all emitted by the generator (GAZEBO added in
+    TSA v6 / ADR-0008 F2 — the Gazebo Classic backend the ROS2ML distribution needs; its
+    live headless launch is the user's MANUAL generation step). Per-backend facts live in
+    ``model/backend.py`` (``BackendProfile``).
     """
 
     MOCK = 'mock'      # ros2_control mock_components/GenericSystem, wall clock (RViz/CI)
     ISAAC = 'isaac'    # Isaac Sim via topic_based_ros2_control/TopicBasedSystem, sim clock
-    GAZEBO = 'gazebo'  # RESERVED (TSA v6 / ADR-0008 F2): Gazebo Classic, in-gzserver CM
+    GAZEBO = 'gazebo'  # Gazebo Classic, gazebo_ros2_control/GazeboSystem, in-gzserver CM
     REAL = 'real'      # vendor bridges impersonate the controllers; no ros2_control node
 
 
-# Backends the generator emits/accepts today; GAZEBO is reserved (ADR-0008 F2).
-IMPLEMENTED_BACKENDS = (Backend.MOCK, Backend.ISAAC, Backend.REAL)
+# Backends the generator emits today (all four; GAZEBO wired in ADR-0008 F2).
+IMPLEMENTED_BACKENDS = (Backend.MOCK, Backend.ISAAC, Backend.GAZEBO, Backend.REAL)

@@ -1,0 +1,36 @@
+<?xml version="1.0" ?>
+<!-- Minimal generic TrainIt Gazebo Classic pick cell (ADR-0008 F2): a ground plane, a
+     table, and one graspable red box. Generic on purpose — no consumer-specific geometry.
+     Point the generated bring-up at it: mode:=gazebo world:=<...>/trainit_pick_cell.world -->
+<sdf version="1.6">
+  <world name="trainit_pick_cell">
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <!-- a simple table the arm can pick from -->
+    <model name="table">
+      <static>true</static>
+      <pose>0.5 0.0 0.0 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>0.6 0.8 0.4</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.6 0.8 0.4</size></box></geometry>
+          <material><ambient>0.5 0.35 0.2 1</ambient><diffuse>0.5 0.35 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- the graspable object (welded by the LinkAttacher bridge on /suction/on) -->
+    <model name="red_box">
+      <pose>0.5 0.0 0.44 0 0 0</pose>
+      <link name="link">
+        <inertial><mass>0.05</mass>
+          <inertia><ixx>1e-4</ixx><iyy>1e-4</iyy><izz>1e-4</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <collision name="c"><geometry><box><size>0.04 0.04 0.04</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>0.04 0.04 0.04</size></box></geometry>
+          <material><ambient>0.8 0.1 0.1 1</ambient><diffuse>0.8 0.1 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

@@ -64,7 +64,7 @@ def launch_setup(context, *args, **kwargs):
                 os.path.join(app_share, "launch", "trainit_bt.launch.py")),
             launch_arguments={
                 "planner_mode": LaunchConfiguration("planner_mode").perform(context),
-                "use_sim_time": "true" if mode == "isaac" else "false",
+                "use_sim_time": "true" if mode == "isaac"{% if gazebo_supported %} or mode == "gazebo"{% endif %} else "false",
             }.items())]))
     return actions
 

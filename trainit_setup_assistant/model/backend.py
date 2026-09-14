@@ -57,7 +57,7 @@ _PROFILES = {
         hardware_plugin='topic_based_ros2_control/TopicBasedSystem'),
     Backend.GAZEBO: BackendProfile(
         Backend.GAZEBO, use_sim_time=True, controller_manager=CM_EXTERNAL_PLUGIN,
-        hardware_plugin='gazebo_ros2_control/GazeboSystem', implemented=False),
+        hardware_plugin='gazebo_ros2_control/GazeboSystem'),
     Backend.REAL: BackendProfile(
         Backend.REAL, use_sim_time=False, controller_manager=CM_NONE,
         hardware_plugin='mock_components/GenericSystem'),

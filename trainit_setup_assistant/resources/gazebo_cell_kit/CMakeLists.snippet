@@ -1,0 +1,16 @@
+# --- gazebo_cell_kit (ADR-0008 F2): add to your cell package's CMakeLists.txt ---
+# Ships the LinkAttacher grasp bridge and the sample world into the package share, so the
+# generated Gazebo bring-up can reference them (bridge as a DeploymentSpec.bridges entry;
+# world via world:=$(find <pkg>)/worlds/trainit_pick_cell.world). Gazebo backend only.
+
+install(PROGRAMS
+  scripts/link_attacher_bridge.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY worlds
+  DESTINATION share/${PROJECT_NAME}
+)
+
+# package.xml (exec_depend): gazebo_ros gazebo_ros2_control controller_manager
+#   robot_state_publisher std_srvs  (+ linkattacher_msgs for the suction weld)

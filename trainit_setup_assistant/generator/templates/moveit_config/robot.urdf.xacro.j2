@@ -7,6 +7,9 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="{{ robot_name }}">
     <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
     <xacro:arg name="use_isaac" default="false" />
+{% if gazebo_supported %}
+    <xacro:arg name="use_gazebo" default="false" />
+{% endif %}
 
     <!-- Robot geometry + end effector (decoupled, self-contained description) -->
     <xacro:include filename="$(find {{ description_package }})/urdf/{{ top_xacro }}" />
@@ -16,5 +19,6 @@
     <xacro:{{ robot_name }}_ros2_control
         name="{{ ros2_control_name }}"
         initial_positions_file="$(arg initial_positions_file)"
-        use_isaac="$(arg use_isaac)"/>
+        use_isaac="$(arg use_isaac)"{% if gazebo_supported %}
+        use_gazebo="$(arg use_gazebo)"{% endif %}/>
 </robot>

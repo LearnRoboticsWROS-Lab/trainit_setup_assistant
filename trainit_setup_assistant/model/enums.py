@@ -228,3 +228,27 @@ class CalibrationFrame(StrEnum):
 
     BASE = 'base_link'
     TCP = 'tcp'
+
+
+class Backend(StrEnum):
+    """A cell EXECUTION backend (ADR-0008) — the environment the same application runs
+    in. The ROS contract is IDENTICAL across all of them (invariant 5): arm
+    ``follow_joint_trajectory``, gripper/suction commands, ``/joint_states``; that is why
+    one bundle runs everywhere. Selected at runtime by the generated bring-up's ``mode:=``
+    launch argument; the ``DeploymentSpec.modes`` list is baked into each launch's
+    ``VALID_MODES``.
+
+    Tokens are FROZEN (they live in every saved ``project.yaml`` and every generated
+    bring-up). Only MOCK/ISAAC/REAL are implemented today; GAZEBO is RESERVED — the
+    backend the ROS2ML distribution needs, wired into the generator in TSA v6
+    (ADR-0008 F2). Its per-backend facts live in ``model/backend.py`` (``BackendProfile``).
+    """
+
+    MOCK = 'mock'      # ros2_control mock_components/GenericSystem, wall clock (RViz/CI)
+    ISAAC = 'isaac'    # Isaac Sim via topic_based_ros2_control/TopicBasedSystem, sim clock
+    GAZEBO = 'gazebo'  # RESERVED (TSA v6 / ADR-0008 F2): Gazebo Classic, in-gzserver CM
+    REAL = 'real'      # vendor bridges impersonate the controllers; no ros2_control node
+
+
+# Backends the generator emits/accepts today; GAZEBO is reserved (ADR-0008 F2).
+IMPLEMENTED_BACKENDS = (Backend.MOCK, Backend.ISAAC, Backend.REAL)

@@ -1,7 +1,9 @@
 """Canonical project data model (the single source of truth)."""
 
+from .backend import BackendProfile, profile_for
 from .enums import (
     AppType,
+    Backend,
     CalibrationFrame,
     DetectionMethod,
     EndEffector,
@@ -95,6 +97,10 @@ __all__ = [
     'PolicyCategory',
     'EndEffector',
     'CalibrationFrame',
+    # backend (ADR-0008)
+    'Backend',
+    'BackendProfile',
+    'profile_for',
     # io
     'load_project',
     'save_project',

@@ -111,13 +111,13 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                       robot_name=robot.robot_name,
                       moveit_config_package=pkg,
                       arm_controller=robot.arm_controller.name,
-                      valid_modes_py=repr(tuple(dep.modes)),
+                      valid_modes_py=repr(tuple(m.value for m in dep.modes)),
                       arm_js_remap_to_py=repr(dep.arm_joint_states_remap_to),
                       bridges_py=repr([b.model_dump() for b in dep.bridges]),
                       real_include_py=(repr(dep.real_include.model_dump())
                                        if dep.real_include else 'None'),
-                      default_mode=dep.default_mode,
-                      modes_human=' | '.join(dep.modes),
+                      default_mode=dep.default_mode.value,
+                      modes_human=' | '.join(m.value for m in dep.modes),
                       gripper_mock_action_py=(repr(gripper_action)
                                               if gripper_present else 'None'),
                       camera_cloud=camera_cloud)

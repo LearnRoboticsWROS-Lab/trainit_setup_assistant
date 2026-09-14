@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from .enums import Backend
 
 
 class LaunchNodeSpec(BaseModel):
@@ -22,6 +24,8 @@ class LaunchNodeSpec(BaseModel):
     # each dict becomes one entry in the node's `parameters=[...]` list
     parameters: List[Dict[str, Any]] = Field(default_factory=list)
     remappings: List[List[str]] = Field(default_factory=list)  # [[from, to], ...]
+    # backend tokens this node runs in; kept as plain strings (matched at runtime against
+    # the launch `mode:=` string) so `.model_dump()` serialises byte-identically.
     modes: List[str] = Field(default_factory=lambda: ['mock', 'isaac'])
 
 
@@ -33,8 +37,17 @@ class RealIncludeSpec(BaseModel):
 
 
 class DeploymentSpec(BaseModel):
-    modes: List[str] = Field(default_factory=lambda: ['mock', 'isaac', 'real'])
-    default_mode: str = 'isaac'
+    # validate_assignment: coerce a raw-string assignment (e.g. controller.set_mode)
+    # back into a Backend member, so `default_mode` is always a Backend downstream.
+    model_config = ConfigDict(validate_assignment=True)
+
+    # The execution backends this cell supports (ADR-0008). A first-class Backend enum
+    # instead of a free string, so an unknown backend token is rejected at load. Serialises
+    # to plain scalars in project.yaml (StrEnum) and to the same VALID_MODES tuple in the
+    # generated bring-up. GAZEBO is reserved (wired in TSA v6 / F2).
+    modes: List[Backend] = Field(
+        default_factory=lambda: [Backend.MOCK, Backend.ISAAC, Backend.REAL])
+    default_mode: Backend = Backend.ISAAC
     # Remap the arm ros2_control node's /joint_states ONLY when a merger republishes it
     # to /joint_states (FR3WML suction pattern). Default None: with no merger bridge the
     # broadcaster must publish /joint_states directly, else there is no TF and planning

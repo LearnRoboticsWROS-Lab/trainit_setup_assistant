@@ -105,9 +105,9 @@ class AppEmitter(Emitter):
                           robot_name=robot.robot_name,
                           moveit_config_package=project.bundle.moveit_config_package,
                           app_package=pkg,
-                          valid_modes_py=repr(tuple(dep.modes)),
-                          default_mode=dep.default_mode,
-                          modes_human=' | '.join(dep.modes),
+                          valid_modes_py=repr(tuple(m.value for m in dep.modes)),
+                          default_mode=dep.default_mode.value,
+                          modes_human=' | '.join(m.value for m in dep.modes),
                           has_policies=bool(app.policies),
                           default_planner_mode=app.global_planner_mode.value)
         else:
@@ -119,13 +119,13 @@ class AppEmitter(Emitter):
                           moveit_config_package=project.bundle.moveit_config_package,
                           app_package=pkg,
                           arm_controller=robot.arm_controller.name,
-                          valid_modes_py=repr(tuple(dep.modes)),
+                          valid_modes_py=repr(tuple(m.value for m in dep.modes)),
                           arm_js_remap_to_py=repr(dep.arm_joint_states_remap_to),
                           bridges_py=repr([b.model_dump() for b in dep.bridges]),
                           real_include_py=(repr(dep.real_include.model_dump())
                                            if dep.real_include else 'None'),
-                          default_mode=dep.default_mode,
-                          modes_human=' | '.join(dep.modes),
+                          default_mode=dep.default_mode.value,
+                          modes_human=' | '.join(m.value for m in dep.modes),
                           has_policies=bool(app.policies),
                           # mock gripper: run the generated no-op server in mock mode when
                           # a gripper exists but no cell bridge serves it (empty bridges).
@@ -149,7 +149,7 @@ class AppEmitter(Emitter):
                           moveit_config_package=project.bundle.moveit_config_package,
                           description_package=project.bundle.description_package,
                           tree_filename=template.tree_filename(project),
-                          default_mode=dep.default_mode,
+                          default_mode=dep.default_mode.value,
                           default_planner_mode=app.global_planner_mode.value)
 
         # --- Groot2 project (GENERATE metadata) ---

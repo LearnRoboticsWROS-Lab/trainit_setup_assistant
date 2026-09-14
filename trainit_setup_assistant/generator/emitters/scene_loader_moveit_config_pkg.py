@@ -126,6 +126,7 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                       # spawned against the in-gzserver plugin CM; suction grasps via a
                       # LinkAttacher bridge (a normal DeploymentSpec.bridges entry).
                       gazebo_supported=(Backend.GAZEBO in dep.modes),
+                      gazebo_cm_bootstrap=dep.gazebo_cm_bootstrap,
                       gazebo_gripper_controller=(
                           robot.gripper.controller_name
                           if gripper_present and robot.gripper.kind is GripperKind.PARALLEL

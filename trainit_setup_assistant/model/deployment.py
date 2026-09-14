@@ -57,6 +57,11 @@ class DeploymentSpec(BaseModel):
     bridges: List[LaunchNodeSpec] = Field(default_factory=list)
     # Hardware bringup include for mode == 'real'.
     real_include: Optional[RealIncludeSpec] = None
+    # Gazebo backend only (ADR-0008 F2): opt-in TRANSIENT standalone controller_manager
+    # that nudges the in-gzserver plugin's controllers to 'configured' before the spawners
+    # run — a documented Gazebo init race some cells (e.g. UR) need. Default False keeps
+    # the clean spawners-only bring-up; ignored by every non-gazebo backend.
+    gazebo_cm_bootstrap: bool = False
 
     def bridge_packages(self) -> List[str]:
         """Unique bridge packages (for package.xml exec_depend), in first-seen order."""

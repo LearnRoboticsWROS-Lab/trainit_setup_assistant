@@ -36,7 +36,8 @@ GOLDEN_PROJECT = GOLDEN_BUNDLE / 'project.yaml'
 GZ_MODES = [Backend.MOCK, Backend.ISAAC, Backend.GAZEBO, Backend.REAL]
 
 
-def _gz_fromscratch_project(gripper: GripperSpec = None) -> CanonicalProject:
+def _gz_fromscratch_project(gripper: GripperSpec = None,
+                            cm_bootstrap: bool = False) -> CanonicalProject:
     p = CanonicalProject(
         project_name='gzcell', bundle=BundleSpec.from_prefix('gzcell'),
         robot=RobotSpec(
@@ -47,7 +48,7 @@ def _gz_fromscratch_project(gripper: GripperSpec = None) -> CanonicalProject:
                                              tip_link='tcp', joints=['j1', 'j2']),
             gripper=gripper or GripperSpec(),
             arm_controller=ArmControllerSpec()))
-    p.deployment = DeploymentSpec(modes=GZ_MODES)
+    p.deployment = DeploymentSpec(modes=GZ_MODES, gazebo_cm_bootstrap=cm_bootstrap)
     p.application.type = AppType.PICK_AND_PLACE
     p.application.waypoints = [Waypoint(name='home', type=WaypointType.JOINT, named='home')]
     p.application.segments = [MotionSegment(to_waypoint='home')]
@@ -101,6 +102,20 @@ def test_fromscratch_gazebo_bringup_wiring():
     # world/gui knobs (headless via gui:=false)
     assert 'DeclareLaunchArgument("world"' in launch
     assert 'DeclareLaunchArgument("gui"' in launch
+
+
+def test_gazebo_cm_bootstrap_opt_in():
+    # default OFF: spawners only, no standalone controller_manager node in the gz branch
+    off = _gazebo_branch((_render_fromscratch(_gz_fromscratch_project())
+                          / 'gzcell_app' / 'launch' / 'bringup.launch.py').read_text())
+    assert 'executable="ros2_control_node"' not in off
+
+    # opt-in ON (deployment.gazebo_cm_bootstrap): a transient standalone controller_manager
+    # is added and the spawners start on ITS start (the UR init-race workaround)
+    on = _gazebo_branch((_render_fromscratch(_gz_fromscratch_project(cm_bootstrap=True))
+                         / 'gzcell_app' / 'launch' / 'bringup.launch.py').read_text())
+    assert 'executable="ros2_control_node"' in on
+    assert 'OnProcessStart(target_action=gz_cm, on_start=[gz_spawners[0]])' in on
 
 
 def test_fromscratch_gazebo_trainit_bt_threads_backend():

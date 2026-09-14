@@ -120,7 +120,21 @@ def launch_setup(context, *args, **kwargs):
                  arguments=[c, "--controller-manager", "/controller_manager",
                             "--controller-manager-timeout", "120"], output="screen")
             for c in gz_controllers]
+{% if gazebo_cm_bootstrap %}
+        # opt-in TRANSIENT standalone controller_manager: nudges the in-gzserver plugin's
+        # controllers to 'configured' before the spawners run (a documented Gazebo init race
+        # some cells, e.g. UR, need). Fed the same robot_description + controllers; it exits
+        # once the plugin CM is up (deployment.gazebo_cm_bootstrap; default off = spawners-only).
+        from launch.event_handlers import OnProcessStart
+        gz_cm = Node(package="controller_manager", executable="ros2_control_node",
+                     parameters=[mc.robot_description, ros2_controllers_path, common],
+                     remappings=[("~/robot_description", "/robot_description")], output="screen")
+        nodes.append(gz_cm)
+        nodes.append(RegisterEventHandler(
+            OnProcessStart(target_action=gz_cm, on_start=[gz_spawners[0]])))
+{% else %}
         nodes.append(gz_spawners[0])
+{% endif %}
         for prev, nxt in zip(gz_spawners, gz_spawners[1:]):
             nodes.append(RegisterEventHandler(OnProcessExit(target_action=prev, on_exit=[nxt])))
         for b in BRIDGES:

@@ -130,6 +130,7 @@ class AppEmitter(Emitter):
                           modes_human=' | '.join(m.value for m in dep.modes),
                           has_policies=bool(app.policies),
                           gazebo_supported=(Backend.GAZEBO in dep.modes),
+                          gazebo_cm_bootstrap=dep.gazebo_cm_bootstrap,
                           gazebo_gripper_controller=(
                               robot.gripper.controller_name
                               if gripper_present and robot.gripper.kind is GripperKind.PARALLEL

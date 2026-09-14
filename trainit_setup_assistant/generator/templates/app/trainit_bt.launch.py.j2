@@ -27,7 +27,8 @@ ROBOT_NAME = "{{ robot_name }}"
 def launch_setup(context, *args, **kwargs):
     use_sim = LaunchConfiguration("use_sim_time").perform(context).lower() in ("true", "1")
     params, _ = build_move_group_params(
-        robot_name=ROBOT_NAME, moveit_config_package=MOVEIT_CONFIG_PACKAGE, use_isaac=use_sim)
+        robot_name=ROBOT_NAME, moveit_config_package=MOVEIT_CONFIG_PACKAGE, use_isaac=use_sim{% if gazebo_supported %},
+        backend=LaunchConfiguration("mode").perform(context){% endif %})
 
     pkg = get_package_share_directory("{{ app_package }}")
     bt_tree = LaunchConfiguration("bt_tree_file").perform(context)
@@ -80,5 +81,10 @@ def generate_launch_description():
         DeclareLaunchArgument("groot_monitor", default_value="true",
                               description="Groot2 live monitor (needs libzmq)"),
         DeclareLaunchArgument("use_sim_time", default_value="true"),
+{% if gazebo_supported %}
+        DeclareLaunchArgument("mode", default_value="isaac",
+                              description="backend for the robot_description hardware plugin "
+                                          "(mock|isaac|gazebo|real); planning-only here"),
+{% endif %}
         OpaqueFunction(function=launch_setup),
     ])

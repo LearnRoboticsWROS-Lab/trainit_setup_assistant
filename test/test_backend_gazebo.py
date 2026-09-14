@@ -103,6 +103,15 @@ def test_fromscratch_gazebo_bringup_wiring():
     assert 'DeclareLaunchArgument("gui"' in launch
 
 
+def test_fromscratch_gazebo_trainit_bt_threads_backend():
+    # the BT node's robot_description must be built with backend=mode too (not a stale
+    # use_isaac), so every node's hardware plugin is uniform (arch-review follow-up).
+    out = _render_fromscratch(_gz_fromscratch_project())
+    bt = (out / 'gzcell_app' / 'launch' / 'trainit_bt.launch.py').read_text()
+    assert 'backend=LaunchConfiguration("mode").perform(context)' in bt
+    assert 'DeclareLaunchArgument("mode"' in bt
+
+
 def test_fromscratch_gazebo_ros2_control_xacro():
     out = _render_fromscratch(_gz_fromscratch_project())
     xacro = (out / 'gzcell_trainit_config' / 'config' / 'gzcell.ros2_control.xacro').read_text()

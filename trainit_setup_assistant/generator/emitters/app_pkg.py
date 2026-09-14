@@ -93,6 +93,7 @@ class AppEmitter(Emitter):
                       app_package=pkg,
                       tree_filename=tree_name,
                       default_planner_mode=app.global_planner_mode.value,
+                      gazebo_supported=(Backend.GAZEBO in dep.modes),
                       detectors=detector_nodes)
 
         if robot.base_moveit_config_path:

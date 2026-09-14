@@ -65,6 +65,9 @@ def launch_setup(context, *args, **kwargs):
             launch_arguments={
                 "planner_mode": LaunchConfiguration("planner_mode").perform(context),
                 "use_sim_time": "true" if mode == "isaac"{% if gazebo_supported %} or mode == "gazebo"{% endif %} else "false",
+{% if gazebo_supported %}
+                "mode": mode,
+{% endif %}
             }.items())]))
     return actions
 

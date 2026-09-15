@@ -779,3 +779,5 @@ def test_world_scene_loads_into_step2(qapp, tmp_path):
     assert cube.is_dynamic() and cube.grasp_target
     table = next(o for o in ctrl.project.scene.objects if o.id == 'table')
     assert not table.is_dynamic()
+    # a grasp target with a blank topic auto-sets the grasp signal (not a crash, not silent)
+    assert ctrl.project.scene.gripper_cmd_topic == '/gripper_cmd'

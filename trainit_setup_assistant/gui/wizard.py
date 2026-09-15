@@ -450,7 +450,8 @@ class ScenePage(QWizardPage):
             'Bool, true = gripper CLOSED. scene_manager_node attaches the grasp targets '
             'when this fires. LEAVE BLANK if the cell has no sim grasp adapter (real physics, '
             'or you wire it at Step 7). Auto-filled from a USD ActionGraph; blank for a .world.')
-        self.gripper_topic.lineEdit().setPlaceholderText('blank = no sim grasp adapter')
+        self.gripper_topic.lineEdit().setPlaceholderText(
+            'e.g. /gripper_cmd — needed with a grasp target (auto-set on Apply if left blank)')
         usd_form.addRow('Gripper cmd topic', self.gripper_topic)
         self.reset_topic = QLineEdit()
         self.reset_topic.setPlaceholderText('blank = not applicable (Isaac-adapter only)')
@@ -688,16 +689,26 @@ class ScenePage(QWizardPage):
                 n = self.ctrl.apply_world_mapping(self._read_table())
             else:
                 n = self.ctrl.apply_usd_mapping(self._read_table())
+            # A grasp target needs the grasp SIGNAL (a Bool topic) to fire the attach + the
+            # sim adapter; if the user left it blank, default it (so the grasp isn't silently
+            # dead) rather than erroring. No grasp target => leave it blank (no adapter). Blank
+            # topics are passed as None so scene_manager keeps its own valid default.
+            topic = self.gripper_topic.currentText().strip()
+            has_grasp = any(o.grasp_target for o in self.ctrl.project.scene.objects)
+            if has_grasp and not topic:
+                topic = '/gripper_cmd'
+                self.gripper_topic.setCurrentText(topic)
             self.ctrl.set_scene_loader_params(
                 grasp_attach_mode=self.grasp_mode.currentText(),
-                gripper_cmd_topic=self.gripper_topic.currentText(),
-                scene_reset_topic=self.reset_topic.text())
+                gripper_cmd_topic=(topic or None),
+                scene_reset_topic=(self.reset_topic.text().strip() or None))
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f'apply failed: {exc}')
             return
         kind = 'world models' if self._scene_source == 'world' else 'meshes'
+        sig = f'  ·  grasp signal: {topic}' if (has_grasp and topic) else ''
         self.status.setText(f'built {n} scene objects ({kind}) — grasp handling: '
-                            f'{self.grasp_mode.currentText()}.')
+                            f'{self.grasp_mode.currentText()}.{sig}')
         self._refresh()
 
     def _on_select(self, item):  # pragma: no cover - needs a display

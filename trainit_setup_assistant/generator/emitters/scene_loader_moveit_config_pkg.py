@@ -85,6 +85,14 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         # pair stays CHECKED so planning avoids the camera.
         self._rewrite_srdf(project, ctx, base_config, pkg)
 
+        # 1c) MoveItConfigsBuilder(<robot_name>) INFERS the URDF/SRDF from the robot name
+        # (config/<robot_name>.urdf.xacro, config/<robot_name>.srdf). A third-party base
+        # config may name them differently (e.g. a UR cell ships ur.urdf.xacro / ur.srdf),
+        # which the builder cannot find. Ensure a <robot_name>.* copy exists so any base
+        # config is consumable. No-op when the base already follows the convention (the
+        # FR3WML golden), so the bundle stays byte-stable there.
+        self._ensure_moveit_infer_names(project, ctx, base_config, pkg)
+
         # 2) GENERATE scene.yaml from the SceneSpec.
         ctx.generate_to(f'{pkg}/config/scene.yaml', build_scene_yaml(project),
                         source='scene_from_project')
@@ -192,5 +200,41 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         if not additions:
             return
         merged = text.replace('</robot>', '\n'.join(additions) + '\n</robot>')
-        ctx.generate_to(f'{pkg}/config/{srdfs[0].name}', merged,
+        # Write under <robot_name>.srdf so MoveItConfigsBuilder infers it (a no-op for the
+        # golden, whose base srdf is already <robot_name>.srdf); _ensure_moveit_infer_names
+        # covers the no-merge case.
+        ctx.generate_to(f'{pkg}/config/{project.robot.robot_name}.srdf', merged,
                         source='srdf_named_state_merge')
+
+    @staticmethod
+    def _ensure_moveit_infer_names(project, ctx: GenContext, base_config: Path, pkg: str) -> None:
+        """Guarantee config/<robot_name>.urdf.xacro and config/<robot_name>.srdf exist so
+        MoveItConfigsBuilder(<robot_name>) can infer them from ANY base config (not only one
+        that already names its files after the robot). A no-op when they are already present
+        (e.g. the FR3WML golden), so byte-stability is preserved there."""
+        name = project.robot.robot_name
+        out_cfg = ctx.output_root / pkg / 'config'
+
+        if not (out_cfg / f'{name}.urdf.xacro').exists():
+            xacros = sorted(base_config.glob('*.urdf.xacro'))
+            if len(xacros) == 1:
+                ctx.copy_file(xacros[0], f'{pkg}/config/{name}.urdf.xacro')
+            elif len(xacros) > 1:
+                ctx.manifest.warn(
+                    f'base config has {len(xacros)} *.urdf.xacro files '
+                    f'({", ".join(x.name for x in xacros)}); cannot pick the main URDF to '
+                    f'name {name}.urdf.xacro — set the base config URDF to {name}.urdf.xacro '
+                    f'or MoveItConfigsBuilder will not find it.')
+            else:
+                ctx.manifest.warn(
+                    f'base config has no config/*.urdf.xacro; MoveItConfigsBuilder({name}) '
+                    f'cannot infer the URDF. Provide config/{name}.urdf.xacro.')
+
+        if not (out_cfg / f'{name}.srdf').exists():
+            srdfs = sorted(base_config.glob('*.srdf'))
+            if srdfs:
+                ctx.copy_file(srdfs[0], f'{pkg}/config/{name}.srdf')
+            else:
+                ctx.manifest.warn(
+                    f'base config has no config/*.srdf; MoveItConfigsBuilder({name}) cannot '
+                    f'infer the semantics. Provide config/{name}.srdf.')

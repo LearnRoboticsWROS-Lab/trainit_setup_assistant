@@ -43,6 +43,8 @@ from python_qt_binding.QtWidgets import (
     QWizardPage,
 )
 
+from ..model.enums import (EndEffectorActuation, GripperJointTarget,
+                          SimGraspAdapter)
 from .controller import AssistantController
 
 
@@ -1671,6 +1673,207 @@ class DeploymentDialog(QDialog):
         lay.addWidget(close)
 
 
+class EndEffectorDialog(QDialog):
+    """How the end-effector GRIPS — the two ADR-0010 axes, for the WHOLE robot (one shared
+    GripperSpec), opened from Step 7. The green *Gripper block* says WHEN the tool opens/closes;
+    THIS dialog says HOW: the actuation (an on/off trigger, or a joint driven to open/closed
+    targets) and, per target backend, which sim-physics trick makes a grasped object stick
+    (Isaac SurfaceGripper / Gazebo LinkAttacher / none). Progressive disclosure keeps it minimal:
+    a suction cell sees only the actuation combo + the adapter matrix."""
+
+    _ACT = [('Trigger (on/off signal)', EndEffectorActuation.TRIGGER.value),
+            ('Joint position (command a joint to open/closed)',
+             EndEffectorActuation.JOINT_POSITION.value)]
+    _TGT = [('SRDF named state (open / closed)', GripperJointTarget.SRDF_STATE.value),
+            ('Explicit angle (capture live or type)', GripperJointTarget.ANGLE.value)]
+    _ADAPTERS = [SimGraspAdapter.SURFACE_GRIPPER.value, SimGraspAdapter.LINK_ATTACHER.value,
+                 SimGraspAdapter.NONE.value]
+
+    def __init__(self, ctrl: AssistantController, wiz, parent=None):
+        super().__init__(parent)
+        self.ctrl = ctrl
+        self.wiz = wiz                       # for live_capture(); a QDialog has no .wizard()
+        self.setWindowTitle('End-effector — how the gripper grips')
+        self.resize(560, 620)
+        grip = ctrl.project.robot.gripper
+        root = QVBoxLayout(self)
+
+        # header: what the base config already knows (read-only)
+        head = QFormLayout()
+        head.addRow('Kind', QLabel(f'{grip.kind.value}   (from the base config)'))
+        head.addRow('Command joint', QLabel(f'{grip.command_joint or "-"}   (from the base config)'))
+        root.addLayout(head)
+
+        # axis 1 — actuation
+        self.g_act = QComboBox()
+        for label, tok in self._ACT:
+            self.g_act.addItem(label, tok)
+        self.g_act.setToolTip('Trigger = an on/off signal (suction, weld, on/off tool). '
+                              'Joint position = drive a gripper joint to an open and a closed target.')
+        act_form = QFormLayout()
+        act_form.addRow('Actuation', self.g_act)
+        root.addLayout(act_form)
+
+        # axis 1 (cont.) — joint targets, shown only for joint_position
+        self.g_jp = QGroupBox('Joint targets')
+        jp = QVBoxLayout(self.g_jp)
+        self.g_target = QComboBox()
+        for label, tok in self._TGT:
+            self.g_target.addItem(label, tok)
+        tgt_form = QFormLayout()
+        tgt_form.addRow('Targets by', self.g_target)
+        jp.addLayout(tgt_form)
+        # SRDF-state sub-panel
+        self.g_srdf = QWidget()
+        srdf = QFormLayout(self.g_srdf)
+        srdf.setContentsMargins(0, 0, 0, 0)
+        self.g_open_state = QComboBox()
+        self.g_open_state.setEditable(True)
+        self.g_closed_state = QComboBox()
+        self.g_closed_state.setEditable(True)
+        srdf.addRow('Open state', self.g_open_state)
+        srdf.addRow('Closed state', self.g_closed_state)
+        jp.addWidget(self.g_srdf)
+        # explicit-angle sub-panel, each with a live-capture button
+        self.g_ang = QWidget()
+        ang = QFormLayout(self.g_ang)
+        ang.setContentsMargins(0, 0, 0, 0)
+        self.g_open_ang = QDoubleSpinBox()
+        self.g_closed_ang = QDoubleSpinBox()
+        for sb in (self.g_open_ang, self.g_closed_ang):
+            sb.setRange(-6.2832, 6.2832)     # ±2π rad — covers any single gripper joint
+            sb.setDecimals(4)
+            sb.setSingleStep(0.01)
+            sb.setSuffix(' rad')
+        cap_open = QPushButton('Capture current angle (live)')
+        cap_open.setToolTip('Jog the gripper (Plan & Execute in RViz), then capture the '
+                            'current joint angle from /joint_states — like a Move block captures a pose.')
+        cap_open.clicked.connect(self.capture_open_angle)
+        cap_closed = QPushButton('Capture current angle (live)')
+        cap_closed.clicked.connect(self.capture_closed_angle)
+        orow = QHBoxLayout(); orow.addWidget(self.g_open_ang); orow.addWidget(cap_open)
+        crow = QHBoxLayout(); crow.addWidget(self.g_closed_ang); crow.addWidget(cap_closed)
+        ang.addRow('Open angle', orow)
+        ang.addRow('Closed angle', crow)
+        jp.addWidget(self.g_ang)
+        root.addWidget(self.g_jp)
+
+        # axis 2 — per-backend sim grasp adapter (ALWAYS shown: orthogonal to actuation)
+        self.g_adapters = QGroupBox('Sim grasp adapter — per target backend')
+        self.g_adapters.setToolTip('Which sim-physics trick makes a grasped object stick. '
+                                   'Independent of the actuation: a suction gripper in Isaac still '
+                                   'needs surface_gripper. real/mock = none (real physics / no sim).')
+        adl = QFormLayout(self.g_adapters)
+        self._adapter_combos: Dict[str, QComboBox] = {}
+        for backend in ctrl.project.deployment.modes:
+            tok = str(backend)
+            combo = QComboBox()
+            combo.addItems(self._ADAPTERS)
+            current = grip.grasp_adapter_for(backend)
+            combo.setCurrentText(current.value)
+            implicit = tok not in grip.sim_grasp_adapter
+            adl.addRow(f'{tok}{"  (default)" if implicit else ""}', combo)
+            self._adapter_combos[tok] = combo
+        root.addWidget(self.g_adapters)
+
+        self.g_status = QLabel('')
+        self.g_status.setWordWrap(True)
+        root.addWidget(self.g_status)
+
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        cancel = QPushButton('Cancel')
+        cancel.clicked.connect(self.reject)
+        save = QPushButton('Save')
+        save.setDefault(True)
+        save.clicked.connect(self.accept)
+        btns.addWidget(cancel)
+        btns.addWidget(save)
+        root.addLayout(btns)
+
+        self._fill(grip)
+        # signals drive progressive disclosure — connected AFTER _fill so its setCurrentIndex
+        # calls don't redundantly re-fire _reveal (_fill calls _reveal() itself once at the end).
+        self.g_act.currentIndexChanged.connect(self._reveal)
+        self.g_target.currentIndexChanged.connect(self._reveal)
+
+    # ---- model -> widgets ----------------------------------------------------
+    def _fill(self, grip) -> None:
+        i = self.g_act.findData(grip.actuation.value)
+        self.g_act.setCurrentIndex(i if i >= 0 else 0)
+        j = self.g_target.findData(grip.joint_target.value)
+        self.g_target.setCurrentIndex(j if j >= 0 else 0)
+        # seed the editable SRDF-state combos with the EEF states the base config derived
+        # (offer both known names in each dropdown; still editable to type another).
+        known = [s for s in (grip.open_state, grip.closed_state) if s]
+        for combo, val in ((self.g_open_state, grip.open_state),
+                           (self.g_closed_state, grip.closed_state)):
+            combo.clear()
+            for s in known:
+                combo.addItem(s)
+            combo.setCurrentText(val or '')
+        if grip.open_angle is not None:
+            self.g_open_ang.setValue(grip.open_angle)
+        if grip.closed_angle is not None:
+            self.g_closed_ang.setValue(grip.closed_angle)
+        self._reveal()
+
+    def _reveal(self) -> None:
+        is_joint = self.g_act.currentData() == EndEffectorActuation.JOINT_POSITION.value
+        self.g_jp.setVisible(is_joint)
+        by = self.g_target.currentData()
+        self.g_srdf.setVisible(is_joint and by == GripperJointTarget.SRDF_STATE.value)
+        self.g_ang.setVisible(is_joint and by == GripperJointTarget.ANGLE.value)
+
+    # ---- live capture (mirrors BlocksPage.capture_joints) --------------------
+    def _capture_angle(self, spinbox):  # pragma: no cover - needs a live ROS session
+        joint = self.ctrl.robot_summary().get('gripper_joint')
+        if not joint:
+            self.g_status.setText('Set the gripper command_joint (Step 1 / base config) first, '
+                                  'then capture.')
+            return
+        try:
+            values = self.wiz.live_capture().current_joint_values([joint])
+        except Exception as exc:  # noqa: BLE001
+            self.g_status.setText(f'capture failed: {exc}')
+            return
+        if joint not in values:
+            self.g_status.setText(f'joint "{joint}" not in /joint_states')
+            return
+        v = values[joint]
+        spinbox.setValue(v)
+        self.g_status.setText(f'captured {v:.4f} rad')
+
+    def capture_open_angle(self):  # pragma: no cover - needs a live ROS session
+        self._capture_angle(self.g_open_ang)
+
+    def capture_closed_angle(self):  # pragma: no cover - needs a live ROS session
+        self._capture_angle(self.g_closed_ang)
+
+    # ---- widgets -> model (only through the controller setters) --------------
+    def accept(self):
+        by = self.g_target.currentData()
+        is_angle = by == GripperJointTarget.ANGLE.value
+        is_srdf = by == GripperJointTarget.SRDF_STATE.value
+        # write only the branch the user is on: angles when ANGLE, state names when SRDF_STATE,
+        # keeping the other branch's values untouched (symmetric keep/clear/set contract). Guard
+        # like every other page's save so a future GripperSpec validator can't crash the slot.
+        try:
+            self.ctrl.set_gripper_actuation(
+                actuation=self.g_act.currentData(),
+                joint_target=by,
+                open_angle=self.g_open_ang.value() if is_angle else '__keep__',
+                closed_angle=self.g_closed_ang.value() if is_angle else '__keep__',
+                open_state=self.g_open_state.currentText().strip() if is_srdf else '__keep__',
+                closed_state=self.g_closed_state.currentText().strip() if is_srdf else '__keep__')
+            self.ctrl.set_sim_grasp_adapter(
+                {tok: combo.currentText() for tok, combo in self._adapter_combos.items()})
+        except Exception as exc:  # noqa: BLE001 - keep the dialog open, report to the user
+            self.g_status.setText(f'could not save: {exc}')
+            return
+        super().accept()
+
+
 class BlocksPage(QWizardPage):
     """Step 6 — the application as ordered BLOCKS (palette | sequence | inspector)."""
 
@@ -1702,6 +1905,14 @@ class BlocksPage(QWizardPage):
         pal.addWidget(pal_btn('move', 'Move'))
         pal.addWidget(QLabel('Layer 2 — Gripper / objects'))
         pal.addWidget(pal_btn('gripper', 'Gripper'))
+        # The Gripper BLOCK says WHEN the tool opens/closes; this button says HOW it grips
+        # (actuation + per-backend sim grasp adapter) for the whole robot — one shared setting.
+        eef_btn = QPushButton('⚙  End-effector (how it grips)…')
+        eef_btn.setToolTip('Actuation (trigger vs joint position), open/closed joint targets, '
+                           'and the per-backend sim grasp adapter — applies to the whole robot.')
+        eef_btn.setStyleSheet('text-align:left;')
+        eef_btn.clicked.connect(self._show_end_effector)
+        pal.addWidget(eef_btn)
         pal.addWidget(pal_btn('reset', 'Reset scene (sim)'))
         pal.addWidget(QLabel('Layer 3 — Vision'))
         pal.addWidget(pal_btn('detect', 'Detect (sample the camera)'))
@@ -2351,6 +2562,9 @@ class BlocksPage(QWizardPage):
 
     def _show_deployment(self):  # pragma: no cover - simple dialog
         DeploymentDialog(self.ctrl, self).exec_()
+
+    def _show_end_effector(self):  # pragma: no cover - exec loop; dialog is unit-tested
+        EndEffectorDialog(self.ctrl, self.wizard(), self).exec_()
 
     # ---- rendering + model sync ---------------------------------------------
     def _label(self, b: dict) -> str:

@@ -647,3 +647,68 @@ def test_blocks_page_folds_and_reopens_detect_blocks(qapp):
     assert ('detect', 'red_cube') in kinds
     di = kinds.index(('detect', 'red_cube'))
     assert kinds[di + 1] == ('move', 'approach')
+
+
+def test_end_effector_dialog_writes_gripperspec(qapp):
+    """Step-7 EndEffectorDialog: the two ADR-0010 axes round-trip through the two additive
+    controller setters, with progressive disclosure driven by the actuation choice."""
+    from trainit_setup_assistant.gui.wizard import EndEffectorDialog, SetupWizard
+    from trainit_setup_assistant.model.enums import (
+        Backend, EndEffectorActuation, GripperJointTarget, SimGraspAdapter)
+
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)                       # suction / trigger, modes [mock, isaac, real]
+    wiz = SetupWizard(ctrl)
+    dlg = EndEffectorDialog(ctrl, wiz)
+
+    # opens in the model's state: a suction cell = trigger, so the joint-target group is hidden,
+    # and the adapter matrix has one row per deployment mode preselected to the sensible default.
+    assert dlg.g_act.currentData() == EndEffectorActuation.TRIGGER.value
+    assert dlg.g_jp.isHidden() is True
+    assert set(dlg._adapter_combos) == {'mock', 'isaac', 'real'}
+    assert dlg._adapter_combos['isaac'].currentText() == SimGraspAdapter.SURFACE_GRIPPER.value
+    assert dlg._adapter_combos['real'].currentText() == SimGraspAdapter.NONE.value
+
+    # --- axis 1: joint_position via explicit ANGLE (progressive disclosure reveals the rows) ---
+    dlg.g_act.setCurrentIndex(dlg.g_act.findData(EndEffectorActuation.JOINT_POSITION.value))
+    assert dlg.g_jp.isHidden() is False
+    dlg.g_target.setCurrentIndex(dlg.g_target.findData(GripperJointTarget.ANGLE.value))
+    assert dlg.g_ang.isHidden() is False and dlg.g_srdf.isHidden() is True
+    dlg.g_open_ang.setValue(0.0)
+    dlg.g_closed_ang.setValue(0.7691)
+    # --- axis 2: override one backend's adapter ---
+    dlg._adapter_combos['isaac'].setCurrentText(SimGraspAdapter.SURFACE_GRIPPER.value)
+    dlg._adapter_combos['mock'].setCurrentText(SimGraspAdapter.NONE.value)
+    dlg.accept()
+
+    grip = ctrl.project.robot.gripper
+    assert grip.actuation is EndEffectorActuation.JOINT_POSITION
+    assert grip.joint_target is GripperJointTarget.ANGLE
+    assert grip.open_angle == 0.0 and grip.closed_angle == 0.7691
+    assert grip.grasp_adapter_for(Backend.ISAAC) is SimGraspAdapter.SURFACE_GRIPPER
+    assert grip.grasp_adapter_for(Backend.MOCK) is SimGraspAdapter.NONE
+
+    # --- axis 1: switch to SRDF named states (the other disclosure branch) ---
+    dlg2 = EndEffectorDialog(ctrl, wiz)
+    dlg2.g_act.setCurrentIndex(dlg2.g_act.findData(EndEffectorActuation.JOINT_POSITION.value))
+    dlg2.g_target.setCurrentIndex(dlg2.g_target.findData(GripperJointTarget.SRDF_STATE.value))
+    assert dlg2.g_srdf.isHidden() is False and dlg2.g_ang.isHidden() is True
+    dlg2.g_open_state.setCurrentText('open')
+    dlg2.g_closed_state.setCurrentText('closed')
+    dlg2.accept()
+
+    grip = ctrl.project.robot.gripper
+    assert grip.joint_target is GripperJointTarget.SRDF_STATE
+    assert grip.open_state == 'open' and grip.closed_state == 'closed'
+    # switching to the SRDF branch KEEPS the angles captured on the ANGLE branch (symmetric
+    # keep/clear/set — the two target branches never clobber each other).
+    assert grip.open_angle == 0.0 and grip.closed_angle == 0.7691
+
+    # the adapter setter MERGES: an override for a backend NOT in deployment.modes (so never
+    # shown in the dialog) survives a Save instead of being dropped.
+    ctrl.set_sim_grasp_adapter({'gazebo': 'link_attacher'})   # gazebo not in [mock, isaac, real]
+    dlg3 = EndEffectorDialog(ctrl, wiz)
+    assert 'gazebo' not in dlg3._adapter_combos               # not a target backend -> not shown
+    dlg3.accept()
+    assert (ctrl.project.robot.gripper.grasp_adapter_for(Backend.GAZEBO)
+            is SimGraspAdapter.LINK_ATTACHER)

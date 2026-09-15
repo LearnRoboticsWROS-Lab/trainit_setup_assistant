@@ -34,9 +34,13 @@ from ..model import (
 from ..model.enums import DetectionMethod
 from ..model.enums import (
     AppType,
+    Backend,
+    EndEffectorActuation,
+    GripperJointTarget,
     GripperKind,
     IsaacGraspMethod,
     MotionType,
+    SimGraspAdapter,
     PlannerId,
     ReleasePolicy,
     SceneObjectCategory,
@@ -154,6 +158,42 @@ class AssistantController:
             grip.grasp_action = grasp_action
         if release_action:
             grip.release_action = release_action
+
+    def set_gripper_actuation(self, *, actuation=None, joint_target=None,
+                              open_angle='__keep__', closed_angle='__keep__',
+                              open_state='__keep__', closed_state='__keep__') -> None:
+        """Edit the end-effector ACTUATION axis (ADR-0010): trigger vs joint_position, and,
+        for joint_position, how the open/closed joint targets are defined (an SRDF named
+        state or an explicit ANGLE). Additive: every field uses a keep/clear/set contract so
+        the caller writes only what the user changed. ``actuation``/``joint_target`` = None
+        keeps. For the four target fields the sentinel ``'__keep__'`` (the default) keeps,
+        an explicit ``None``/``''`` clears, any other value sets — so a caller can leave the
+        angle branch untouched while writing the SRDF branch (and vice-versa)."""
+        grip = self._require().robot.gripper
+        if actuation is not None:
+            grip.actuation = EndEffectorActuation(actuation)
+        if joint_target is not None:
+            grip.joint_target = GripperJointTarget(joint_target)
+        if open_angle != '__keep__':
+            grip.open_angle = None if open_angle is None else float(open_angle)
+        if closed_angle != '__keep__':
+            grip.closed_angle = None if closed_angle is None else float(closed_angle)
+        if open_state != '__keep__':
+            grip.open_state = open_state or None
+        if closed_state != '__keep__':
+            grip.closed_state = closed_state or None
+
+    def set_sim_grasp_adapter(self, mapping: Dict[str, str]) -> None:
+        """Edit the per-backend SIM GRASP ADAPTER axis (ADR-0010). ``mapping`` is
+        {backend token/Backend -> adapter token/SimGraspAdapter}; keys are normalised to the
+        canonical backend token so the YAML round-trips (e.g. {'gazebo': 'link_attacher'}).
+        MERGES into the existing map: a backend absent from ``mapping`` keeps its current
+        override, so editing only the backends currently shown (deployment.modes) never drops
+        an override for a backend that is not on screen."""
+        grip = self._require().robot.gripper
+        merged = dict(grip.sim_grasp_adapter)
+        merged.update({str(Backend(k)): SimGraspAdapter(v) for k, v in mapping.items()})
+        grip.sim_grasp_adapter = merged
 
     def set_project_name(self, name: str, derive_bundle: bool = True) -> None:
         p = self._require()

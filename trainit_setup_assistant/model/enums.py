@@ -254,3 +254,37 @@ class Backend(StrEnum):
 
 # Backends the generator emits today (all four; GAZEBO wired in ADR-0008 F2).
 IMPLEMENTED_BACKENDS = (Backend.MOCK, Backend.ISAAC, Backend.GAZEBO, Backend.REAL)
+
+
+class EndEffectorActuation(StrEnum):
+    """How the BT commands the end-effector on grasp/release (ADR-0010). Orthogonal to the
+    sim grasp adapter."""
+
+    TRIGGER = 'trigger'                # on/off signal to a service (suction, weld, on/off tool)
+    JOINT_POSITION = 'joint_position'  # GripperCommand a joint to open/closed targets
+
+
+class GripperJointTarget(StrEnum):
+    """For JOINT_POSITION actuation, how an open/closed joint target is defined (ADR-0010)."""
+
+    SRDF_STATE = 'srdf_state'  # a named SRDF group_state (open/closed), read from the moveit_config
+    ANGLE = 'angle'            # an explicit joint angle (captured live from MoveIt, or typed)
+
+
+class SimGraspAdapter(StrEnum):
+    """Which simulator-physics trick makes a grasped object stick (ADR-0010). Selected PER
+    BACKEND: a sim gripper rarely holds by friction, so the adapter is fired on grasp and
+    released on open. The adapter itself is adaptation-layer (in the USD / .world + the kit)."""
+
+    SURFACE_GRIPPER = 'surface_gripper'  # Isaac USD SurfaceGripper property (suction/on|off)
+    LINK_ATTACHER = 'link_attacher'      # Gazebo LinkAttacher weld (attach/detach; kit bridge)
+    NONE = 'none'                        # no trick — real physics (mode:=real) or a physics grasp
+
+
+# Sensible per-backend grasp-adapter defaults (the user overrides per backend at Step 7).
+DEFAULT_SIM_GRASP_ADAPTER = {
+    Backend.ISAAC: SimGraspAdapter.SURFACE_GRIPPER,
+    Backend.GAZEBO: SimGraspAdapter.LINK_ATTACHER,
+    Backend.REAL: SimGraspAdapter.NONE,
+    Backend.MOCK: SimGraspAdapter.NONE,
+}

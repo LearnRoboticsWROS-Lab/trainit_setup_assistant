@@ -5,6 +5,9 @@ from .enums import (
     AppType,
     Backend,
     CalibrationFrame,
+    EndEffectorActuation,
+    GripperJointTarget,
+    SimGraspAdapter,
     DetectionMethod,
     EndEffector,
     GripperKind,
@@ -101,6 +104,10 @@ __all__ = [
     'Backend',
     'BackendProfile',
     'profile_for',
+    # end-effector abstraction (ADR-0010)
+    'EndEffectorActuation',
+    'GripperJointTarget',
+    'SimGraspAdapter',
     # io
     'load_project',
     'save_project',

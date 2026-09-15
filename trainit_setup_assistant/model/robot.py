@@ -9,9 +9,16 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from .enums import GripperKind
+from .enums import (
+    Backend,
+    DEFAULT_SIM_GRASP_ADAPTER,
+    EndEffectorActuation,
+    GripperJointTarget,
+    GripperKind,
+    SimGraspAdapter,
+)
 
 
 def _default_planner_configs() -> List[str]:
@@ -133,11 +140,50 @@ class GripperSpec(BaseModel):
     open_state: Optional[str] = None
     closed_state: Optional[str] = None
 
+    # --- end-effector abstraction (ADR-0010): actuation x sim grasp adapter ---
+    # HOW the BT commands the EEF on grasp/release. Defaults from `kind` when unset
+    # (parallel jaw -> joint_position; suction / none / other -> trigger).
+    actuation: EndEffectorActuation = EndEffectorActuation.TRIGGER
+    # For JOINT_POSITION: how the open/closed joint targets are defined.
+    joint_target: GripperJointTarget = GripperJointTarget.SRDF_STATE
+    # For joint_target == ANGLE: explicit joint angles (rad), captured live from MoveIt or typed.
+    open_angle: Optional[float] = None
+    closed_angle: Optional[float] = None
+    # WHICH sim-physics trick attaches a grasped object, PER BACKEND (keys = backend tokens).
+    # Empty -> the sensible DEFAULT_SIM_GRASP_ADAPTER (isaac->surface_gripper,
+    # gazebo->link_attacher, real/mock->none). The user overrides per backend at Step 7.
+    sim_grasp_adapter: Dict[str, SimGraspAdapter] = Field(default_factory=dict)
+
+    @model_validator(mode='before')
+    @classmethod
+    def _default_actuation_from_kind(cls, data):
+        """A parallel jaw defaults to JOINT_POSITION actuation; everything else keeps the
+        TRIGGER default. Only when ``actuation`` was not given, so the YAML round-trip is
+        idempotent."""
+        if isinstance(data, dict) and 'actuation' not in data and data.get('kind') is not None:
+            if GripperKind(data['kind']) is GripperKind.PARALLEL:
+                data['actuation'] = EndEffectorActuation.JOINT_POSITION.value
+        return data
+
     def gripper_action_ns(self) -> str:
         """Full action namespace used in bt_params (``/<ctrl>/<action_ns>``)."""
         if not self.controller_name:
             return ''
         return f'/{self.controller_name}/{self.action_ns}'
+
+    def grasp_adapter_for(self, backend) -> SimGraspAdapter:
+        """The sim grasp adapter for a backend: the explicit per-backend choice if set, else
+        the sensible default (isaac->surface_gripper, gazebo->link_attacher, real/mock->none)."""
+        b = Backend(backend)
+        got = self.sim_grasp_adapter.get(str(b))
+        return got if got is not None else DEFAULT_SIM_GRASP_ADAPTER.get(b, SimGraspAdapter.NONE)
+
+    def joint_targets(self):
+        """(open, closed) targets for JOINT_POSITION actuation: SRDF state names, or explicit
+        angles when ``joint_target`` is ANGLE."""
+        if self.joint_target is GripperJointTarget.ANGLE:
+            return self.open_angle, self.closed_angle
+        return self.open_state, self.closed_state
 
 
 class ArmControllerSpec(BaseModel):

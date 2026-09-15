@@ -114,20 +114,9 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                             'camera_info': camera.camera_info_topic,
                             'depth': camera.depth_topic,
                             'points': camera.points_topic}
-        # Gazebo spawn pose (ADR-0011): the SAME robot_base_world_pose that the importer
-        # inverted to place the scene in base_link now spawns the robot at that world pose
-        # (-x/-y/-z/-R/-P/-Y), so RViz and Gazebo agree by construction. Empty => origin.
-        _bp = project.scene.robot_base_world_pose
-        robot_spawn_args = []
-        if _bp:
-            _p = [float(v) for v in _bp] + [0.0] * (6 - len(_bp))
-            robot_spawn_args = ['-x', str(_p[0]), '-y', str(_p[1]), '-z', str(_p[2]),
-                                '-R', str(_p[3]), '-P', str(_p[4]), '-Y', str(_p[5])]
-
         ctx.render_to(f'{pkg}/launch/bringup.launch.py',
                       'moveit_config/scene_loader_bringup.launch.py.j2',
                       robot_name=robot.robot_name,
-                      robot_spawn_args_py=repr(robot_spawn_args),
                       moveit_config_package=pkg,
                       arm_controller=robot.arm_controller.name,
                       valid_modes_py=repr(tuple(m.value for m in dep.modes)),
@@ -146,9 +135,16 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                       # LinkAttacher bridge (a normal DeploymentSpec.bridges entry).
                       gazebo_supported=(Backend.GAZEBO in dep.modes),
                       gazebo_cm_bootstrap=dep.gazebo_cm_bootstrap,
+                      # Spawn the cell's gripper controller in Gazebo whenever the base config
+                      # declares one (a GripperCommand controller captured into controller_name),
+                      # not only for a PARALLEL kind — the base ingest defaults an unknown gripper
+                      # to SUCTION, which wrongly dropped the Robotiq's gripper_position_controller
+                      # so `ros2 control list_controllers` showed no gripper and it never moved.
+                      # A suction cell with no ros2_control joint controller has an empty
+                      # controller_name, so it is still not spawned (it uses the LinkAttacher).
                       gazebo_gripper_controller=(
                           robot.gripper.controller_name
-                          if gripper_present and robot.gripper.kind is GripperKind.PARALLEL
+                          if gripper_present and robot.gripper.controller_name
                           else None))
 
         # 4) package.xml + CMakeLists (exec_depend the framework + connector packages).

@@ -468,11 +468,13 @@ class ScenePage(QWizardPage):
         # (blank = keep world-frame; shift each object by hand below).
         self.world_base_offset = QLineEdit()
         self.world_base_offset.setPlaceholderText('x,y,z,R,P,Y — e.g. 0,0,0.8,0,0,0 (blank = robot at world origin)')
-        self.world_base_offset.setToolTip('The robot base pose in the .world (position AND '
-                                          'orientation, metres+radians). Its full inverse expresses '
-                                          'the scene in base_link (like Isaac) AND spawns the robot at '
-                                          'the same pose in Gazebo, so RViz and Gazebo agree. A UR on a '
-                                          '0.8 m pedestal => 0,0,0.8,0,0,0. Blank = world origin.')
+        self.world_base_offset.setToolTip("The robot base_link's pose in the world AS IN THE "
+                                          "ROBOT'S URDF (position AND orientation, metres+radians). "
+                                          "Its full inverse expresses the .world scene in base_link "
+                                          "(like Isaac). The robot itself is placed by its own URDF "
+                                          "in BOTH RViz and Gazebo (spawn at origin), so match this "
+                                          "to the URDF mount. A UR on a 0.8 m pedestal => 0,0,0.8,0,0,0. "
+                                          "Blank = base at world origin.")
         usd_form.addRow('Robot base in world (.world)', self.world_base_offset)
         load_world = QPushButton('Load .world (Gazebo) → scene objects')
         load_world.clicked.connect(self.load_world_scene)

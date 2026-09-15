@@ -434,7 +434,7 @@ class ScenePage(QWizardPage):
         urow = QHBoxLayout(); urow.addWidget(self.usd_path); urow.addWidget(ubrowse)
         usd_form.addRow('USD / .world scene', urow)
         self.mesh_pkg = QLineEdit()
-        self.mesh_pkg.setPlaceholderText('USD only — mesh package, e.g. big1500_isaac (not needed for .world)')
+        self.mesh_pkg.setPlaceholderText('mesh package: USD scan pkg, or (.world) the ROS pkg hosting the gazebo models')
         usd_form.addRow('Mesh package', self.mesh_pkg)
         # scene-loader attach param (not in the USD): links near the tool allowed to
         # touch a grasped object (self-collision relief). BIG1500: end_effector, tcp, wrist3_link.
@@ -592,7 +592,9 @@ class ScenePage(QWizardPage):
                 self.status.setText(f'bad robot base pose "{txt}": {exc}')
                 return
         try:
-            self._rules = self.ctrl.read_world_cell(path, robot_base_world_pose=pose)
+            self._rules = self.ctrl.read_world_cell(
+                path, robot_base_world_pose=pose,
+                mesh_package=self.mesh_pkg.text().strip() or None)
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f'.world load failed: {exc}')
             return

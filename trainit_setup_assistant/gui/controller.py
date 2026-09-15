@@ -923,7 +923,8 @@ class AssistantController:
         return len(objs)
 
     def import_world_scene(self, world_path, robot_base_world_pose=None, dynamic: bool = False,
-                           replace: bool = False, category=None, classify=None) -> int:
+                           replace: bool = False, category=None, classify=None,
+                           mesh_package=None) -> int:
         """Import scene objects from a Gazebo ``.world`` (SDF) — the Gazebo analogue of
         ``import_usd_scene``. Each ``<model>`` becomes a SceneObject (static -> obstacle,
         non-static -> dynamic target by default; the user re-classifies at Step 2).
@@ -937,7 +938,7 @@ class AssistantController:
         pose = self._resolve_robot_base_world_pose(robot_base_world_pose)
         objs = import_world(world_path, default_frame=p.robot.base_frame,
                             robot_base_world_pose=pose, dynamic=dynamic,
-                            category=category, classify=classify)
+                            category=category, classify=classify, mesh_package=mesh_package)
         if replace:
             p.scene.objects = []
         existing = {o.id for o in p.scene.objects}
@@ -956,21 +957,23 @@ class AssistantController:
             p.scene.robot_base_world_pose = [float(v) for v in explicit] or None
         return p.scene.robot_base_world_pose
 
-    def read_world_cell(self, world_path, robot_base_world_pose=None) -> list:
+    def read_world_cell(self, world_path, robot_base_world_pose=None, mesh_package=None) -> list:
         """Step 2 (Gazebo), the analogue of :meth:`import_usd_cell`: read the ``<model>``\\ s
         from a ``.world`` (SDF) and return the editable per-model rules for the review table
-        (include / category / grasp). The parsed objects (shape/dims/pose) are HELD for
-        :meth:`apply_world_mapping`; nothing is written to the scene until the user applies.
+        (include / category / grasp / mesh). EVERY <collision> becomes a row (a table -> box
+        top + N cylinder legs, ADR-0011 B). The parsed objects (shape/dims/pose/mesh) are HELD
+        for :meth:`apply_world_mapping`; nothing is written to the scene until the user applies.
         static -> ``static``, non-static -> ``dynamic`` by default; re-classify in the table.
         ``robot_base_world_pose`` (auto-derived, ADR-0011) is applied as a full rigid inverse
-        so objects land in base_link — like Isaac's binv — and is persisted for spawn_entity."""
+        so objects land in base_link — like Isaac's binv — and is persisted for spawn_entity.
+        ``mesh_package`` resolves a model:// mesh to package://<mesh_package>/models/..."""
         from ..importers import import_world
         p = self._require()
         pose = self._resolve_robot_base_world_pose(robot_base_world_pose)
         self._world_objs = import_world(world_path, default_frame=p.robot.base_frame,
-                                        robot_base_world_pose=pose)
+                                        robot_base_world_pose=pose, mesh_package=mesh_package)
         return [{'group': o.id, 'count': 1, 'category': o.category.value,
-                 'grasp': bool(o.grasp_target), 'mesh': '', 'include': True}
+                 'grasp': bool(o.grasp_target), 'mesh': o.mesh_resource or '', 'include': True}
                 for o in self._world_objs]
 
     def apply_world_mapping(self, rules, replace: bool = True) -> int:
@@ -992,7 +995,8 @@ class AssistantController:
             r = by_id[o.id]
             self.add_scene_object(
                 o.id, list(o.dims), list(o.position), shape=o.shape.value,
-                mesh_resource=o.mesh_resource or None, orientation=list(o.orientation),
+                mesh_resource=o.mesh_resource or None, scale=list(o.scale),
+                orientation=list(o.orientation),
                 category=r.get('category', 'static'), grasp_target=_is_grasp(r), source='world')
         return len(included)
 

@@ -104,3 +104,57 @@ def test_identity_pose_keeps_world_frame(tmp_path):
     zero = {o.id: o for o in import_world(_world_file(tmp_path),
                                           robot_base_world_pose=[0, 0, 0, 0, 0, 0])}
     assert zero["red_cube"].position == [0.5, 0.0, 1.115]
+
+
+_MULTI_WORLD = """<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="w">
+    <model name="table"><static>1</static>
+      <pose>0.5 0 0 0 0 0</pose>
+      <link name="l">
+        <collision name="top"><pose>0 0 0.4 0 0 0</pose>
+          <geometry><box><size>1.0 0.6 0.05</size></box></geometry></collision>
+        <collision name="leg1"><pose>0.4 0.25 0.2 0 0 0</pose>
+          <geometry><cylinder><radius>0.03</radius><length>0.4</length></cylinder></geometry></collision>
+        <collision name="leg2"><pose>-0.4 -0.25 0.2 0 0 0</pose>
+          <geometry><cylinder><radius>0.03</radius><length>0.4</length></cylinder></geometry></collision>
+      </link></model>
+    <model name="pallet"><static>1</static>
+      <pose>-0.9 -0.3 0 0 0 0</pose>
+      <link name="l"><collision name="c">
+        <geometry><mesh><uri>model://euro_pallet/meshes/pallet.dae</uri><scale>0.1 0.1 0.1</scale></mesh></geometry>
+      </collision></link></model>
+  </world>
+</sdf>
+"""
+
+
+def _multi_file(tmp_path) -> str:
+    f = Path(tmp_path) / "multi.world"
+    f.write_text(_MULTI_WORLD)
+    return str(f)
+
+
+def test_multi_collision_emits_one_object_per_collision(tmp_path):
+    # a table with a box top + 2 cylinder legs -> 3 SceneObjects (ADR-0011 B), not one box
+    objs = {o.id: o for o in import_world(_multi_file(tmp_path))}
+    assert {"table_0", "table_1", "table_2"} <= set(objs)
+    assert objs["table_0"].shape is ShapeType.BOX          # top
+    assert objs["table_1"].shape is ShapeType.CYLINDER     # a leg
+    # top world z = model 0 + collision 0.4 -> 0.4
+    assert objs["table_0"].position[2] == 0.4
+
+
+def test_mesh_resolved_to_package_uri(tmp_path):
+    # model://euro_pallet/... -> package://<mesh_pkg>/models/euro_pallet/... + scale kept
+    objs = {o.id: o for o in import_world(_multi_file(tmp_path), mesh_package='lrwros_ur5_workcell')}
+    pallet = objs["pallet"]
+    assert pallet.shape is ShapeType.MESH
+    assert pallet.mesh_resource == 'package://lrwros_ur5_workcell/models/euro_pallet/meshes/pallet.dae'
+    assert pallet.scale == [0.1, 0.1, 0.1]
+
+
+def test_mesh_without_package_degrades_to_box(tmp_path):
+    # no mesh_package -> a model:// mesh can't resolve -> conservative box (scene still loads)
+    objs = {o.id: o for o in import_world(_multi_file(tmp_path))}
+    assert objs["pallet"].shape is ShapeType.BOX

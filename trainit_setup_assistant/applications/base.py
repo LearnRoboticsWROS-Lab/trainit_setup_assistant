@@ -12,7 +12,29 @@ from abc import ABC, abstractmethod
 from typing import List
 
 from ..model import CanonicalProject
-from ..model.enums import WaypointType
+from ..model.enums import EndEffectorActuation, WaypointType
+
+
+# --- end-effector actuation resolution (ADR-0010) ---
+def resolve_gripper_positions(robot) -> tuple:
+    """(close_pos, open_pos) as floats for the ``GripperCommand`` the runtime sends on
+    grasp/release. Only meaningful for JOINT_POSITION actuation; TRIGGER keeps the runtime
+    defaults (1.0/0.0 == suction on/off). SRDF_STATE targets are resolved to a numeric joint
+    value from ``named_states`` (the command joint's value); an unresolvable target falls
+    back to the trigger default so generation never fails."""
+    g = robot.gripper
+    open_t, closed_t = g.joint_targets()  # (open, closed): numbers (ANGLE) | state names (SRDF)
+
+    def _val(target, default: float) -> float:
+        if isinstance(target, (int, float)):
+            return float(target)
+        cj = g.command_joint
+        for ns in robot.named_states:
+            if ns.name == target and cj and cj in ns.joint_values:
+                return float(ns.joint_values[cj])
+        return default
+
+    return _val(closed_t, 1.0), _val(open_t, 0.0)
 
 
 # --- scene/payload key naming (shared by bt_params AND the tree) ---
@@ -38,6 +60,7 @@ def build_bt_params_context(project: CanonicalProject) -> dict:
     app = project.application
     robot = project.robot
 
+    close_pos, open_pos = resolve_gripper_positions(robot)
     globals_ctx = {
         'planner_mode': app.global_planner_mode.value,
         'process_path_backend': app.process_path_backend,
@@ -48,6 +71,15 @@ def build_bt_params_context(project: CanonicalProject) -> dict:
         'process_controller': app.process_controller,
         'bt_tree_id': app.bt_tree_id,
         'enforce_validation': app.enforce_validation,
+        # end-effector abstraction (ADR-0010). The template emits the actuation block ONLY
+        # for JOINT_POSITION, so a TRIGGER cell (the deterministic golden) renders byte-
+        # identically and the runtime keeps its 1.0/0.0 defaults. For JOINT_POSITION the
+        # runtime drives the joint to these targets AND (via gripper_cmd_topic) fires the
+        # per-backend sim grasp adapter (Isaac SurfaceGripper / Gazebo LinkAttacher).
+        'gripper_actuation': robot.gripper.actuation.value,
+        'gripper_close_position': close_pos,
+        'gripper_open_position': open_pos,
+        'gripper_cmd_topic': project.scene.gripper_cmd_topic,
     }
 
     scene_params: List[tuple] = []

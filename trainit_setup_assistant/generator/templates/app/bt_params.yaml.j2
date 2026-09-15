@@ -12,6 +12,15 @@
     process_controller: "{{ g.process_controller }}"
     bt_tree_id: "{{ g.bt_tree_id }}"
     enforce_validation: {{ g.enforce_validation | fmtnum }}
+{% if g.gripper_actuation == 'joint_position' %}
+    # End-effector actuation = joint_position (ADR-0010): CloseGripper/OpenGripper drive the
+    # gripper joint to these targets via GripperCommand, and publish a latched Bool on
+    # gripper_cmd_topic to fire the per-backend sim grasp adapter (Gazebo LinkAttacher /
+    # Isaac SurfaceGripper) + the planning-scene attach.
+    gripper_close_position: {{ g.gripper_close_position | fmtnum }}
+    gripper_open_position: {{ g.gripper_open_position | fmtnum }}
+    gripper_cmd_topic: "{{ g.gripper_cmd_topic }}"
+{% endif %}
 
     task_parameters:
 {% for key, vals in scene_params %}

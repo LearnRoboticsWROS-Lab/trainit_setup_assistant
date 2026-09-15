@@ -36,9 +36,20 @@ plugin's), **one** robot_state_publisher, **one** robot_description, **one** TF 
 2. **A `.world`** with a ground plane, your workcell, and (for a grasp demo) a graspable
    object. Pass it as `world:=$(find <your_pkg>)/worlds/<cell>.world`. A minimal one is in
    `worlds/trainit_pick_cell.world`.
-3. **A grasp mechanism.** A physics gripper models contact; a **suction** cell welds the
-   object with the **IFRA_LinkAttacher** Gazebo plugin. Add the weld bridge
-   (`scripts/link_attacher_bridge.py`) as a normal cell **bridge** in your project:
+3. **A grasp mechanism = the sim grasp adapter (ADR-0010).** A physics gripper models
+   contact; where the sim can't hold by friction, a **weld** does — Gazebo uses the
+   **IFRA_LinkAttacher** plugin. This is the Gazebo analogue of Isaac's SurfaceGripper, so it
+   follows the **same grasp contract**: it subscribes to the grasp signal — a latched
+   `std_msgs/Bool` on **`gripper_cmd_topic`** — and welds on `true` / releases on `false`.
+
+   That Bool is published by the **runtime** (`trainit_run_bt`) when the project's
+   end-effector actuation is `joint_position` and a `gripper_cmd_topic` is set — the SAME
+   topic `scene_manager_node` uses for the planning-scene attach. So one signal fires the
+   weld and the attach together; `CloseGripper`/`OpenGripper` need no per-simulator branch.
+
+   Wire the adapter (`scripts/link_attacher_bridge.py`) into your `*_moveit_config`
+   bring-up, or capture it as a cell **bridge** with `modes: [gazebo]` — TSA selects the
+   adapter (Step 7) but does not invent the wiring:
 
    ```yaml
    deployment:
@@ -48,12 +59,13 @@ plugin's), **one** robot_state_publisher, **one** robot_description, **one** TF 
          executable: link_attacher_bridge.py
          modes: [gazebo]            # runs only in the Gazebo backend
          parameters:
-           - {object_model: red_box, object_link: link,
-              robot_model: <robot_name>, ee_link: suction_link}
+           - {gripper_cmd_topic: /isaac_gripper_cmd,     # == scene.yaml / bt_params
+              object_model: red_box, object_link: link,
+              robot_model: <robot_name>, ee_link: robotiq_85_base_link}
    ```
 
-   It exposes the TrainIt suction contract (`/suction/on` → attach, `/suction/off` →
-   detach), so the existing BT `CloseGripper`/`OpenGripper` drive the weld unchanged.
+   Set `gripper_cmd_topic` to the project's `scene.gripper_cmd_topic` (the runtime,
+   `scene_manager_node`, and this adapter must all agree).
 
 ## Dependencies (vcs, like the rest of TrainIt's externals)
 

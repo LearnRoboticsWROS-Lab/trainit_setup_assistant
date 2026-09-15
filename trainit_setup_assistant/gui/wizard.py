@@ -467,10 +467,13 @@ class ScenePage(QWizardPage):
         # separately, so give its base position in the world to express objects in base_link
         # (blank = keep world-frame; shift each object by hand below).
         self.world_base_offset = QLineEdit()
-        self.world_base_offset.setPlaceholderText('robot base in world x,y,z — e.g. 0,0,0.8 (blank = world frame)')
-        self.world_base_offset.setToolTip('A UR mounted on a 0.8 m table => 0,0,0.8, so the '
-                                          '.world objects land in base_link. Blank keeps world frame.')
-        usd_form.addRow('Robot base offset (.world)', self.world_base_offset)
+        self.world_base_offset.setPlaceholderText('x,y,z,R,P,Y — e.g. 0,0,0.8,0,0,0 (blank = robot at world origin)')
+        self.world_base_offset.setToolTip('The robot base pose in the .world (position AND '
+                                          'orientation, metres+radians). Its full inverse expresses '
+                                          'the scene in base_link (like Isaac) AND spawns the robot at '
+                                          'the same pose in Gazebo, so RViz and Gazebo agree. A UR on a '
+                                          '0.8 m pedestal => 0,0,0.8,0,0,0. Blank = world origin.')
+        usd_form.addRow('Robot base in world (.world)', self.world_base_offset)
         load_world = QPushButton('Load .world (Gazebo) → scene objects')
         load_world.clicked.connect(self.load_world_scene)
         usd_form.addRow(load_world)
@@ -578,27 +581,28 @@ class ScenePage(QWizardPage):
         if not path:
             self.status.setText('set the .world path first (Browse… or paste it into the field)')
             return
-        base_offset = None
+        pose = None
         txt = self.world_base_offset.text().strip()
         if txt:
             try:
-                base_offset = [float(v) for v in txt.replace(';', ',').split(',')]
-                if len(base_offset) != 3:
-                    raise ValueError('need 3 numbers: x,y,z')
+                pose = [float(v) for v in txt.replace(';', ',').split(',') if v.strip() != '']
+                if len(pose) not in (3, 6):
+                    raise ValueError('need x,y,z or x,y,z,R,P,Y')
             except Exception as exc:  # noqa: BLE001
-                self.status.setText(f'bad robot base offset "{txt}": {exc}')
+                self.status.setText(f'bad robot base pose "{txt}": {exc}')
                 return
         try:
-            self._rules = self.ctrl.read_world_cell(path, base_offset=base_offset)
+            self._rules = self.ctrl.read_world_cell(path, robot_base_world_pose=pose)
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f'.world load failed: {exc}')
             return
         self._scene_source = 'world'
         self._fill_table(self._rules)
+        warn = '' if pose else '  ·  ⚠ no robot base pose given → objects in world frame (robot at origin)'
         self.status.setText(
             f'{len(self._rules)} model(s) from the .world (static → obstacle, non-static → '
             'dynamic by default; sun/ground_plane skipped). Set category + grasp per row in '
-            'the table, then "Apply mapping → build scene".')
+            f'the table, then "Apply mapping → build scene".{warn}')
 
     def load_usd_mapping(self):
         usd = _expand_path(self.usd_path.text())

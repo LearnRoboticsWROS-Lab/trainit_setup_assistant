@@ -922,21 +922,21 @@ class AssistantController:
                 p.scene.objects.append(o)
         return len(objs)
 
-    def import_world_scene(self, world_path, base_offset=None, dynamic: bool = False,
+    def import_world_scene(self, world_path, robot_base_world_pose=None, dynamic: bool = False,
                            replace: bool = False, category=None, classify=None) -> int:
         """Import scene objects from a Gazebo ``.world`` (SDF) — the Gazebo analogue of
         ``import_usd_scene``. Each ``<model>`` becomes a SceneObject (static -> obstacle,
         non-static -> dynamic target by default; the user re-classifies at Step 2).
 
-        The ``.world`` is in the sim world frame and the robot is spawned separately, so
-        pass ``base_offset`` = the robot base's world position (e.g. a UR mounted at
-        ``[0, 0, 0.8]``) to express objects in ``base_link``; otherwise they stay world-
-        frame and are shifted by hand at Step 2. Returns the count added.
+        ``robot_base_world_pose`` = the robot base's world pose [x,y,z,R,P,Y] whose full rigid
+        inverse expresses objects in ``base_link`` (ADR-0011); None/all-zero = identity.
+        Returns the count added.
         """
         from ..importers import import_world
         p = self._require()
+        pose = self._resolve_robot_base_world_pose(robot_base_world_pose)
         objs = import_world(world_path, default_frame=p.robot.base_frame,
-                            base_offset=base_offset, dynamic=dynamic,
+                            robot_base_world_pose=pose, dynamic=dynamic,
                             category=category, classify=classify)
         if replace:
             p.scene.objects = []
@@ -946,16 +946,29 @@ class AssistantController:
                 p.scene.objects.append(o)
         return len(objs)
 
-    def read_world_cell(self, world_path, base_offset=None) -> list:
+    def _resolve_robot_base_world_pose(self, explicit=None):
+        """The robot base world pose [x,y,z,R,P,Y] to express the .world in base_link AND to
+        spawn the robot at (one datum, two consumers — ADR-0011). An explicit value is
+        persisted on the scene (so the generator's spawn_entity uses the SAME number); else
+        the value already on the scene is used; None => identity."""
+        p = self._require()
+        if explicit is not None:
+            p.scene.robot_base_world_pose = [float(v) for v in explicit] or None
+        return p.scene.robot_base_world_pose
+
+    def read_world_cell(self, world_path, robot_base_world_pose=None) -> list:
         """Step 2 (Gazebo), the analogue of :meth:`import_usd_cell`: read the ``<model>``\\ s
         from a ``.world`` (SDF) and return the editable per-model rules for the review table
         (include / category / grasp). The parsed objects (shape/dims/pose) are HELD for
         :meth:`apply_world_mapping`; nothing is written to the scene until the user applies.
-        static -> ``static``, non-static -> ``dynamic`` by default; re-classify in the table."""
+        static -> ``static``, non-static -> ``dynamic`` by default; re-classify in the table.
+        ``robot_base_world_pose`` (auto-derived, ADR-0011) is applied as a full rigid inverse
+        so objects land in base_link — like Isaac's binv — and is persisted for spawn_entity."""
         from ..importers import import_world
         p = self._require()
+        pose = self._resolve_robot_base_world_pose(robot_base_world_pose)
         self._world_objs = import_world(world_path, default_frame=p.robot.base_frame,
-                                        base_offset=base_offset)
+                                        robot_base_world_pose=pose)
         return [{'group': o.id, 'count': 1, 'category': o.category.value,
                  'grasp': bool(o.grasp_target), 'mesh': '', 'include': True}
                 for o in self._world_objs]

@@ -144,6 +144,15 @@ class SceneSpec(BaseModel):
     # Empty by default (Isaac-adapter-specific — not applicable to a plain Gazebo/mock cell).
     scene_reset_topic: str = ''
     attach_link: str = 'tcp'                    # tool link grasp targets attach to
+    # --- cross-simulator scene frame (ADR-0011) ---
+    # Where the robot's base_link sits in the SIMULATOR WORLD frame, as [x, y, z, R, P, Y]
+    # (metres + radians). In Isaac the robot is IN the USD stage, so this is read
+    # automatically (binv) and left None. In Gazebo the robot is spawned SEPARATELY from the
+    # .world, so the cell author declares it at Step 2: it drives BOTH the importer's full
+    # rigid inverse (objects -> base_link, like Isaac) AND spawn_entity's -x/-y/-z/-R/-P/-Y,
+    # so RViz and Gazebo agree by construction. None / all-zero = identity (robot at world
+    # origin); mock/real keep identity (base_link IS the physical mount origin).
+    robot_base_world_pose: Optional[List[float]] = None
     # links near the tool allowed to touch an attached object (self-collision relief).
     touch_links: List[str] = Field(default_factory=lambda: ['tcp'])
     # default planning-collision check for held objects (per-move nodes override it).

@@ -114,9 +114,20 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                             'camera_info': camera.camera_info_topic,
                             'depth': camera.depth_topic,
                             'points': camera.points_topic}
+        # Gazebo spawn pose (ADR-0011): the SAME robot_base_world_pose that the importer
+        # inverted to place the scene in base_link now spawns the robot at that world pose
+        # (-x/-y/-z/-R/-P/-Y), so RViz and Gazebo agree by construction. Empty => origin.
+        _bp = project.scene.robot_base_world_pose
+        robot_spawn_args = []
+        if _bp:
+            _p = [float(v) for v in _bp] + [0.0] * (6 - len(_bp))
+            robot_spawn_args = ['-x', str(_p[0]), '-y', str(_p[1]), '-z', str(_p[2]),
+                                '-R', str(_p[3]), '-P', str(_p[4]), '-Y', str(_p[5])]
+
         ctx.render_to(f'{pkg}/launch/bringup.launch.py',
                       'moveit_config/scene_loader_bringup.launch.py.j2',
                       robot_name=robot.robot_name,
+                      robot_spawn_args_py=repr(robot_spawn_args),
                       moveit_config_package=pkg,
                       arm_controller=robot.arm_controller.name,
                       valid_modes_py=repr(tuple(m.value for m in dep.modes)),

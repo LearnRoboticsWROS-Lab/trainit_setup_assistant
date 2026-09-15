@@ -115,8 +115,11 @@ def launch_setup(context, *args, **kwargs):
             PythonLaunchDescriptionSource(os.path.join(
                 get_package_share_directory("gazebo_ros"), "launch", "gazebo.launch.py")),
             launch_arguments=gz_args.items()))
+        # spawn at the robot's world pose (ADR-0011): the SAME datum whose inverse placed the
+        # scene in base_link, so RViz and Gazebo agree. Empty => world origin.
         nodes.append(Node(package="gazebo_ros", executable="spawn_entity.py", output="screen",
-                          arguments=["-entity", ROBOT_NAME, "-topic", "robot_description"]))
+                          arguments=["-entity", ROBOT_NAME, "-topic", "robot_description"]
+                                    + {{ robot_spawn_args_py }}))
         gz_controllers = ["joint_state_broadcaster", ARM_CONTROLLER]
 {% if gazebo_gripper_controller %}
         gz_controllers.append("{{ gazebo_gripper_controller }}")

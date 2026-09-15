@@ -1,7 +1,7 @@
 """Gazebo .world scene import (the Gazebo analogue of the USD importer). ROS-free.
 
 Pins: box/cylinder extraction, <state> pose priority over the model <pose>, static ->
-STATIC / non-static -> DYNAMIC default, base_offset -> base_link, skip of sun/ground_plane,
+STATIC / non-static -> DYNAMIC default, robot_base_world_pose -> base_link, skip of sun/ground_plane,
 and the source tag.
 """
 from pathlib import Path
@@ -63,7 +63,7 @@ def test_import_world_extracts_models(tmp_path):
 
 
 def test_base_offset_expresses_in_base_link(tmp_path):
-    objs = {o.id: o for o in import_world(_world_file(tmp_path), base_offset=[0, 0, 0.8])}
+    objs = {o.id: o for o in import_world(_world_file(tmp_path), robot_base_world_pose=[0, 0, 0.8])}
     # world z 1.115 - mount 0.8 -> base_link z 0.315
     assert objs["red_cube"].position == [0.5, 0.0, 0.315]
 
@@ -78,3 +78,29 @@ def test_category_override(tmp_path):
         classify=lambda name: "dynamic" if name == "red_cube" else "static")}
     assert objs2["red_cube"].category is SceneObjectCategory.DYNAMIC
     assert objs2["table"].category is SceneObjectCategory.STATIC
+
+
+def test_full_rigid_inverse_absorbs_rotation(tmp_path):
+    import math
+
+    import pytest
+    # robot base at (0,0,0.8) yawed +90deg about z: a world object folds into base_link with
+    # BOTH translation AND rotation absorbed (the Gazebo mirror of Isaac's binv, ADR-0011).
+    objs = {o.id: o for o in import_world(
+        _world_file(tmp_path), robot_base_world_pose=[0, 0, 0.8, 0, 0, math.pi / 2])}
+    cube = objs["red_cube"]                       # world (0.5, 0, 1.115), identity orientation
+    assert cube.position[0] == pytest.approx(0.0, abs=1e-6)
+    assert cube.position[1] == pytest.approx(-0.5, abs=1e-6)   # x folds onto -y under Rz(-90)
+    assert cube.position[2] == pytest.approx(0.315, abs=1e-6)
+    # orientation = inverse base rotation = Rz(-90deg): quat [0, 0, -0.7071, 0.7071]
+    assert cube.orientation[2] == pytest.approx(-0.70711, abs=1e-4)
+    assert cube.orientation[3] == pytest.approx(0.70711, abs=1e-4)
+
+
+def test_identity_pose_keeps_world_frame(tmp_path):
+    # None / all-zero pose = robot at world origin: objects stay in world coords (no shift)
+    objs = {o.id: o for o in import_world(_world_file(tmp_path), robot_base_world_pose=None)}
+    assert objs["red_cube"].position == [0.5, 0.0, 1.115]
+    zero = {o.id: o for o in import_world(_world_file(tmp_path),
+                                          robot_base_world_pose=[0, 0, 0, 0, 0, 0])}
+    assert zero["red_cube"].position == [0.5, 0.0, 1.115]

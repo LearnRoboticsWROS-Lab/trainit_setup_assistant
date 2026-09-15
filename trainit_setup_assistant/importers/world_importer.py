@@ -55,6 +55,45 @@ def _rpy_to_quat(r: float, p: float, y: float) -> List[float]:
             cr * cp * cy + sr * sp * sy]   # w
 
 
+# --- rigid-body maths for the base_link transform (ADR-0011) -----------------
+# Quaternions are [x, y, z, w]. These express a world-frame object in the robot base
+# frame via the FULL rigid inverse of the base's world pose (the Gazebo mirror of Isaac's
+# usd_scene M = M * binv), so both rotation AND translation are absorbed.
+
+def _quat_mul(a: List[float], b: List[float]) -> List[float]:
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return [aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz]
+
+
+def _quat_conj(q: List[float]) -> List[float]:
+    return [-q[0], -q[1], -q[2], q[3]]
+
+
+def _quat_rotate(q: List[float], v: List[float]) -> List[float]:
+    # v' = q * (v,0) * q_conj
+    qv = [v[0], v[1], v[2], 0.0]
+    r = _quat_mul(_quat_mul(q, qv), _quat_conj(q))
+    return [r[0], r[1], r[2]]
+
+
+def _apply_base_inverse(base_pose6, xyz: List[float], quat: List[float]):
+    """Express an object's world (xyz, quat) in the robot base_link frame given the robot
+    base's world pose ``base_pose6`` = [x, y, z, R, P, Y] (a 3-list [x,y,z] is padded with a
+    zero orientation). None / all-zero => identity (robot at world origin)."""
+    if not base_pose6:
+        return xyz, quat
+    p = [float(v) for v in base_pose6] + [0.0] * (6 - len(base_pose6))
+    if all(abs(v) < 1e-12 for v in p[:6]):
+        return xyz, quat                       # identity fast path
+    q_base_inv = _quat_conj(_rpy_to_quat(p[3], p[4], p[5]))
+    d = [xyz[0] - p[0], xyz[1] - p[1], xyz[2] - p[2]]
+    return _quat_rotate(q_base_inv, d), _quat_mul(q_base_inv, quat)
+
+
 def _pose(elem) -> Tuple[List[float], List[float]]:
     """(xyz, rpy) from a <pose> element (default zeros)."""
     p = _floats(elem.text if elem is not None else '', 6)
@@ -92,24 +131,24 @@ def _first_collision(model) -> Optional[Tuple[ShapeType, List[float], List[float
 
 
 def import_world(world_path, default_frame: str = 'base_link',
-                 base_offset: Optional[List[float]] = None,
+                 robot_base_world_pose: Optional[List[float]] = None,
                  dynamic: bool = False, category=None, classify=None,
                  skip_names=DEFAULT_SKIP) -> List[SceneObject]:
-    """Parse a Gazebo ``.world`` into SceneObjects.
+    """Parse a Gazebo ``.world`` into SceneObjects, expressed in the robot ``base_link`` frame.
 
-    ``base_offset``: the robot base's world position (subtracted so objects are expressed in
-    ``base_link``); omit to keep the sim world frame. ``category`` forces one category on all
-    objects; ``dynamic=True`` is shorthand for ``category='dynamic'``; otherwise the default
-    is per ``<static>`` (static -> STATIC obstacle, non-static -> DYNAMIC target).
-    ``classify(name) -> category|None`` overrides per model.
+    ``robot_base_world_pose`` = the robot base's world pose [x, y, z, R, P, Y] (a 3-list is
+    padded with zero orientation): its FULL rigid inverse is applied to every object's pose
+    (position AND orientation), the Gazebo mirror of Isaac's base-relative transform
+    (ADR-0011). None / all-zero = identity (robot at world origin). ``category`` forces one
+    category on all objects; ``dynamic=True`` is shorthand for ``category='dynamic'``;
+    otherwise the default is per ``<static>`` (static -> STATIC obstacle, non-static ->
+    DYNAMIC target). ``classify(name) -> category|None`` overrides per model.
     """
     path = Path(world_path)
     root = ET.parse(str(path)).getroot()
     world = root.find('world') if root.tag != 'world' else root
     if world is None:
         raise ValueError(f'no <world> in {path}')
-
-    off = list(base_offset) if base_offset else [0.0, 0.0, 0.0]
 
     # authoritative settled poses from <state>
     state_pose = {}
@@ -134,7 +173,13 @@ def import_world(world_path, default_frame: str = 'base_link',
         shape, dims, col_off = geom
         static = (model.findtext('static', '0').strip().lower() in ('1', 'true'))
         m_xyz, m_rpy = state_pose.get(name) or _pose(model.find('pose'))
-        pos = [m_xyz[i] + col_off[i] - off[i] for i in range(3)]
+        # object world pose = model pose composed with the collision offset (rotated into
+        # the world by the model orientation), then expressed in base_link via the full
+        # rigid inverse of the robot's world pose (ADR-0011).
+        q_model = _rpy_to_quat(*m_rpy)
+        rc = _quat_rotate(q_model, col_off)
+        world_xyz = [m_xyz[i] + rc[i] for i in range(3)]
+        pos, quat = _apply_base_inverse(robot_base_world_pose, world_xyz, q_model)
 
         cat = forced
         if cat is None and classify is not None:
@@ -154,7 +199,7 @@ def import_world(world_path, default_frame: str = 'base_link',
             dims=[float(d) for d in dims],
             frame=default_frame,
             position=[round(float(v), 6) for v in pos],
-            orientation=_rpy_to_quat(*m_rpy),
+            orientation=[round(float(v), 6) for v in quat],
             category=cat,                    # drives `dynamic` in the SceneObject validator
         ))
     return objects
@@ -162,16 +207,16 @@ def import_world(world_path, default_frame: str = 'base_link',
 
 class WorldImporter(SceneImporter):
     def __init__(self, default_frame: str = 'base_link',
-                 base_offset: Optional[List[float]] = None, dynamic: bool = False,
+                 robot_base_world_pose: Optional[List[float]] = None, dynamic: bool = False,
                  category=None, classify=None, skip_names=DEFAULT_SKIP):
         self.default_frame = default_frame
-        self.base_offset = base_offset
+        self.robot_base_world_pose = robot_base_world_pose
         self.dynamic = dynamic
         self.category = category
         self.classify = classify
         self.skip_names = skip_names
 
     def import_objects(self, source) -> List[SceneObject]:
-        return import_world(source, self.default_frame, self.base_offset, self.dynamic,
-                            category=self.category, classify=self.classify,
+        return import_world(source, self.default_frame, self.robot_base_world_pose,
+                            self.dynamic, category=self.category, classify=self.classify,
                             skip_names=self.skip_names)

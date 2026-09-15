@@ -937,6 +937,43 @@ class AssistantController:
                 p.scene.objects.append(o)
         return len(objs)
 
+    def read_world_cell(self, world_path, base_offset=None) -> list:
+        """Step 2 (Gazebo), the analogue of :meth:`import_usd_cell`: read the ``<model>``\\ s
+        from a ``.world`` (SDF) and return the editable per-model rules for the review table
+        (include / category / grasp). The parsed objects (shape/dims/pose) are HELD for
+        :meth:`apply_world_mapping`; nothing is written to the scene until the user applies.
+        static -> ``static``, non-static -> ``dynamic`` by default; re-classify in the table."""
+        from ..importers import import_world
+        p = self._require()
+        self._world_objs = import_world(world_path, default_frame=p.robot.base_frame,
+                                        base_offset=base_offset)
+        return [{'group': o.id, 'count': 1, 'category': o.category.value,
+                 'grasp': bool(o.grasp_target), 'mesh': '', 'include': True}
+                for o in self._world_objs]
+
+    def apply_world_mapping(self, rules, replace: bool = True) -> int:
+        """Build the scene from the held ``.world`` models + the (edited) rules: one
+        SceneObject per INCLUDED model (SDF shape/dims/pose kept; category/grasp from its
+        row). Inline geometry -> no mesh needed (unlike USD). Returns the object count."""
+        p = self._require()
+        objs = getattr(self, '_world_objs', None) or []
+        by_id = {r['group']: r for r in rules}
+
+        def _is_grasp(r):
+            return bool(r.get('grasp')) and r.get('category') == 'dynamic'
+        included = [o for o in objs if by_id.get(o.id) and by_id[o.id].get('include')]
+        # grasp targets last (baseline convention); stable sort keeps world order per bucket.
+        included.sort(key=lambda o: _is_grasp(by_id[o.id]))
+        if replace:
+            p.scene.objects = []
+        for o in included:
+            r = by_id[o.id]
+            self.add_scene_object(
+                o.id, list(o.dims), list(o.position), shape=o.shape.value,
+                mesh_resource=o.mesh_resource or None, orientation=list(o.orientation),
+                category=r.get('category', 'static'), grasp_target=_is_grasp(r), source='world')
+        return len(included)
+
     # ---- validation + generation (S6) ----
     def validate(self) -> List[str]:
         p = self._require()

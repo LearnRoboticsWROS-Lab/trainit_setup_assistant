@@ -476,6 +476,7 @@ class ScenePage(QWizardPage):
         layout.addLayout(usd_form)
         # the mapping table: one row per prim GROUP (bottle_* collapses to one row)
         self._rules = []
+        self._scene_source = None       # 'usd' | 'world' — which loader filled the table
         self.map_table = QTableWidget(0, 5)
         self.map_table.setHorizontalHeaderLabels(
             ['include', 'group (count)', 'category', 'grasp', 'mesh resource'])
@@ -569,8 +570,9 @@ class ScenePage(QWizardPage):
             self.usd_path.setText(path)
 
     def load_world_scene(self):
-        """Gazebo .world (SDF) import: parse <model>s into scene objects directly (static ->
-        obstacle, non-static -> dynamic), no mesh-package mapping. Bypasses the USD table."""
+        """Gazebo .world (SDF) import: read the <model>s into the SAME review table as USD
+        (include / category / grasp per row), so the user classifies each object BEFORE
+        building the scene with "Apply mapping". No mesh package (SDF geometry is inline)."""
         path = _expand_path(self.usd_path.text())
         if not path:
             self.status.setText('set the .world path first (Browse… or paste it into the field)')
@@ -586,15 +588,16 @@ class ScenePage(QWizardPage):
                 self.status.setText(f'bad robot base offset "{txt}": {exc}')
                 return
         try:
-            n = self.ctrl.import_world_scene(path, base_offset=base_offset, replace=True)
+            self._rules = self.ctrl.read_world_cell(path, base_offset=base_offset)
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f'.world load failed: {exc}')
             return
-        self._refresh()
+        self._scene_source = 'world'
+        self._fill_table(self._rules)
         self.status.setText(
-            f'Imported {n} object(s) from the .world (static → obstacle, non-static → '
-            'dynamic; sun/ground_plane skipped). Review each below and mark the graspable '
-            'one as a grasp target + category=dynamic.')
+            f'{len(self._rules)} model(s) from the .world (static → obstacle, non-static → '
+            'dynamic by default; sun/ground_plane skipped). Set category + grasp per row in '
+            'the table, then "Apply mapping → build scene".')
 
     def load_usd_mapping(self):
         usd = _expand_path(self.usd_path.text())
@@ -607,6 +610,7 @@ class ScenePage(QWizardPage):
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f'USD load failed: {exc}')
             return
+        self._scene_source = 'usd'
         self._fill_table(self._rules)
         # The ActionGraph named the gripper signal — offer it, and show what got applied.
         for t in (getattr(self.ctrl, 'usd_bool_topics', None) or []):
@@ -675,10 +679,15 @@ class ScenePage(QWizardPage):
 
     def apply_usd_mapping_table(self):
         if not self._rules:
-            self.status.setText('load a USD first')
+            self.status.setText('load a USD or a .world first')
             return
         try:
-            n = self.ctrl.apply_usd_mapping(self._read_table())
+            # build from whichever loader filled the table: .world = inline SDF geometry
+            # (no mesh), USD = one mesh per prim group.
+            if self._scene_source == 'world':
+                n = self.ctrl.apply_world_mapping(self._read_table())
+            else:
+                n = self.ctrl.apply_usd_mapping(self._read_table())
             self.ctrl.set_scene_loader_params(
                 grasp_attach_mode=self.grasp_mode.currentText(),
                 gripper_cmd_topic=self.gripper_topic.currentText(),
@@ -686,7 +695,8 @@ class ScenePage(QWizardPage):
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f'apply failed: {exc}')
             return
-        self.status.setText(f'built {n} scene objects (meshes) — grasp handling: '
+        kind = 'world models' if self._scene_source == 'world' else 'meshes'
+        self.status.setText(f'built {n} scene objects ({kind}) — grasp handling: '
                             f'{self.grasp_mode.currentText()}.')
         self._refresh()
 

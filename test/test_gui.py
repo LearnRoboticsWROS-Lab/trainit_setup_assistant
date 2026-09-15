@@ -741,11 +741,14 @@ _MINIMAL_WORLD = """<?xml version="1.0"?>
 
 
 def test_world_scene_loads_into_step2(qapp, tmp_path):
-    """Step 2 accepts a Gazebo .world: load_world_scene parses <model>s into scene objects
-    (static -> obstacle, non-static -> dynamic; sun/ground_plane skipped), no USD needed."""
+    """Step 2 accepts a Gazebo .world exactly like USD: load fills the REVIEW TABLE (one row
+    per <model>, category+grasp editable), and "Apply mapping" builds the scene from it —
+    static -> obstacle, non-static -> dynamic; sun/ground_plane skipped."""
     from trainit_setup_assistant.gui.wizard import SetupWizard
+    from python_qt_binding.QtCore import Qt
     ctrl = AssistantController()
     ctrl.open_project(EXAMPLE)
+    ctrl.project.scene.objects = []           # start clean so "not built until Apply" is meaningful
     wiz = SetupWizard(ctrl)
     sp = wiz.scene_page
     world = tmp_path / 'cell.world'
@@ -754,10 +757,25 @@ def test_world_scene_loads_into_step2(qapp, tmp_path):
     sp.world_base_offset.setText('')          # keep world frame
     sp.load_world_scene()
 
+    # the review table is populated (like USD); nothing is written to the model yet
+    assert sp._scene_source == 'world'
+    rows = sp.map_table.rowCount()
+    groups = {sp.map_table.item(i, 1).text().split('  ')[0] for i in range(rows)}
+    assert groups == {'table', 'red_cube'}    # sun/ground_plane skipped
+    cat = {sp.map_table.item(i, 1).text().split('  ')[0]:
+           sp.map_table.cellWidget(i, 2).currentText() for i in range(rows)}
+    assert cat['table'] == 'static' and cat['red_cube'] == 'dynamic'   # from the SDF
+    assert not ctrl.project.scene.objects      # not built until Apply
+
+    # tick red_cube as a grasp target in the table, then build the scene
+    for i in range(rows):
+        if sp.map_table.item(i, 1).text().startswith('red_cube'):
+            sp.map_table.item(i, 3).setCheckState(Qt.Checked)
+    sp.apply_usd_mapping_table()
+
     ids = {o.id for o in ctrl.project.scene.objects}
-    assert 'table' in ids and 'red_cube' in ids
-    assert 'ground_plane' not in ids          # skipped
+    assert ids == {'table', 'red_cube'}
     cube = next(o for o in ctrl.project.scene.objects if o.id == 'red_cube')
-    assert cube.is_dynamic()                  # non-static -> dynamic target
+    assert cube.is_dynamic() and cube.grasp_target
     table = next(o for o in ctrl.project.scene.objects if o.id == 'table')
-    assert not table.is_dynamic()             # static -> obstacle
+    assert not table.is_dynamic()

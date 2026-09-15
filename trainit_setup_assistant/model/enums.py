@@ -82,7 +82,8 @@ class SceneObjectSource(StrEnum):
     """Where a scene object came from."""
 
     PRIMITIVE = 'primitive'  # built in the GUI primitive editor
-    USD = 'usd'              # imported from a .usd stage
+    USD = 'usd'              # imported from a .usd stage (Isaac)
+    WORLD = 'world'          # imported from a Gazebo .world (SDF)
 
 
 class ShapeType(StrEnum):

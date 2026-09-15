@@ -850,6 +850,30 @@ class AssistantController:
                 p.scene.objects.append(o)
         return len(objs)
 
+    def import_world_scene(self, world_path, base_offset=None, dynamic: bool = False,
+                           replace: bool = False, category=None, classify=None) -> int:
+        """Import scene objects from a Gazebo ``.world`` (SDF) — the Gazebo analogue of
+        ``import_usd_scene``. Each ``<model>`` becomes a SceneObject (static -> obstacle,
+        non-static -> dynamic target by default; the user re-classifies at Step 2).
+
+        The ``.world`` is in the sim world frame and the robot is spawned separately, so
+        pass ``base_offset`` = the robot base's world position (e.g. a UR mounted at
+        ``[0, 0, 0.8]``) to express objects in ``base_link``; otherwise they stay world-
+        frame and are shifted by hand at Step 2. Returns the count added.
+        """
+        from ..importers import import_world
+        p = self._require()
+        objs = import_world(world_path, default_frame=p.robot.base_frame,
+                            base_offset=base_offset, dynamic=dynamic,
+                            category=category, classify=classify)
+        if replace:
+            p.scene.objects = []
+        existing = {o.id for o in p.scene.objects}
+        for o in objs:
+            if o.id not in existing:
+                p.scene.objects.append(o)
+        return len(objs)
+
     # ---- validation + generation (S6) ----
     def validate(self) -> List[str]:
         p = self._require()

@@ -432,9 +432,9 @@ class ScenePage(QWizardPage):
         ubrowse = QPushButton('Browse…')
         ubrowse.clicked.connect(self._browse_usd)
         urow = QHBoxLayout(); urow.addWidget(self.usd_path); urow.addWidget(ubrowse)
-        usd_form.addRow('USD scene', urow)
+        usd_form.addRow('USD / .world scene', urow)
         self.mesh_pkg = QLineEdit()
-        self.mesh_pkg.setPlaceholderText('mesh package, e.g. big1500_isaac')
+        self.mesh_pkg.setPlaceholderText('USD only — mesh package, e.g. big1500_isaac (not needed for .world)')
         usd_form.addRow('Mesh package', self.mesh_pkg)
         # scene-loader attach param (not in the USD): links near the tool allowed to
         # touch a grasped object (self-collision relief). BIG1500: end_effector, tcp, wrist3_link.
@@ -448,16 +448,31 @@ class ScenePage(QWizardPage):
         self.gripper_topic.setEditable(True)
         self.gripper_topic.setToolTip(
             'Bool, true = gripper CLOSED. scene_manager_node attaches the grasp targets '
-            'when this fires. A wrong name fails SILENTLY: the payload never attaches.')
+            'when this fires. LEAVE BLANK if the cell has no sim grasp adapter (real physics, '
+            'or you wire it at Step 7). Auto-filled from a USD ActionGraph; blank for a .world.')
+        self.gripper_topic.lineEdit().setPlaceholderText('blank = no sim grasp adapter')
         usd_form.addRow('Gripper cmd topic', self.gripper_topic)
         self.reset_topic = QLineEdit()
+        self.reset_topic.setPlaceholderText('blank = not applicable (Isaac-adapter only)')
         self.reset_topic.setToolTip(
             'Bool, latched. scene_manager_node publishes here on ~/reset_scene so the '
-            'hand-authored Isaac adapter can teleport its dynamic prims home.')
+            'hand-authored Isaac adapter can teleport its dynamic prims home. Isaac-specific '
+            '— LEAVE BLANK for a plain Gazebo/mock cell.')
         usd_form.addRow('Scene reset topic', self.reset_topic)
         load_usd = QPushButton('Load USD → auto-suggest meshes')
         load_usd.clicked.connect(self.load_usd_mapping)
         usd_form.addRow(load_usd)
+        # Gazebo .world path: SDF geometry is inline (no mesh package). The robot is spawned
+        # separately, so give its base position in the world to express objects in base_link
+        # (blank = keep world-frame; shift each object by hand below).
+        self.world_base_offset = QLineEdit()
+        self.world_base_offset.setPlaceholderText('robot base in world x,y,z — e.g. 0,0,0.8 (blank = world frame)')
+        self.world_base_offset.setToolTip('A UR mounted on a 0.8 m table => 0,0,0.8, so the '
+                                          '.world objects land in base_link. Blank keeps world frame.')
+        usd_form.addRow('Robot base offset (.world)', self.world_base_offset)
+        load_world = QPushButton('Load .world (Gazebo) → scene objects')
+        load_world.clicked.connect(self.load_world_scene)
+        usd_form.addRow(load_world)
         layout.addLayout(usd_form)
         # the mapping table: one row per prim GROUP (bottle_* collapses to one row)
         self._rules = []
@@ -546,10 +561,40 @@ class ScenePage(QWizardPage):
         self._refresh()
 
     def _browse_usd(self):  # pragma: no cover - needs a display
-        path, _ = QFileDialog.getOpenFileName(self, 'Load USD scene', '',
-                                              'USD (*.usd *.usda *.usdc)')
+        path, _ = QFileDialog.getOpenFileName(
+            self, 'Load scene (USD or Gazebo .world)', '',
+            'Scenes (*.usd *.usda *.usdc *.world *.sdf);;USD (*.usd *.usda *.usdc);;'
+            'Gazebo world (*.world *.sdf)')
         if path:
             self.usd_path.setText(path)
+
+    def load_world_scene(self):
+        """Gazebo .world (SDF) import: parse <model>s into scene objects directly (static ->
+        obstacle, non-static -> dynamic), no mesh-package mapping. Bypasses the USD table."""
+        path = _expand_path(self.usd_path.text())
+        if not path:
+            self.status.setText('set the .world path first (Browse… or paste it into the field)')
+            return
+        base_offset = None
+        txt = self.world_base_offset.text().strip()
+        if txt:
+            try:
+                base_offset = [float(v) for v in txt.replace(';', ',').split(',')]
+                if len(base_offset) != 3:
+                    raise ValueError('need 3 numbers: x,y,z')
+            except Exception as exc:  # noqa: BLE001
+                self.status.setText(f'bad robot base offset "{txt}": {exc}')
+                return
+        try:
+            n = self.ctrl.import_world_scene(path, base_offset=base_offset, replace=True)
+        except Exception as exc:  # noqa: BLE001
+            self.status.setText(f'.world load failed: {exc}')
+            return
+        self._refresh()
+        self.status.setText(
+            f'Imported {n} object(s) from the .world (static → obstacle, non-static → '
+            'dynamic; sun/ground_plane skipped). Review each below and mark the graspable '
+            'one as a grasp target + category=dynamic.')
 
     def load_usd_mapping(self):
         usd = _expand_path(self.usd_path.text())

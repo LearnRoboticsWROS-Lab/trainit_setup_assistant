@@ -134,11 +134,15 @@ class SceneSpec(BaseModel):
     payload: Optional[Payload] = None
     # --- scene-loader (scene_manager_node) runtime params ---
     # The gripper-close signal that triggers attaching grasp_target objects to the tool.
-    gripper_cmd_topic: str = '/isaac_gripper_cmd'
+    # Empty (the default) = NO sim grasp adapter wired: nothing attaches on close (real
+    # physics, or a cell with no grasp trick). Set it (e.g. auto-detected from a USD
+    # ActionGraph, or chosen at Step 7 for a Gazebo LinkAttacher) to enable the attach.
+    gripper_cmd_topic: str = ''
     # Cycle-boundary signal: scene_manager_node latches a Bool here when ~/reset_scene is
     # called, so the hand-authored Isaac adapter can teleport its dynamic prims home.
     # TSA owns the CONTRACT; putting the simulated prims back is the cell author's half.
-    scene_reset_topic: str = '/isaac_scene_reset'
+    # Empty by default (Isaac-adapter-specific — not applicable to a plain Gazebo/mock cell).
+    scene_reset_topic: str = ''
     attach_link: str = 'tcp'                    # tool link grasp targets attach to
     # links near the tool allowed to touch an attached object (self-collision relief).
     touch_links: List[str] = Field(default_factory=lambda: ['tcp'])

@@ -718,3 +718,46 @@ def test_end_effector_dialog_writes_gripperspec(qapp):
     dlg3.accept()
     assert (ctrl.project.robot.gripper.grasp_adapter_for(Backend.GAZEBO)
             is SimGraspAdapter.LINK_ATTACHER)
+
+
+_MINIMAL_WORLD = """<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="w">
+    <model name="ground_plane"><static>true</static></model>
+    <model name="table">
+      <static>true</static>
+      <pose>0.5 0 0.4 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry>
+        <box><size>0.8 0.8 0.05</size></box></geometry></collision></link>
+    </model>
+    <model name="red_cube">
+      <pose>0.5 0 0.85 0 0 0</pose>
+      <link name="link"><collision name="c"><geometry>
+        <box><size>0.05 0.05 0.05</size></box></geometry></collision></link>
+    </model>
+  </world>
+</sdf>
+"""
+
+
+def test_world_scene_loads_into_step2(qapp, tmp_path):
+    """Step 2 accepts a Gazebo .world: load_world_scene parses <model>s into scene objects
+    (static -> obstacle, non-static -> dynamic; sun/ground_plane skipped), no USD needed."""
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    wiz = SetupWizard(ctrl)
+    sp = wiz.scene_page
+    world = tmp_path / 'cell.world'
+    world.write_text(_MINIMAL_WORLD)
+    sp.usd_path.setText(str(world))
+    sp.world_base_offset.setText('')          # keep world frame
+    sp.load_world_scene()
+
+    ids = {o.id for o in ctrl.project.scene.objects}
+    assert 'table' in ids and 'red_cube' in ids
+    assert 'ground_plane' not in ids          # skipped
+    cube = next(o for o in ctrl.project.scene.objects if o.id == 'red_cube')
+    assert cube.is_dynamic()                  # non-static -> dynamic target
+    table = next(o for o in ctrl.project.scene.objects if o.id == 'table')
+    assert not table.is_dynamic()             # static -> obstacle

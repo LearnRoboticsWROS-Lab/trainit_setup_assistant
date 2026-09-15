@@ -43,8 +43,16 @@ def build_scene_yaml(project: CanonicalProject) -> str:
         f'    frame_id: {frame}',
         f'    force_republish_hz: {_num(scene.force_republish_hz)}',
         '    scene_update_wait_ms: 800',
-        f'    gripper_cmd_topic: "{scene.gripper_cmd_topic}"',
-        f'    scene_reset_topic: "{scene.scene_reset_topic}"',
+    ]
+    # Grasp/reset contract topics — emitted only when set. Empty (a plain Gazebo/mock/real
+    # cell with no sim grasp adapter wired) => OMIT, so scene_manager_node keeps its own
+    # declared default instead of subscribing to an invalid empty topic name (which aborts
+    # it). The golden sets both explicitly, so its scene.yaml is byte-identical.
+    if scene.gripper_cmd_topic:
+        out.append(f'    gripper_cmd_topic: "{scene.gripper_cmd_topic}"')
+    if scene.scene_reset_topic:
+        out.append(f'    scene_reset_topic: "{scene.scene_reset_topic}"')
+    out += [
         f'    attach_link: {scene.attach_link}',
         f'    attached_collision_check: {"true" if scene.attached_collision_check else "false"}',
         f'    grasp_attach_mode: {scene.grasp_attach_mode}',

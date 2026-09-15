@@ -61,10 +61,22 @@ def test_joint_position_angle_emits_resolved_targets():
                     controller_name='gripper_position_controller', action_ns='gripper_cmd',
                     joint_target=GripperJointTarget.ANGLE, open_angle=0.0, closed_angle=0.7691)
     assert resolve_gripper_positions(_project(g).robot) == (0.7691, 0.0)  # (close, open)
-    text = _render(_project(g))
+    p = _project(g)
+    p.scene.gripper_cmd_topic = '/grasp_cmd'          # a wired sim adapter sets the grasp signal
+    text = _render(p)
     assert 'gripper_close_position: 0.7691' in text
     assert 'gripper_open_position: 0.0' in text
-    assert 'gripper_cmd_topic: "/isaac_gripper_cmd"' in text   # default scene contract
+    assert 'gripper_cmd_topic: "/grasp_cmd"' in text
+
+
+def test_joint_position_blank_topic_omits_gripper_cmd():
+    # no sim grasp adapter wired => scene.gripper_cmd_topic is '' (the new default) => the
+    # actuation is still emitted, but no grasp signal line (the runtime fires no adapter).
+    g = GripperSpec(kind=GripperKind.PARALLEL, joint_target=GripperJointTarget.ANGLE,
+                    open_angle=0.0, closed_angle=0.7691)
+    text = _render(_project(g))
+    assert 'gripper_close_position: 0.7691' in text
+    assert 'gripper_cmd_topic: "' not in text        # the param line (not the comment) is omitted
 
 
 # --- JOINT_POSITION via SRDF named state -------------------------------------

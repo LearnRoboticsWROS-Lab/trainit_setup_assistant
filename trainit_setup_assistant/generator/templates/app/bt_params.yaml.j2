@@ -19,7 +19,9 @@
     # Isaac SurfaceGripper) + the planning-scene attach.
     gripper_close_position: {{ g.gripper_close_position | fmtnum }}
     gripper_open_position: {{ g.gripper_open_position | fmtnum }}
+{% if g.gripper_cmd_topic %}
     gripper_cmd_topic: "{{ g.gripper_cmd_topic }}"
+{% endif %}
 {% endif %}
 
     task_parameters:

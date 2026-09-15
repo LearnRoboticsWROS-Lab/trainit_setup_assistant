@@ -807,3 +807,23 @@ def test_step4_gazebo_in_dropdown_and_selecting_adds_it(qapp):
     mp.mode.setCurrentText('gazebo')                             # user change -> set_mode
     assert Backend.GAZEBO in ctrl.project.deployment.modes
     assert 'mode:=gazebo' in mp.procedure.toPlainText()          # procedure reflects gazebo
+
+
+def test_base_ingest_adds_gazebo_to_modes(tmp_path):
+    """Ingesting a base moveit_config makes the cell gazebo-capable (ADR-0008 F2): gazebo is
+    added to deployment.modes so the generated scene_loader/app bring-up accepts mode:=gazebo
+    for live configuration in Gazebo+RViz — no fiddly opt-in needed."""
+    from trainit_setup_assistant.model.enums import Backend
+    cfg = tmp_path / 'base' / 'config'
+    cfg.mkdir(parents=True)
+    (cfg / 'ur.urdf.xacro').write_text('<?xml version="1.0"?>\n'
+        '<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="r"/>\n')
+    (cfg / 'ur.srdf').write_text('<?xml version="1.0"?>\n<robot name="r"></robot>\n')
+    for f in ('kinematics.yaml', 'joint_limits.yaml', 'ompl_planning.yaml',
+              'moveit_controllers.yaml', 'ros2_controllers.yaml'):
+        (cfg / f).write_text('{}\n')
+    ctrl = AssistantController()
+    ctrl.new_blank_project('urcell')
+    assert Backend.GAZEBO not in ctrl.project.deployment.modes    # default = mock/isaac/real
+    ctrl.load_base_moveit_config('ur_base', str(tmp_path / 'base'))
+    assert Backend.GAZEBO in ctrl.project.deployment.modes        # ingest -> gazebo-capable

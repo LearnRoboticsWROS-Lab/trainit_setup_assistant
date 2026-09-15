@@ -302,6 +302,15 @@ class AssistantController:
 
         self._load_controllers_from_base(config)
         self._load_deployment_from_base(base)
+        # TrainIt supports Gazebo natively (ADR-0008 F2). A cell ingested from a base
+        # moveit_config gets a gazebo-capable scene_loader/app bring-up (VALID_MODES + the
+        # gazebo branch), so the intermediate config can be launched mode:=gazebo and the
+        # application configured live against Gazebo+RViz (Step 4 — the whole point of the
+        # intermediate config). Unconditional (not gated on the base having a launch/, unlike
+        # bridge capture). Byte-safe: the golden loads its explicit modes from project.yaml
+        # and never re-ingests; the from-scratch byte fixtures take no base config.
+        if Backend.GAZEBO not in p.deployment.modes:
+            p.deployment.modes = list(p.deployment.modes) + [Backend.GAZEBO]
         # Grasp targets attach to the robot's OWN tool link. Without this the scene keeps
         # the model default 'tcp', which is silently right for FR30/FR3WML and silently
         # wrong for any cell whose tip_link is named differently.

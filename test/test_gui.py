@@ -669,6 +669,12 @@ def test_end_effector_dialog_writes_gripperspec(qapp):
     assert dlg._adapter_combos['isaac'].currentText() == SimGraspAdapter.SURFACE_GRIPPER.value
     assert dlg._adapter_combos['real'].currentText() == SimGraspAdapter.NONE.value
 
+    # the SRDF-state pickers are seeded from the EEF group_states (here the derived pair) — the
+    # user picks from what the cell declares rather than typing freehand.
+    states = ctrl.gripper_state_names()
+    assert 'off' in states and 'on' in states
+    assert {dlg.g_open_state.itemText(i) for i in range(dlg.g_open_state.count())} >= {'off', 'on'}
+
     # --- axis 1: joint_position via explicit ANGLE (progressive disclosure reveals the rows) ---
     dlg.g_act.setCurrentIndex(dlg.g_act.findData(EndEffectorActuation.JOINT_POSITION.value))
     assert dlg.g_jp.isHidden() is False

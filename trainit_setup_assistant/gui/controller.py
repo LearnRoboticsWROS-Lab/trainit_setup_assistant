@@ -195,6 +195,29 @@ class AssistantController:
         merged.update({str(Backend(k)): SimGraspAdapter(v) for k, v in mapping.items()})
         grip.sim_grasp_adapter = merged
 
+    def gripper_state_names(self) -> List[str]:
+        """The end-effector group's SRDF ``group_state`` names (e.g. open / closed / partial),
+        for the Step-7 dialog's state pickers. Re-parses the hand-made base moveit_config's SRDF
+        (the source of truth for the EEF states) when one is set; always includes the derived
+        open/closed names as a fallback. Read-only — never mutates the model, and never feeds the
+        generator, so it cannot affect bundle bytes."""
+        grip = self._require().robot.gripper
+        names: List[str] = []
+        base = self._require().robot.base_moveit_config_path
+        if base and grip.eef_group_name:
+            try:
+                from ..robotmodel.srdf_reader import read_srdf
+                srdfs = sorted((Path(base) / 'config').glob('*.srdf'))
+                if srdfs:
+                    info = read_srdf(srdfs[0].read_text())
+                    names = [s.name for s in info.states_for(grip.eef_group_name)]
+            except Exception:
+                names = []
+        for s in (grip.open_state, grip.closed_state):   # ensure the derived pair is offered
+            if s and s not in names:
+                names.append(s)
+        return names
+
     def set_project_name(self, name: str, derive_bundle: bool = True) -> None:
         p = self._require()
         p.project_name = name

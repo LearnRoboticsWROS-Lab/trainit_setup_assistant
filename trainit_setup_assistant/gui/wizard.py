@@ -1803,14 +1803,17 @@ class EndEffectorDialog(QDialog):
         self.g_act.setCurrentIndex(i if i >= 0 else 0)
         j = self.g_target.findData(grip.joint_target.value)
         self.g_target.setCurrentIndex(j if j >= 0 else 0)
-        # seed the editable SRDF-state combos with the EEF states the base config derived
-        # (offer both known names in each dropdown; still editable to type another).
-        known = [s for s in (grip.open_state, grip.closed_state) if s]
+        # seed the editable SRDF-state combos with ALL the EEF group_state names parsed from
+        # the base moveit_config's SRDF (open / closed / partial / ...), so the user picks from
+        # what the cell actually declares; still editable to type another.
+        states = self.ctrl.gripper_state_names()
         for combo, val in ((self.g_open_state, grip.open_state),
                            (self.g_closed_state, grip.closed_state)):
             combo.clear()
-            for s in known:
+            for s in states:
                 combo.addItem(s)
+            if val and val not in states:
+                combo.addItem(val)
             combo.setCurrentText(val or '')
         if grip.open_angle is not None:
             self.g_open_ang.setValue(grip.open_angle)

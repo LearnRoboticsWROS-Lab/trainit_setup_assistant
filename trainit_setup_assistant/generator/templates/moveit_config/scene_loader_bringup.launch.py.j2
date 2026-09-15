@@ -103,8 +103,12 @@ def launch_setup(context, *args, **kwargs):
         # one robot_description (GazeboSystem via backend=mode), one controller_manager
         # (the plugin). A LinkAttacher grasp bridge, if any, runs via BRIDGES below.
         world = LaunchConfiguration("world").perform(context)
+        # gazebo_ros2_control drives the in-gzserver controller_manager from the sim update
+        # loop, so the sim must be RUNNING for controllers to activate (a paused sim makes
+        # every controller switch time out). Start unpaused; GazeboSystem holds the initial
+        # joint positions until the controllers take over.
         gz_args = {"gui": LaunchConfiguration("gui").perform(context),
-                   "pause": "true", "verbose": "true"}
+                   "pause": "false", "verbose": "true"}
         if world:
             gz_args["world"] = world
         nodes.append(IncludeLaunchDescription(

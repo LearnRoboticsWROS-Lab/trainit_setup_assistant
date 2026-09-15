@@ -1017,10 +1017,20 @@ class AssistantController:
 
     # ---- Step 4: mode + guided bring-up ----
     def set_mode(self, mode: str) -> None:
-        """Step 4: the mode the user will configure/run in (mock | isaac | real)."""
-        if mode not in ('mock', 'isaac', 'real'):
-            raise ValueError(f"mode must be mock|isaac|real, got {mode!r}")
-        self._require().deployment.default_mode = mode
+        """Step 4: the backend the user will configure/run in. Ensures it is one of the
+        project's SUPPORTED backends (``deployment.modes``) so the generated scene_loader /
+        app bring-up accepts ``mode:=<mode>`` — ADDING it when the user opts into a backend
+        the base config did not declare (e.g. ``gazebo`` on a cell ingested as mock/isaac/
+        real; this is what makes the intermediate config's gazebo branch get emitted). Sets
+        it as the default mode. Regenerate Step 3 after adding a new backend."""
+        from ..model.enums import IMPLEMENTED_BACKENDS
+        b = Backend(mode)                       # raises on an unknown token
+        if b not in IMPLEMENTED_BACKENDS:
+            raise ValueError(f'backend {mode!r} is not implemented')
+        dep = self._require().deployment
+        if b not in dep.modes:
+            dep.modes = list(dep.modes) + [b]
+        dep.default_mode = b
 
     def build_snippet(self, package: str, ws_root: str = None) -> str:
         """The terminal snippet to build+source a generated package. colcon build
@@ -1044,16 +1054,29 @@ class AssistantController:
                          + (f'\n     ({usd_path})' if usd_path else '')
                          + ', run the spawn + grasp-adapter scripts, then press PLAY.')
             n += 1
+        elif mode == 'gazebo':
+            steps.append(f'{n}) Gazebo opens AUTOMATICALLY with RViz from the bring-up below '
+                         '(the two are interfaced — no separate simulator to start). If you '
+                         'just switched to gazebo, REGENERATE Step 3 first so the config '
+                         'includes the gazebo bring-up.')
+            n += 1
         steps.append(f'{n}) Build the scene+planner config you generated at Step 3:\n'
                      f'     cd {ws_root} && source /opt/ros/humble/setup.bash\n'
                      f'     colcon build --packages-select {config_package}\n'
                      f'     source install/setup.bash')
         n += 1
-        steps.append(f'{n}) Bring up the cell (move_group + planners + scene + RViz):\n'
+        launch = f'ros2 launch {config_package} bringup.launch.py mode:={mode}'
+        if mode == 'gazebo':
+            launch += ' world:=<path-to-your-.world>'
+        extra = ' + Gazebo' if mode == 'gazebo' else ''
+        steps.append(f'{n}) Bring up the cell (move_group + planners + scene + RViz{extra}):\n'
                      f'     cd {ws_root} && source /opt/ros/humble/setup.bash && source install/setup.bash\n'
-                     f'     ros2 launch {config_package} bringup.launch.py mode:={mode}')
+                     f'     {launch}')
         n += 1
-        steps.append(f'{n}) Now configure the application (next steps) against this RViz. '
+        jog = (' — jog the end-effector with the MoveIt Motion Planning plugin (Plan & '
+               'Execute) to find/verify poses and gripper angles' if mode in ('gazebo', 'isaac')
+               else '')
+        steps.append(f'{n}) Now configure the application (next steps) against this RViz{jog}. '
                      'The application is launched only AFTER you generate the bundle '
                      '(its README has the run command).')
         return '\n'.join(steps)

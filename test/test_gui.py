@@ -781,3 +781,29 @@ def test_world_scene_loads_into_step2(qapp, tmp_path):
     assert not table.is_dynamic()
     # a grasp target with a blank topic auto-sets the grasp signal (not a crash, not silent)
     assert ctrl.project.scene.gripper_cmd_topic == '/gripper_cmd'
+
+
+def test_set_mode_gazebo_adds_backend():
+    """Step 4: opting into gazebo adds it to deployment.modes (so the generated scene_loader
+    / app bring-up accepts mode:=gazebo) and makes it the default backend."""
+    from trainit_setup_assistant.model.enums import Backend
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    assert Backend.GAZEBO not in ctrl.project.deployment.modes   # base config = mock/isaac/real
+    ctrl.set_mode('gazebo')
+    assert Backend.GAZEBO in ctrl.project.deployment.modes       # now a supported backend
+    assert str(ctrl.project.deployment.default_mode) == 'gazebo'
+
+
+def test_step4_gazebo_in_dropdown_and_selecting_adds_it(qapp):
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    from trainit_setup_assistant.model.enums import Backend
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    wiz = SetupWizard(ctrl)
+    mp = wiz.mode_page
+    items = {mp.mode.itemText(i) for i in range(mp.mode.count())}
+    assert 'gazebo' in items                                     # Step-4 dropdown offers gazebo
+    mp.mode.setCurrentText('gazebo')                             # user change -> set_mode
+    assert Backend.GAZEBO in ctrl.project.deployment.modes
+    assert 'mode:=gazebo' in mp.procedure.toPlainText()          # procedure reflects gazebo

@@ -1649,8 +1649,11 @@ class ModeBringupPage(QWizardPage):
                          'against RViz. (The application itself is launched only at the end.)')
         form = QFormLayout(self)
         self.mode = QComboBox()
-        self.mode.addItems(['isaac', 'mock', 'real'])
-        self.mode.currentTextChanged.connect(self._refresh)
+        self.mode.addItems(['isaac', 'mock', 'gazebo', 'real'])  # before connecting the signal
+        # a genuine change adds the backend to the project's supported modes so the
+        # intermediate config's gazebo bring-up gets generated; connected AFTER addItems so
+        # construction doesn't fire it.
+        self.mode.currentTextChanged.connect(self._on_mode_changed)
         form.addRow('Mode', self.mode)
         self.usd_path = QLineEdit()
         self.usd_path.setPlaceholderText('isaac: path to your cell .usd (optional)')
@@ -1659,6 +1662,24 @@ class ModeBringupPage(QWizardPage):
         form.addRow('Procedure', self.procedure)
 
     def initializePage(self):
+        # reflect the project's current default backend without firing set_mode
+        try:
+            cur = str(self.ctrl.project.deployment.default_mode)
+            self.mode.blockSignals(True)
+            if self.mode.findText(cur) >= 0:
+                self.mode.setCurrentText(cur)
+            self.mode.blockSignals(False)
+        except Exception:  # noqa: BLE001
+            pass
+        self._refresh()
+
+    def _on_mode_changed(self, *_):
+        # opting into a backend (e.g. gazebo) adds it to deployment.modes so a Step-3 regen
+        # emits its bring-up branch; then refresh the procedure text.
+        try:
+            self.ctrl.set_mode(self.mode.currentText())
+        except Exception:  # noqa: BLE001
+            pass
         self._refresh()
 
     def _refresh(self, *_):

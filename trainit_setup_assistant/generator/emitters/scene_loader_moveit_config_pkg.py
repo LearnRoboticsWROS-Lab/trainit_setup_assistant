@@ -117,6 +117,7 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         ctx.render_to(f'{pkg}/launch/bringup.launch.py',
                       'moveit_config/scene_loader_bringup.launch.py.j2',
                       robot_name=robot.robot_name,
+                      world_default=(project.scene.world_path or ''),
                       moveit_config_package=pkg,
                       arm_controller=robot.arm_controller.name,
                       valid_modes_py=repr(tuple(m.value for m in dep.modes)),

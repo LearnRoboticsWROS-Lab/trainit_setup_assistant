@@ -111,6 +111,7 @@ class AppEmitter(Emitter):
                           modes_human=' | '.join(m.value for m in dep.modes),
                           has_policies=bool(app.policies),
                           gazebo_supported=(Backend.GAZEBO in dep.modes),
+                          world_default=(project.scene.world_path or ''),
                           default_planner_mode=app.global_planner_mode.value)
         else:
             # From-scratch bootstrap: no base config bringup exists — the app bringup
@@ -130,6 +131,7 @@ class AppEmitter(Emitter):
                           modes_human=' | '.join(m.value for m in dep.modes),
                           has_policies=bool(app.policies),
                           gazebo_supported=(Backend.GAZEBO in dep.modes),
+                          world_default=(project.scene.world_path or ''),
                           gazebo_cm_bootstrap=dep.gazebo_cm_bootstrap,
                           gazebo_gripper_controller=(
                               robot.gripper.controller_name

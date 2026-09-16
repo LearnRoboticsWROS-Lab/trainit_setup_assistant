@@ -301,6 +301,17 @@ class AssistantController:
                     g.closed_state = s.name
 
         self._load_controllers_from_base(config)
+        # A gripper with a GripperCommand controller on a real joint is a JOINT-ACTUATED
+        # (parallel) gripper, not suction — the ingest above defaulted an unknown EEF to
+        # SUCTION. Classify it PARALLEL + actuation=joint_position (ADR-0010) so the grasp
+        # emits gripper_cmd_topic in bt_params -> the runtime fires the grasp Bool -> the
+        # dynamic object attaches (AttachedCollisionObject in RViz + the sim adapter). The
+        # user can still override this at Step 7. Byte-safe: the golden loads kind from
+        # project.yaml and never re-ingests.
+        grip = p.robot.gripper
+        if (grip.kind is GripperKind.SUCTION and grip.controller_name and grip.command_joint):
+            grip.kind = GripperKind.PARALLEL
+            grip.actuation = EndEffectorActuation.JOINT_POSITION
         self._load_deployment_from_base(base)
         # TrainIt supports Gazebo natively (ADR-0008 F2). A cell ingested from a base
         # moveit_config gets a gazebo-capable scene_loader/app bring-up (VALID_MODES + the
@@ -970,6 +981,9 @@ class AssistantController:
         from ..importers import import_world
         p = self._require()
         pose = self._resolve_robot_base_world_pose(robot_base_world_pose)
+        # persist the .world so the generated gazebo bring-up defaults `world:=` to it
+        # (Gazebo opens WITH the scene, ADR-0011) instead of an empty world.
+        p.scene.world_path = str(world_path)
         self._world_objs = import_world(world_path, default_frame=p.robot.base_frame,
                                         robot_base_world_pose=pose, mesh_package=mesh_package)
         return [{'group': o.id, 'count': 1, 'category': o.category.value,

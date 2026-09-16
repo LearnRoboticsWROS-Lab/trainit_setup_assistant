@@ -183,7 +183,7 @@ def generate_launch_description():
         DeclareLaunchArgument("rviz", default_value="true",
                               description="Launch RViz with the MoveIt plugin"),
 {% if gazebo_supported %}
-        DeclareLaunchArgument("world", default_value="",
+        DeclareLaunchArgument("world", default_value="{{ world_default }}",
                               description="Gazebo .world file (mode:=gazebo); empty=Gazebo's "
                                           "default empty world. Point it at the cell world."),
         DeclareLaunchArgument("gui", default_value="true",

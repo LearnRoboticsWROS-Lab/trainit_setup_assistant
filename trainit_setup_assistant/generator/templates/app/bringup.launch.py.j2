@@ -47,7 +47,8 @@ def launch_setup(context, *args, **kwargs):
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
                 os.path.join(cfg_share, "launch", "bringup.launch.py")),
-            launch_arguments={"mode": mode, "rviz": rviz}.items()),
+            launch_arguments={"mode": mode, "rviz": rviz{% if gazebo_supported %},
+                              "world": LaunchConfiguration("world").perform(context){% endif %}}.items()),
     ]
 {% if has_policies %}
     if LaunchConfiguration("policy").perform(context).lower() in ("true", "1"):
@@ -88,5 +89,10 @@ def generate_launch_description():
 {% endif %}
         DeclareLaunchArgument("planner_mode", default_value="{{ default_planner_mode }}",
                               description="pilz | ompl | ompl_chomp"),
+{% if gazebo_supported %}
+        DeclareLaunchArgument("world", default_value="{{ world_default }}",
+                              description="Gazebo .world (mode:=gazebo); defaults to the cell "
+                                          "world captured at Step 2 so Gazebo opens WITH the scene"),
+{% endif %}
         OpaqueFunction(function=launch_setup),
     ])

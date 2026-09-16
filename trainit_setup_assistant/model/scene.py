@@ -153,6 +153,12 @@ class SceneSpec(BaseModel):
     # so RViz and Gazebo agree by construction. None / all-zero = identity (robot at world
     # origin); mock/real keep identity (base_link IS the physical mount origin).
     robot_base_world_pose: Optional[List[float]] = None
+    # The Gazebo .world that carries the cell scene (ADR-0011). Stored at Step 2 so the
+    # generated gazebo bring-up DEFAULTS its `world:=` arg to it — Gazebo then opens WITH the
+    # scene (the Gazebo analogue of Isaac starting in Play with the USD loaded), instead of an
+    # empty world where the scene shows only in RViz. May be an absolute path or a launch
+    # substitution ($(find <pkg>)/worlds/<cell>.world); empty = Gazebo's default empty world.
+    world_path: Optional[str] = None
     # links near the tool allowed to touch an attached object (self-collision relief).
     touch_links: List[str] = Field(default_factory=lambda: ['tcp'])
     # default planning-collision check for held objects (per-move nodes override it).

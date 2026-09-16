@@ -203,7 +203,7 @@ def generate_launch_description():
                               description="override trajectory_execution.allowed_start_tolerance "
                                           "(rad); empty=framework default 0.1, 0.0=disable check"),
 {% if gazebo_supported %}
-        DeclareLaunchArgument("world", default_value="",
+        DeclareLaunchArgument("world", default_value="{{ world_default }}",
                               description="Gazebo .world file (mode:=gazebo); empty=Gazebo's "
                                           "default empty world. Point it at the cell world."),
         DeclareLaunchArgument("gui", default_value="true",

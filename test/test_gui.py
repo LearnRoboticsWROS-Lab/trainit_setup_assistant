@@ -827,3 +827,40 @@ def test_base_ingest_adds_gazebo_to_modes(tmp_path):
     assert Backend.GAZEBO not in ctrl.project.deployment.modes    # default = mock/isaac/real
     ctrl.load_base_moveit_config('ur_base', str(tmp_path / 'base'))
     assert Backend.GAZEBO in ctrl.project.deployment.modes        # ingest -> gazebo-capable
+
+
+def test_base_ingest_classifies_joint_gripper_as_parallel(tmp_path):
+    """A gripper with a GripperCommand controller on a real joint is JOINT-ACTUATED: the
+    ingest classifies it PARALLEL + actuation=joint_position (ADR-0010/0011 W1), so the
+    grasp emits gripper_cmd_topic and the dynamic object attaches on close (not just suction)."""
+    from trainit_setup_assistant.model.enums import EndEffectorActuation, GripperKind
+    cfg = tmp_path / 'base' / 'config'
+    cfg.mkdir(parents=True)
+    (cfg / 'ur.urdf.xacro').write_text('<?xml version="1.0"?>\n'
+        '<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="r"/>\n')
+    (cfg / 'ur.srdf').write_text(
+        '<?xml version="1.0"?>\n<robot name="r">\n'
+        '  <group name="arm"><chain base_link="base_link" tip_link="tool0"/></group>\n'
+        '  <group name="gripper"><joint name="robotiq_85_left_knuckle_joint"/></group>\n'
+        '  <end_effector name="gripper" parent_link="tool0" group="gripper"/>\n'
+        '  <group_state name="open" group="gripper">'
+        '<joint name="robotiq_85_left_knuckle_joint" value="0.0"/></group_state>\n'
+        '  <group_state name="closed" group="gripper">'
+        '<joint name="robotiq_85_left_knuckle_joint" value="0.8"/></group_state>\n'
+        '</robot>\n')
+    (cfg / 'moveit_controllers.yaml').write_text(
+        'moveit_simple_controller_manager:\n'
+        '  controller_names:\n    - gripper_position_controller\n'
+        '  gripper_position_controller:\n    type: GripperCommand\n'
+        '    joints:\n      - robotiq_85_left_knuckle_joint\n    action_ns: gripper_cmd\n')
+    for f in ('kinematics.yaml', 'joint_limits.yaml', 'ompl_planning.yaml', 'ros2_controllers.yaml'):
+        (cfg / f).write_text('{}\n')
+
+    ctrl = AssistantController()
+    ctrl.new_blank_project('urcell')
+    ctrl.load_base_moveit_config('ur_base', str(tmp_path / 'base'))
+    grip = ctrl.project.robot.gripper
+    assert grip.kind is GripperKind.PARALLEL                 # not the SUCTION default
+    assert grip.actuation is EndEffectorActuation.JOINT_POSITION
+    assert grip.controller_name == 'gripper_position_controller'
+    assert grip.command_joint == 'robotiq_85_left_knuckle_joint'

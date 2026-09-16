@@ -112,6 +112,11 @@ class AppEmitter(Emitter):
                           has_policies=bool(app.policies),
                           gazebo_supported=(Backend.GAZEBO in dep.modes),
                           world_default=(project.scene.world_path or ''),
+                          # Gazebo Classic + gazebo_ros2_control need longer than 8s to spawn
+                          # controllers + move_group before the BT ticks (else the pick move or
+                          # the GripperCommand fails and, coupled, the grasp Bool never fires —
+                          # ADR-0012). Gated so a non-gazebo cell (the golden) keeps 8.0 exactly.
+                          bt_delay_default=('15.0' if (Backend.GAZEBO in dep.modes) else '8.0'),
                           default_planner_mode=app.global_planner_mode.value)
         else:
             # From-scratch bootstrap: no base config bringup exists — the app bringup

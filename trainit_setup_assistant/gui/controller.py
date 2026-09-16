@@ -195,6 +195,29 @@ class AssistantController:
         merged.update({str(Backend(k)): SimGraspAdapter(v) for k, v in mapping.items()})
         grip.sim_grasp_adapter = merged
 
+    def set_end_effector_interaction(self, interacts: bool) -> None:
+        """ADR-0012 gate: does the end-effector grasp a dynamic object at all? False = a
+        trigger-only application (welding / inspection / dispensing): the generator wires no
+        grasp Bool, no planning-scene attach and no per-backend sim grasp adapter."""
+        self._require().robot.gripper.interacts_with_object = bool(interacts)
+
+    def set_link_attacher(self, *, robot_model='', robot_link='',
+                          object_model='', object_link='') -> None:
+        """ADR-0012: the four IFRA LinkAttacher names for a Fake-weld adapter (model1/link1 =
+        robot, model2/link2 = object). An empty field falls back to the generator's derivation
+        (robot_model = the spawned ``-entity`` name, object_model = the grasp-target id,
+        object_link = the ``.world``'s first link). When the user left every field blank the
+        config is kept None, so the bundle stays byte-identical and the YAML round-trips."""
+        from ..model.robot import LinkAttacherConfig
+        grip = self._require().robot.gripper
+        cfg = LinkAttacherConfig(
+            robot_model=(robot_model or '').strip(),
+            robot_link=(robot_link or '').strip(),
+            object_model=(object_model or '').strip(),
+            object_link=(object_link or '').strip())
+        grip.link_attacher = cfg if any(
+            (cfg.robot_model, cfg.robot_link, cfg.object_model, cfg.object_link)) else None
+
     def gripper_state_names(self) -> List[str]:
         """The end-effector group's SRDF ``group_state`` names (e.g. open / closed / partial),
         for the Step-7 dialog's state pickers. Re-parses the hand-made base moveit_config's SRDF
@@ -729,6 +752,17 @@ class AssistantController:
                 o.category = cat
                 o.dynamic = cat is SceneObjectCategory.DYNAMIC  # keep the flag in sync
                 break
+
+    def set_sole_grasp_target(self, obj_id: str) -> None:
+        """Make ``obj_id`` THE grasp target of the app: set it grasp_target=True and clear every
+        other object, so the LinkAttacher object_model and the planning-scene attach resolve to
+        exactly one object. Selectable at Step 7 to pick which dynamic object this gripper grasps
+        (generalises the Step-2 flag). No-op'ing an unknown id leaves the scene untouched."""
+        objs = self._require().scene.objects
+        if not any(o.id == obj_id for o in objs):
+            return
+        for o in objs:
+            o.grasp_target = (o.id == obj_id)
 
     def set_object_grasp(self, obj_id: str, *, grasp_target: Optional[bool] = None,
                          release_policy: Optional[str] = None,

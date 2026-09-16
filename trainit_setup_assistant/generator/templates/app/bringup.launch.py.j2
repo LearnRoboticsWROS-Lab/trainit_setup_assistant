@@ -81,7 +81,7 @@ def generate_launch_description():
                               description="Launch RViz with the MoveIt plugin"),
         DeclareLaunchArgument("bt", default_value="true",
                               description="Run the BehaviorTree application"),
-        DeclareLaunchArgument("bt_delay", default_value="8.0",
+        DeclareLaunchArgument("bt_delay", default_value="{{ bt_delay_default | default('8.0') }}",
                               description="Seconds to wait for the cell before the BT starts"),
 {% if has_policies %}
         DeclareLaunchArgument("policy", default_value="true",

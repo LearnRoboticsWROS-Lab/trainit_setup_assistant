@@ -122,7 +122,7 @@ def launch_setup(context, *args, **kwargs):
         # robot (e.g. a world->base fixed joint at z=0.8) would otherwise be double-counted.
         # robot_base_world_pose is used ONLY by the importer to place the scene in base_link.
         nodes.append(Node(package="gazebo_ros", executable="spawn_entity.py", output="screen",
-                          arguments=["-entity", ROBOT_NAME, "-topic", "robot_description"]))
+                          arguments=["-entity", "{{ spawn_entity_name }}", "-topic", "robot_description"]))
         gz_controllers = ["joint_state_broadcaster", ARM_CONTROLLER]
 {% if gazebo_gripper_controller %}
         gz_controllers.append("{{ gazebo_gripper_controller }}")

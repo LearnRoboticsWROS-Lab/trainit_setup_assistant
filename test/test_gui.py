@@ -867,10 +867,12 @@ def test_base_ingest_classifies_joint_gripper_as_parallel(tmp_path):
 
 
 def test_gripper_block_configures_end_effector(qapp):
-    """W2: the end-effector config (actuation + per-backend sim adapter + grasp topic + attach
-    link) lives INSIDE the Gripper block's inspector and writes the shared GripperSpec/SceneSpec."""
+    """W2/ADR-0012: the whole end-effector<->dynamic-object config (gate, actuation with a joint
+    target, per-backend interaction, grasp topic, attach link, LinkAttacher names) lives INSIDE
+    the Gripper block's inspector and writes the shared GripperSpec/SceneSpec."""
     from trainit_setup_assistant.gui.wizard import SetupWizard
-    from trainit_setup_assistant.model.enums import Backend, EndEffectorActuation, SimGraspAdapter
+    from trainit_setup_assistant.model.enums import (Backend, EndEffectorActuation,
+                                                     GripperJointTarget, SimGraspAdapter)
     ctrl = AssistantController()
     ctrl.open_project(EXAMPLE)
     ctrl.project.deployment.modes = [Backend.MOCK, Backend.GAZEBO]   # a gazebo adapter row
@@ -879,14 +881,72 @@ def test_gripper_block_configures_end_effector(qapp):
     bp.blocks = [{'kind': 'gripper', 'action': 'close', 'payload': ''}]
     bp._on_select(0)                       # select -> populate the EEF controls from the model
     assert bp.g_ee_act.count() == 2 and 'gazebo' in bp.g_ee_adapter_combos
-    # configure in the block
+    # configure in the block (per-backend combos hold the adapter TOKEN as itemData)
+    bp.g_ee_interacts.setCurrentIndex(bp.g_ee_interacts.findData(True))
     bp.g_ee_act.setCurrentIndex(bp.g_ee_act.findData('joint_position'))
-    bp.g_ee_adapter_combos['gazebo'].setCurrentText('link_attacher')
+    bp.g_ee_target_by.setCurrentIndex(bp.g_ee_target_by.findData('angle'))
+    bp.g_ee_open_ang.setValue(0.0)
+    bp.g_ee_closed_ang.setValue(0.7691)
+    gz = bp.g_ee_adapter_combos['gazebo']
+    gz.setCurrentIndex(gz.findData('link_attacher'))
     bp.g_ee_topic.setCurrentText('/gripper_cmd')
     bp.g_ee_link.setText('wrist_3_link')
+    bp.g_la_robot_model.setText('cobot')
+    bp.g_la_object_link.setText('link_1')
     bp.apply_inspector()
     grip = ctrl.project.robot.gripper
+    assert grip.interacts_with_object is True
     assert grip.actuation is EndEffectorActuation.JOINT_POSITION
+    assert grip.joint_target is GripperJointTarget.ANGLE
+    assert (grip.open_angle, grip.closed_angle) == (0.0, 0.7691)
     assert grip.grasp_adapter_for(Backend.GAZEBO) is SimGraspAdapter.LINK_ATTACHER
+    assert grip.link_attacher is not None
+    assert grip.link_attacher.robot_model == 'cobot'
+    assert grip.link_attacher.object_link == 'link_1'
     assert ctrl.project.scene.gripper_cmd_topic == '/gripper_cmd'
     assert ctrl.project.scene.attach_link == 'wrist_3_link'
+
+
+def test_gripper_block_gate_off_is_trigger_only(qapp):
+    """ADR-0012 gate: setting 'No — trigger only' persists interacts_with_object=False, so the
+    generator wires no grasp Bool/attach (welding/inspection app)."""
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    from trainit_setup_assistant.model.enums import Backend
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    ctrl.project.deployment.modes = [Backend.MOCK, Backend.GAZEBO]
+    wiz = SetupWizard(ctrl)
+    bp = wiz.blocks_page
+    bp.blocks = [{'kind': 'gripper', 'action': 'close', 'payload': ''}]
+    bp._on_select(0)
+    bp.g_ee_interacts.setCurrentIndex(bp.g_ee_interacts.findData(False))
+    bp.apply_inspector()
+    assert ctrl.project.robot.gripper.interacts_with_object is False
+
+
+def test_gripper_block_grasp_target_is_selectable(qapp):
+    """ADR-0012 generalisation: the grasp target is a dropdown of the scene's dynamic objects
+    (not read-only), so a cell with several graspable objects can pick which one this gripper
+    grasps; selecting one makes it the sole grasp target."""
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    from trainit_setup_assistant.model import SceneObject
+    from trainit_setup_assistant.model.enums import Backend, SceneObjectCategory, ShapeType
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    ctrl.project.deployment.modes = [Backend.MOCK, Backend.GAZEBO]
+    ctrl.project.scene.objects = [
+        SceneObject(id='cube_a', shape=ShapeType.BOX, dims=[0.05, 0.05, 0.05],
+                    category=SceneObjectCategory.DYNAMIC, grasp_target=True),
+        SceneObject(id='cube_b', shape=ShapeType.BOX, dims=[0.05, 0.05, 0.05],
+                    category=SceneObjectCategory.DYNAMIC, grasp_target=False)]
+    wiz = SetupWizard(ctrl)
+    bp = wiz.blocks_page
+    bp.blocks = [{'kind': 'gripper', 'action': 'close', 'payload': ''}]
+    bp._on_select(0)
+    assert bp.g_ee_target.isEnabled()
+    assert {bp.g_ee_target.itemText(i) for i in range(bp.g_ee_target.count())} == {'cube_a', 'cube_b'}
+    assert bp.g_ee_target.currentText() == 'cube_a'         # preselected to the current target
+    bp.g_ee_interacts.setCurrentIndex(bp.g_ee_interacts.findData(True))
+    bp.g_ee_target.setCurrentText('cube_b')                 # pick the other object
+    bp.apply_inspector()
+    assert ctrl.project.scene.grasp_target_ids() == ['cube_b']

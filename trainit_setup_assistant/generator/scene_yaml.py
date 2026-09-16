@@ -48,7 +48,10 @@ def build_scene_yaml(project: CanonicalProject) -> str:
     # cell with no sim grasp adapter wired) => OMIT, so scene_manager_node keeps its own
     # declared default instead of subscribing to an invalid empty topic name (which aborts
     # it). The golden sets both explicitly, so its scene.yaml is byte-identical.
-    if scene.gripper_cmd_topic:
+    # ADR-0012 gate: a trigger-only end-effector (interacts_with_object False) wires no grasp
+    # attach, so the topic is dropped even if a stale value lingers. Default True keeps the
+    # golden byte-identical.
+    if scene.gripper_cmd_topic and project.robot.gripper.interacts_with_object:
         out.append(f'    gripper_cmd_topic: "{scene.gripper_cmd_topic}"')
     if scene.scene_reset_topic:
         out.append(f'    scene_reset_topic: "{scene.scene_reset_topic}"')
@@ -90,9 +93,17 @@ def build_scene_yaml(project: CanonicalProject) -> str:
         out.append(f'        orientation: {_nums(o.orientation)}')
         out.append(f'        dynamic: {"true" if o.is_dynamic() else "false"}')
         # AABB bounding box (extents + local centre offset) used when this grasp target
-        # attaches to the tool as a cheap box (grasp_attach_mode: attach_box).
+        # attaches to the tool as a cheap box (grasp_attach_mode: attach_box). Emitted for
+        # a mesh grasp target AND for a PRIMITIVE one: scene_manager_node only builds the
+        # AttachedCollisionObject (the object turns PURPLE in RViz) when a grasp_box is
+        # present — without it a primitive grasp target (e.g. a box red_cube) just REMOVEs,
+        # so it disappears instead of turning purple. The mesh branch is unchanged (golden
+        # byte-identical: its grasp target is a mesh).
         if o.is_grasp_target() and o.is_mesh() and len(o.dims) == 3:
             out.append(f'        grasp_box: {_nums(o.dims)}')
+            out.append(f'        grasp_box_center: {_nums(o.aabb_center)}')
+        elif o.is_grasp_target() and not o.is_mesh():
+            out.append(f'        grasp_box: {_nums(o.aabb_dims())}')
             out.append(f'        grasp_box_center: {_nums(o.aabb_center)}')
         # metadata for the future touchable-ACM refinement (scene_manager_node may
         # leave these attached<->static pairs allowed even when the check is ON).

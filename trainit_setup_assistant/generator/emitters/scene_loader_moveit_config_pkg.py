@@ -123,18 +123,30 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         # grasp target's id (its Gazebo <model> name); needs IFRA_LinkAttacher in the workspace.
         gazebo_link_attacher = None
         grasp_ids = project.scene.grasp_target_ids()
+        # spawn_entity's -entity name AND the LinkAttacher model1_name must be the SAME Gazebo
+        # model (or the weld's model1 never resolves). Both derive from one datum (robot_name),
+        # overridable together via the Step-7 link_attacher.robot_model (ADR-0012).
+        spawn_entity_name = robot.robot_name
         if (Backend.GAZEBO in dep.modes and grasp_ids
+                and robot.gripper.interacts_with_object
                 and robot.gripper.grasp_adapter_for(Backend.GAZEBO) is SimGraspAdapter.LINK_ATTACHER):
             object_link = 'link'
             if project.scene.world_path:            # auto-detect the object's <link name>
                 from ...importers.world_importer import model_first_link
                 object_link = model_first_link(project.scene.world_path, grasp_ids[0])
+            # Step-7 overrides win per field; otherwise the derivations above (byte-safe).
+            names = robot.gripper.link_attacher_names(
+                robot_model=robot.robot_name,
+                robot_link=project.scene.attach_link,
+                object_model=grasp_ids[0],
+                object_link=object_link)
+            spawn_entity_name = names['robot_model']
             gazebo_link_attacher = {
                 'gripper_cmd_topic': project.scene.gripper_cmd_topic or '/gripper_cmd',
-                'robot_model': robot.robot_name,
-                'ee_link': project.scene.attach_link,
-                'object_model': grasp_ids[0],
-                'object_link': object_link,
+                'robot_model': names['robot_model'],
+                'ee_link': names['robot_link'],
+                'object_model': names['object_model'],
+                'object_link': names['object_link'],
             }
             from pathlib import Path as _P
             _kit = (_P(__file__).parents[2] / 'resources' / 'gazebo_cell_kit' /
@@ -143,6 +155,7 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         ctx.render_to(f'{pkg}/launch/bringup.launch.py',
                       'moveit_config/scene_loader_bringup.launch.py.j2',
                       robot_name=robot.robot_name,
+                      spawn_entity_name=spawn_entity_name,
                       world_default=(project.scene.world_path or ''),
                       gazebo_link_attacher=(gazebo_link_attacher is not None),
                       gazebo_link_attacher_py=repr(gazebo_link_attacher),

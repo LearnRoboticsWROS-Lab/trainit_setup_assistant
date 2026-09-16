@@ -120,6 +120,19 @@ class PilzCartesianLimits(BaseModel):
     max_rot_vel: float = 1.57
 
 
+class LinkAttacherConfig(BaseModel):
+    """The four names the Gazebo IFRA LinkAttacher plugin welds together (ADR-0012):
+    ``link2`` of ``model2`` (the grasped object) is fixed to ``link1`` of ``model1`` (the
+    robot). Authored at Step 7 for a Fake-weld adapter; an empty field falls back to the
+    generator's derivation (``robot_model`` = the spawned ``-entity`` name, ``object_model``
+    = the grasp-target id, ``object_link`` = the ``.world``'s first link for that model)."""
+
+    robot_model: str = ''    # model1_name: the Gazebo model the robot is spawned as (== -entity)
+    robot_link: str = ''     # link1_name: the robot link the object welds to (e.g. wrist_3_link)
+    object_model: str = ''   # model2_name: the Gazebo model name of the grasped object
+    object_link: str = ''    # link2_name: the object's link (e.g. link_1)
+
+
 class GripperSpec(BaseModel):
     """End-effector: SRDF EEF group + controller + grasp/release semantics."""
 
@@ -153,6 +166,16 @@ class GripperSpec(BaseModel):
     # Empty -> the sensible DEFAULT_SIM_GRASP_ADAPTER (isaac->surface_gripper,
     # gazebo->link_attacher, real/mock->none). The user overrides per backend at Step 7.
     sim_grasp_adapter: Dict[str, SimGraspAdapter] = Field(default_factory=dict)
+    # --- ADR-0012: end-effector <-> dynamic-object interaction ---
+    # Does this end-effector grasp a dynamic object AT ALL? False -> a trigger-only
+    # application (welding, inspection, dispensing): no grasp target, no grasp Bool, no
+    # planning-scene attach, no per-backend adapter. Default True preserves today's
+    # pick&place behaviour (the golden is unaffected: the field is inert unless the gazebo
+    # branch or the grasp wiring reads it).
+    interacts_with_object: bool = True
+    # For a Fake-weld (LINK_ATTACHER) adapter, the four IFRA plugin names. None -> the
+    # generator derives them (byte-safe fallback), so existing bundles are unchanged.
+    link_attacher: Optional[LinkAttacherConfig] = None
 
     @model_validator(mode='before')
     @classmethod
@@ -184,6 +207,18 @@ class GripperSpec(BaseModel):
         if self.joint_target is GripperJointTarget.ANGLE:
             return self.open_angle, self.closed_angle
         return self.open_state, self.closed_state
+
+    def link_attacher_names(self, *, robot_model, robot_link, object_model, object_link):
+        """The four LinkAttacher names to emit: the Step-7 override for each field when set,
+        else the passed-in generator derivation. Keeps a bundle byte-identical when the user
+        never touched the fields (link_attacher is None -> every override is empty)."""
+        cfg = self.link_attacher
+        return {
+            'robot_model': (cfg.robot_model if cfg and cfg.robot_model else robot_model),
+            'robot_link': (cfg.robot_link if cfg and cfg.robot_link else robot_link),
+            'object_model': (cfg.object_model if cfg and cfg.object_model else object_model),
+            'object_link': (cfg.object_link if cfg and cfg.object_link else object_link),
+        }
 
 
 class ArmControllerSpec(BaseModel):

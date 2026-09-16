@@ -1272,6 +1272,38 @@ class PerceptionPage(QWizardPage):
                                            'continuous': d.continuous,
                                            'rate_hz': d.rate_hz}
         self._refresh_list()
+        # Auto-scan the live graph so the preview works against ANY simulator (the
+        # RealSense-style defaults do not match a Gazebo libgazebo_ros_camera cell).
+        self._autosniff()
+
+    def _autosniff(self):  # pragma: no cover - needs a live ROS session
+        """On entering Step 5, fill the camera topic fields from the LIVE graph (filtered by
+        message type) so the live tuner works regardless of the simulator, whether or not the
+        user ends up using the camera. Overwrites a field ONLY while it still holds a known
+        default (or is empty) — never a deliberate entry — and stays silent when no bring-up
+        is publishing."""
+        defaults = {
+            id(self.c_rgb): {'', '/camera/color/image_raw'},
+            id(self.c_depth): {'', '/camera/depth/image_rect_raw'},
+            id(self.c_info): {'', '/camera/color/camera_info'},
+        }
+        try:
+            from ..livesession.camera_capture import sniff_camera_topics
+            found = sniff_camera_topics(timeout_s=0.8)
+        except Exception:  # noqa: BLE001 - no ROS / no bring-up: leave the defaults
+            return
+        if not found:
+            return
+        filled = []
+        for key, widget in (('rgb', self.c_rgb), ('depth', self.c_depth),
+                            ('camera_info', self.c_info)):
+            val = found.get(key)
+            if val and widget.text().strip() in defaults[id(widget)]:
+                widget.setText(val)
+                filled.append(val)
+        if filled:
+            self._status('camera topics auto-detected from the live bring-up: '
+                         + ', '.join(filled), ok=True)
 
     def validatePage(self) -> bool:
         self.tune_btn.setChecked(False)        # stops the timer via the toggle handler
@@ -2262,53 +2294,167 @@ class BlocksPage(QWizardPage):
         self.m_rel.setEnabled(not b.get('detector'))
         self.m_detector.setEnabled(not rel_step)
 
+    # Per-backend end-effector <-> dynamic-object interaction (ADR-0012), friendly labels
+    # over the SimGraspAdapter tokens: None (real / no sim trick), Physics (the simulator's
+    # own grasp physics — Isaac SurfaceGripper), Fake weld (the LinkAttacher dirty trick).
+    _EE_INTER = [('None — real / no sim trick', 'none'),
+                 ('Physics — let the simulator hold it', 'surface_gripper'),
+                 ('Fake weld — LinkAttacher plugin', 'link_attacher')]
+
     def _gripper_form(self) -> QWidget:
         w = QWidget()
         f = QFormLayout(w)
         self.g_action = QComboBox()
         self.g_action.addItems(['close (grasp)', 'open (release)',
                                 'attach payload', 'detach payload'])
+        self.g_action.currentIndexChanged.connect(self._gripper_reveal)
         f.addRow('Action', self.g_action)
+        # Payload is used ONLY by the explicit attach/detach actions (a manual model); it is
+        # dead for close/open (grasp/release), which drive the grasp CONTRACT below. Hidden
+        # unless attach/detach is selected, so the common pick&place case stays clean.
+        self.g_payload_row = QWidget()
+        prow = QFormLayout(self.g_payload_row)
+        prow.setContentsMargins(0, 0, 0, 0)
         self.g_payload = QLineEdit()
         self.g_payload.setPlaceholderText('attach/detach only: payload id')
-        f.addRow('Payload', self.g_payload)
+        prow.addRow('Payload', self.g_payload)
+        f.addRow(self.g_payload_row)
 
-        # --- End-effector: how it grips (ADR-0010/0011). These edit the SHARED GripperSpec /
-        # SceneSpec (one per robot), shown HERE so the Gripper block is self-contained. ---
-        ee = QGroupBox('End-effector — how it grips (whole robot)')
-        eef = QFormLayout(ee)
+        # === End-effector <-> dynamic object (ADR-0012) — edits the SHARED GripperSpec /
+        # SceneSpec (one per robot), shown HERE so the Gripper block is self-contained. ===
+        ee = QGroupBox('End-effector ↔ dynamic object')
+        eef = QVBoxLayout(ee)
+
+        # gate: does the end-effector grasp a dynamic object at all?
+        gate = QFormLayout()
+        self.g_ee_interacts = QComboBox()
+        self.g_ee_interacts.addItem('Yes — it grasps a dynamic object', True)
+        self.g_ee_interacts.addItem('No — trigger only (welding / inspection)', False)
+        self.g_ee_interacts.setToolTip('No = a trigger-only application: no grasp target, no '
+                                       'grasp signal, no attach. Yes = configure the grasp below.')
+        self.g_ee_interacts.currentIndexChanged.connect(self._gripper_reveal)
+        gate.addRow('Grasps a dynamic object?', self.g_ee_interacts)
+        eef.addLayout(gate)
+
+        # everything below is revealed only when the gate is Yes
+        self.g_ee_body = QWidget()
+        body = QVBoxLayout(self.g_ee_body)
+        body.setContentsMargins(0, 0, 0, 0)
+
+        top = QFormLayout()
+        self.g_ee_target = QComboBox()
+        self.g_ee_target.setToolTip('Which dynamic object THIS gripper grasps. Candidates are the '
+                                    'dynamic objects from Step 2; picking one makes it the sole '
+                                    'grasp target (its Gazebo <model> pre-fills object_model).')
+        top.addRow('Grasp target', self.g_ee_target)
+        self.g_ee_link = QLineEdit()
+        self.g_ee_link.setPlaceholderText('robot link the object attaches/welds to, e.g. wrist_3_link')
+        self.g_ee_link.setToolTip('The robot link a grasped object attaches to '
+                                  '(AttachedCollisionObject in RViz, purple) AND the Gazebo '
+                                  'LinkAttacher welds to. Usually the wrist / tool flange.')
+        top.addRow('Attach link', self.g_ee_link)
+        self.g_ee_topic = QComboBox()
+        self.g_ee_topic.setEditable(True)
+        self.g_ee_topic.lineEdit().setPlaceholderText('/gripper_cmd')
+        self.g_ee_topic.setToolTip('Internal contract topic (Bool) the TrainIt RUNTIME publishes '
+                                   'on grasp — you only pick the name (default /gripper_cmd). '
+                                   'scene_manager_node attaches the object AND the sim adapter '
+                                   'welds it. It is NOT wired in the moveit_config.')
+        top.addRow('Grasp signal topic', self.g_ee_topic)
+        body.addLayout(top)
+
+        # --- actuation: trigger, or a joint driven to open/closed targets ---
         self.g_ee_act = QComboBox()
         for label, tok in (('Trigger (on/off signal)', 'trigger'),
                            ('Joint position (command the gripper joint)', 'joint_position')):
             self.g_ee_act.addItem(label, tok)
-        self.g_ee_act.setToolTip('Joint position: CloseGripper drives the gripper joint AND '
-                                 'publishes the grasp signal so the object attaches. Trigger: '
-                                 'an on/off signal (suction).')
-        eef.addRow('Actuation', self.g_ee_act)
-        # per-backend sim grasp adapter — one combo per deployment mode, built on select.
+        self.g_ee_act.setToolTip('Trigger = an on/off signal (suction). Joint position = drive '
+                                 'the gripper joint to an open and a closed target.')
+        self.g_ee_act.currentIndexChanged.connect(self._gripper_reveal)
+        act_form = QFormLayout()
+        act_form.addRow('Actuation', self.g_ee_act)
+        body.addLayout(act_form)
+
+        # joint targets (visible only for joint_position)
+        self.g_ee_jp = QGroupBox('Joint targets')
+        jp = QVBoxLayout(self.g_ee_jp)
+        self.g_ee_target_by = QComboBox()
+        for label, tok in (('SRDF named state (open / closed)', 'srdf_state'),
+                           ('Explicit angle (capture live or type)', 'angle')):
+            self.g_ee_target_by.addItem(label, tok)
+        self.g_ee_target_by.currentIndexChanged.connect(self._gripper_reveal)
+        tby = QFormLayout(); tby.addRow('Targets by', self.g_ee_target_by)
+        jp.addLayout(tby)
+        # SRDF-state sub-panel (dropdown parsed from the base moveit_config SRDF)
+        self.g_ee_srdf = QWidget()
+        srdf = QFormLayout(self.g_ee_srdf)
+        srdf.setContentsMargins(0, 0, 0, 0)
+        self.g_ee_open_state = QComboBox(); self.g_ee_open_state.setEditable(True)
+        self.g_ee_closed_state = QComboBox(); self.g_ee_closed_state.setEditable(True)
+        srdf.addRow('Open state', self.g_ee_open_state)
+        srdf.addRow('Closed state', self.g_ee_closed_state)
+        jp.addWidget(self.g_ee_srdf)
+        # explicit-angle sub-panel, each with a live-capture button (like a Move block)
+        self.g_ee_ang = QWidget()
+        ang = QFormLayout(self.g_ee_ang)
+        ang.setContentsMargins(0, 0, 0, 0)
+        self.g_ee_open_ang = QDoubleSpinBox()
+        self.g_ee_closed_ang = QDoubleSpinBox()
+        for sb in (self.g_ee_open_ang, self.g_ee_closed_ang):
+            sb.setRange(-6.2832, 6.2832); sb.setDecimals(4)
+            sb.setSingleStep(0.01); sb.setSuffix(' rad')
+        cap_o = QPushButton('Capture (live)')
+        cap_o.setToolTip('Jog the gripper joint in the RViz MotionPlanning plugin (Plan & '
+                         'Execute), then capture the current angle from /joint_states.')
+        cap_o.clicked.connect(lambda: self._capture_gripper_angle(self.g_ee_open_ang))
+        cap_c = QPushButton('Capture (live)')
+        cap_c.clicked.connect(lambda: self._capture_gripper_angle(self.g_ee_closed_ang))
+        orow = QHBoxLayout(); orow.addWidget(self.g_ee_open_ang); orow.addWidget(cap_o)
+        crow = QHBoxLayout(); crow.addWidget(self.g_ee_closed_ang); crow.addWidget(cap_c)
+        ang.addRow('Open angle', orow)
+        ang.addRow('Closed angle', crow)
+        jp.addWidget(self.g_ee_ang)
+        body.addWidget(self.g_ee_jp)
+
+        # --- per-backend interaction table (mock / isaac / gazebo / real) ---
+        body.addWidget(QLabel('How the grasp is realised in each backend:'))
         self.g_ee_adapter_form = QFormLayout()
         self.g_ee_adapter_combos: Dict[str, QComboBox] = {}
-        eef.addRow(QLabel('Sim grasp adapter (per backend):'))
-        eef.addRow(self.g_ee_adapter_form)
-        self.g_ee_topic = QComboBox()
-        self.g_ee_topic.setEditable(True)
-        self.g_ee_topic.lineEdit().setPlaceholderText('e.g. /gripper_cmd — the grasp signal (Bool)')
-        self.g_ee_topic.setToolTip('The Bool the runtime publishes on grasp: scene_manager '
-                                   'attaches the object AND the sim adapter (LinkAttacher / '
-                                   'SurfaceGripper) welds it. Auto-set when a grasp target exists.')
-        eef.addRow('Grasp signal topic', self.g_ee_topic)
-        self.g_ee_link = QLineEdit()
-        self.g_ee_link.setPlaceholderText('robot link the object attaches/welds to, e.g. wrist_3_link')
-        self.g_ee_link.setToolTip('The robot link a grasped dynamic object attaches to '
-                                  '(AttachedCollisionObject in RViz) and the Gazebo LinkAttacher '
-                                  'welds to. Usually the tool flange (tool0 / wrist_3_link).')
-        eef.addRow('Attach link', self.g_ee_link)
+        body.addLayout(self.g_ee_adapter_form)
+        self.g_ee_physics_info = QLabel(
+            'Physics: the simulator holds the object with its own grasp physics — how well it '
+            'grips depends on how you configured that interaction in your simulator.')
+        self.g_ee_physics_info.setWordWrap(True)
+        self.g_ee_physics_info.setStyleSheet('color: #555;')
+        body.addWidget(self.g_ee_physics_info)
+
+        # --- LinkAttacher config (visible only when a backend uses Fake weld) ---
+        self.g_ee_la = QGroupBox('Fake weld plugin — IFRA LinkAttacher')
+        la = QFormLayout(self.g_ee_la)
+        self.g_la_robot_model = QLineEdit()
+        self.g_la_robot_model.setPlaceholderText('robot Gazebo model (default: the spawned entity)')
+        self.g_la_robot_link = QLineEdit()
+        self.g_la_robot_link.setPlaceholderText('robot link, e.g. wrist_3_link')
+        self.g_la_object_model = QLineEdit()
+        self.g_la_object_model.setPlaceholderText('object Gazebo model (default: the grasp target)')
+        self.g_la_object_link = QLineEdit()
+        self.g_la_object_link.setPlaceholderText('object link, e.g. link_1 (auto from the .world)')
+        la.addRow('robot_model', self.g_la_robot_model)
+        la.addRow('robot_link', self.g_la_robot_link)
+        la.addRow('object_model', self.g_la_object_model)
+        la.addRow('object_link', self.g_la_object_link)
+        self.g_ee_la.setToolTip('The four names the IFRA plugin welds: link2 of object model2 '
+                                'is fixed to link1 of robot model1. Empty = the generator '
+                                'derives it (robot_model must equal the spawned -entity name).')
+        body.addWidget(self.g_ee_la)
+
+        eef.addWidget(self.g_ee_body)
         f.addRow(ee)
         return w
 
     def _build_ee_adapter_combos(self, grip):
-        """(Re)build the per-backend sim-grasp-adapter combos from deployment.modes, preselected
-        to the current per-backend choice. Called on gripper-block select (project is loaded)."""
+        """(Re)build the per-backend interaction combos from deployment.modes, preselected to
+        the current per-backend adapter. Called on gripper-block select (project is loaded)."""
         while self.g_ee_adapter_form.rowCount():
             self.g_ee_adapter_form.removeRow(0)
         self.g_ee_adapter_combos = {}
@@ -2319,13 +2465,71 @@ class BlocksPage(QWizardPage):
         for backend in modes:
             tok = str(backend)
             combo = QComboBox()
-            combo.addItems(['surface_gripper', 'link_attacher', 'none'])
+            for label, adapter_tok in self._EE_INTER:
+                combo.addItem(label, adapter_tok)
             try:
-                combo.setCurrentText(grip.grasp_adapter_for(backend).value)
+                i = combo.findData(grip.grasp_adapter_for(backend).value)
+                combo.setCurrentIndex(i if i >= 0 else 0)
             except Exception:  # noqa: BLE001
                 pass
+            combo.currentIndexChanged.connect(self._gripper_reveal)
             self.g_ee_adapter_form.addRow(tok, combo)
             self.g_ee_adapter_combos[tok] = combo
+
+    def _gripper_reveal(self) -> None:
+        """Progressive disclosure for the gripper block: the payload row (attach/detach only),
+        the whole grasp section (gate), the joint-target panels, the physics note and the
+        LinkAttacher config (only when a backend uses it)."""
+        try:
+            self.g_payload_row.setVisible(self.g_action.currentIndex() in (2, 3))
+            interacts = bool(self.g_ee_interacts.currentData())
+            self.g_ee_body.setVisible(interacts)
+            is_joint = self.g_ee_act.currentData() == 'joint_position'
+            self.g_ee_jp.setVisible(is_joint)
+            by = self.g_ee_target_by.currentData()
+            self.g_ee_srdf.setVisible(is_joint and by == 'srdf_state')
+            self.g_ee_ang.setVisible(is_joint and by == 'angle')
+            toks = [c.currentData() for c in self.g_ee_adapter_combos.values()]
+            self.g_ee_la.setVisible('link_attacher' in toks)
+            self.g_ee_physics_info.setVisible('surface_gripper' in toks)
+        except Exception:  # noqa: BLE001 - form may be half-built before a project loads
+            pass
+
+    def _capture_gripper_angle(self, spinbox):  # pragma: no cover - needs a live ROS session
+        """Capture the gripper command joint's current angle from /joint_states, exactly like a
+        Move block captures the arm pose (jog in the RViz MotionPlanning plugin, then Capture)."""
+        joint = self.ctrl.robot_summary().get('gripper_joint')
+        if not joint:
+            self.status.setText('Set the gripper command_joint (Step 1 / base config) first.')
+            return
+        try:
+            values = self.wizard().live_capture().current_joint_values([joint])
+        except Exception as exc:  # noqa: BLE001
+            self.status.setText(f'gripper capture failed: {exc}')
+            return
+        if joint not in values:
+            self.status.setText(f'joint "{joint}" not in /joint_states')
+            return
+        spinbox.setValue(values[joint])
+        self.status.setText(f'captured {values[joint]:.4f} rad on {joint}')
+
+    def _fill_link_attacher_placeholders(self, grip, scene, grasp_ids):
+        """Show the concrete derived LinkAttacher names as grey placeholders (the generator's
+        fallback), so a blank field still derives while the user sees exactly what will weld."""
+        robot_model = getattr(self.ctrl.project.robot, 'robot_name', 'robot')
+        robot_link = scene.attach_link or 'wrist_3_link'
+        object_model = grasp_ids[0] if grasp_ids else 'object'
+        object_link = 'link'
+        try:
+            if scene.world_path and grasp_ids:
+                from ..importers.world_importer import model_first_link
+                object_link = model_first_link(scene.world_path, grasp_ids[0])
+        except Exception:  # noqa: BLE001
+            pass
+        self.g_la_robot_model.setPlaceholderText(f'{robot_model}  (default — the spawned entity)')
+        self.g_la_robot_link.setPlaceholderText(f'{robot_link}  (default — the attach link)')
+        self.g_la_object_model.setPlaceholderText(f'{object_model}  (default — the grasp target)')
+        self.g_la_object_link.setPlaceholderText(f'{object_link}  (default — from the .world)')
 
     def _wait_form(self) -> QWidget:
         w = QWidget()
@@ -2584,15 +2788,60 @@ class BlocksPage(QWizardPage):
             labels = {'close': 0, 'open': 1, 'attach': 2, 'detach': 3}
             self.g_action.setCurrentIndex(labels.get(b['action'], 0))
             self.g_payload.setText(b.get('payload', ''))
-            # end-effector config (shared GripperSpec/SceneSpec) shown in the block
+            # end-effector <-> dynamic-object config (shared GripperSpec/SceneSpec) in the block
             try:
                 grip = self.ctrl.project.robot.gripper
                 scene = self.ctrl.project.scene
+                self.g_ee_interacts.setCurrentIndex(0 if grip.interacts_with_object else 1)
                 i = self.g_ee_act.findData(grip.actuation.value)
                 self.g_ee_act.setCurrentIndex(i if i >= 0 else 0)
+                j = self.g_ee_target_by.findData(grip.joint_target.value)
+                self.g_ee_target_by.setCurrentIndex(j if j >= 0 else 0)
+                # SRDF-state pickers seeded from the base moveit_config SRDF (editable)
+                states = self.ctrl.gripper_state_names()
+                for combo, val in ((self.g_ee_open_state, grip.open_state),
+                                   (self.g_ee_closed_state, grip.closed_state)):
+                    combo.clear()
+                    for s in states:
+                        combo.addItem(s)
+                    if val and val not in states:
+                        combo.addItem(val)
+                    combo.setCurrentText(val or '')
+                if grip.open_angle is not None:
+                    self.g_ee_open_ang.setValue(grip.open_angle)
+                if grip.closed_angle is not None:
+                    self.g_ee_closed_ang.setValue(grip.closed_angle)
                 self._build_ee_adapter_combos(grip)
                 self.g_ee_topic.setCurrentText(scene.gripper_cmd_topic or '')
                 self.g_ee_link.setText(scene.attach_link or '')
+                # grasp target: a dropdown of the DYNAMIC objects (from Step 2), preselected to
+                # the current target. Picking one makes it the sole grasp target on Apply.
+                ids = scene.grasp_target_ids()
+                cur = ids[0] if ids else None
+                cands = [o.id for o in scene.objects if o.is_dynamic()]
+                if cur and cur not in cands:
+                    cands = [cur] + cands
+                self.g_ee_target.clear()
+                if cands:
+                    self.g_ee_target.setEnabled(True)
+                    self.g_ee_target.addItems(cands)
+                    if cur:
+                        k = self.g_ee_target.findText(cur)
+                        if k >= 0:
+                            self.g_ee_target.setCurrentIndex(k)
+                else:
+                    self.g_ee_target.setEnabled(False)
+                    self.g_ee_target.addItem('(flag a dynamic object as grasp at Step 2)')
+                la = grip.link_attacher
+                self.g_la_robot_model.setText(la.robot_model if la else '')
+                self.g_la_robot_link.setText(la.robot_link if la else '')
+                self.g_la_object_model.setText(la.object_model if la else '')
+                self.g_la_object_link.setText(la.object_link if la else '')
+                # dynamic placeholders show the concrete derived defaults (what the weld will
+                # use if left blank), so the user SEES ur / wrist_3_link / red_cube / link_1
+                # without persisting them — an empty field still derives (byte-safe).
+                self._fill_link_attacher_placeholders(grip, scene, ids)
+                self._gripper_reveal()
             except Exception:  # noqa: BLE001
                 pass
         elif b['kind'] == 'wait':
@@ -2661,14 +2910,38 @@ class BlocksPage(QWizardPage):
         elif b['kind'] == 'gripper':
             b.update(action=('close', 'open', 'attach', 'detach')[self.g_action.currentIndex()],
                      payload=self.g_payload.text().strip())
-            # write the shared end-effector config (GripperSpec/SceneSpec) via the controller
+            # write the shared end-effector <-> dynamic-object config via the controller
             try:
-                self.ctrl.set_gripper_actuation(actuation=self.g_ee_act.currentData())
+                interacts = bool(self.g_ee_interacts.currentData())
+                self.ctrl.set_end_effector_interaction(interacts)
+                # pick which dynamic object this gripper grasps (sole grasp target)
+                if interacts and self.g_ee_target.isEnabled() and self.g_ee_target.count():
+                    self.ctrl.set_sole_grasp_target(self.g_ee_target.currentText())
+                by = self.g_ee_target_by.currentData()
+                is_angle = by == 'angle'
+                is_srdf = by == 'srdf_state'
+                self.ctrl.set_gripper_actuation(
+                    actuation=self.g_ee_act.currentData(),
+                    joint_target=by,
+                    open_angle=self.g_ee_open_ang.value() if is_angle else '__keep__',
+                    closed_angle=self.g_ee_closed_ang.value() if is_angle else '__keep__',
+                    open_state=self.g_ee_open_state.currentText().strip() if is_srdf else '__keep__',
+                    closed_state=self.g_ee_closed_state.currentText().strip() if is_srdf else '__keep__')
                 if self.g_ee_adapter_combos:
                     self.ctrl.set_sim_grasp_adapter(
-                        {tok: c.currentText() for tok, c in self.g_ee_adapter_combos.items()})
+                        {tok: c.currentData() for tok, c in self.g_ee_adapter_combos.items()})
+                self.ctrl.set_link_attacher(
+                    robot_model=self.g_la_robot_model.text(),
+                    robot_link=self.g_la_robot_link.text(),
+                    object_model=self.g_la_object_model.text(),
+                    object_link=self.g_la_object_link.text())
+                # auto-default the grasp signal topic when the app grasps but the user left it
+                # blank (a Bool contract topic the runtime publishes; default /gripper_cmd).
+                topic = self.g_ee_topic.currentText().strip()
+                if not topic and interacts and self.ctrl.project.scene.grasp_target_ids():
+                    topic = '/gripper_cmd'
                 self.ctrl.set_scene_loader_params(
-                    gripper_cmd_topic=(self.g_ee_topic.currentText().strip() or None),
+                    gripper_cmd_topic=(topic or None),
                     attach_link=(self.g_ee_link.text().strip() or None))
             except Exception as exc:  # noqa: BLE001
                 self.status.setText(f'end-effector config: {exc}')

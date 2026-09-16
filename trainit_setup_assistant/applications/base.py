@@ -79,7 +79,10 @@ def build_bt_params_context(project: CanonicalProject) -> dict:
         'gripper_actuation': robot.gripper.actuation.value,
         'gripper_close_position': close_pos,
         'gripper_open_position': open_pos,
-        'gripper_cmd_topic': project.scene.gripper_cmd_topic,
+        # ADR-0012 gate: a trigger-only end-effector (interacts_with_object False) publishes no
+        # grasp Bool, so the runtime creates no publisher. Default True => golden byte-identical.
+        'gripper_cmd_topic': (project.scene.gripper_cmd_topic
+                              if robot.gripper.interacts_with_object else ''),
     }
 
     scene_params: List[tuple] = []

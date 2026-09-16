@@ -163,6 +163,23 @@ def _resolve_mesh_uri(uri: str, mesh_package: Optional[str],
     return None
 
 
+def model_first_link(world_path, model_name: str, default: str = 'link') -> str:
+    """The first ``<link name>`` of a ``<model>`` in a ``.world`` — used as the Gazebo
+    LinkAttacher ``object_link`` so TSA does not hardcode 'link' (a cube's link is often
+    'link_1'). Returns ``default`` if the model or a named link is not found."""
+    try:
+        root = ET.parse(str(world_path)).getroot()
+        world = root.find('world') if root.tag != 'world' else root
+        for m in (world.findall('model') if world is not None else []):
+            if m.get('name') == model_name:
+                link = m.find('link')
+                if link is not None and link.get('name'):
+                    return link.get('name')
+    except Exception:  # noqa: BLE001
+        pass
+    return default
+
+
 def import_world(world_path, default_frame: str = 'base_link',
                  robot_base_world_pose: Optional[List[float]] = None,
                  dynamic: bool = False, category=None, classify=None,

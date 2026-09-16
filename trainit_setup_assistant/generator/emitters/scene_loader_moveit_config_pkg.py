@@ -125,12 +125,16 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         grasp_ids = project.scene.grasp_target_ids()
         if (Backend.GAZEBO in dep.modes and grasp_ids
                 and robot.gripper.grasp_adapter_for(Backend.GAZEBO) is SimGraspAdapter.LINK_ATTACHER):
+            object_link = 'link'
+            if project.scene.world_path:            # auto-detect the object's <link name>
+                from ...importers.world_importer import model_first_link
+                object_link = model_first_link(project.scene.world_path, grasp_ids[0])
             gazebo_link_attacher = {
                 'gripper_cmd_topic': project.scene.gripper_cmd_topic or '/gripper_cmd',
                 'robot_model': robot.robot_name,
                 'ee_link': project.scene.attach_link,
                 'object_model': grasp_ids[0],
-                'object_link': 'link',
+                'object_link': object_link,
             }
             from pathlib import Path as _P
             _kit = (_P(__file__).parents[2] / 'resources' / 'gazebo_cell_kit' /

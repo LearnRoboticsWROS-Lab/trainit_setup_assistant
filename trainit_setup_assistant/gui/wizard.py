@@ -2003,14 +2003,9 @@ class BlocksPage(QWizardPage):
         pal.addWidget(pal_btn('move', 'Move'))
         pal.addWidget(QLabel('Layer 2 — Gripper / objects'))
         pal.addWidget(pal_btn('gripper', 'Gripper'))
-        # The Gripper BLOCK says WHEN the tool opens/closes; this button says HOW it grips
-        # (actuation + per-backend sim grasp adapter) for the whole robot — one shared setting.
-        eef_btn = QPushButton('⚙  End-effector (how it grips)…')
-        eef_btn.setToolTip('Actuation (trigger vs joint position), open/closed joint targets, '
-                           'and the per-backend sim grasp adapter — applies to the whole robot.')
-        eef_btn.setStyleSheet('text-align:left;')
-        eef_btn.clicked.connect(self._show_end_effector)
-        pal.addWidget(eef_btn)
+        # HOW the gripper grips (actuation + per-backend sim adapter + grasp topic + attach
+        # link) lives INSIDE the Gripper block's inspector (self-contained), not a separate
+        # dialog — select a Gripper block to configure it.
         pal.addWidget(pal_btn('reset', 'Reset scene (sim)'))
         pal.addWidget(QLabel('Layer 3 — Vision'))
         pal.addWidget(pal_btn('detect', 'Detect (sample the camera)'))
@@ -2277,11 +2272,60 @@ class BlocksPage(QWizardPage):
         self.g_payload = QLineEdit()
         self.g_payload.setPlaceholderText('attach/detach only: payload id')
         f.addRow('Payload', self.g_payload)
-        note = QLabel('Object dynamics (attach_box cuboid, freeze/gravity on release) '
-                      'come from the SCENE (Step 2).')
-        note.setWordWrap(True)
-        f.addRow(note)
+
+        # --- End-effector: how it grips (ADR-0010/0011). These edit the SHARED GripperSpec /
+        # SceneSpec (one per robot), shown HERE so the Gripper block is self-contained. ---
+        ee = QGroupBox('End-effector — how it grips (whole robot)')
+        eef = QFormLayout(ee)
+        self.g_ee_act = QComboBox()
+        for label, tok in (('Trigger (on/off signal)', 'trigger'),
+                           ('Joint position (command the gripper joint)', 'joint_position')):
+            self.g_ee_act.addItem(label, tok)
+        self.g_ee_act.setToolTip('Joint position: CloseGripper drives the gripper joint AND '
+                                 'publishes the grasp signal so the object attaches. Trigger: '
+                                 'an on/off signal (suction).')
+        eef.addRow('Actuation', self.g_ee_act)
+        # per-backend sim grasp adapter — one combo per deployment mode, built on select.
+        self.g_ee_adapter_form = QFormLayout()
+        self.g_ee_adapter_combos: Dict[str, QComboBox] = {}
+        eef.addRow(QLabel('Sim grasp adapter (per backend):'))
+        eef.addRow(self.g_ee_adapter_form)
+        self.g_ee_topic = QComboBox()
+        self.g_ee_topic.setEditable(True)
+        self.g_ee_topic.lineEdit().setPlaceholderText('e.g. /gripper_cmd — the grasp signal (Bool)')
+        self.g_ee_topic.setToolTip('The Bool the runtime publishes on grasp: scene_manager '
+                                   'attaches the object AND the sim adapter (LinkAttacher / '
+                                   'SurfaceGripper) welds it. Auto-set when a grasp target exists.')
+        eef.addRow('Grasp signal topic', self.g_ee_topic)
+        self.g_ee_link = QLineEdit()
+        self.g_ee_link.setPlaceholderText('robot link the object attaches/welds to, e.g. wrist_3_link')
+        self.g_ee_link.setToolTip('The robot link a grasped dynamic object attaches to '
+                                  '(AttachedCollisionObject in RViz) and the Gazebo LinkAttacher '
+                                  'welds to. Usually the tool flange (tool0 / wrist_3_link).')
+        eef.addRow('Attach link', self.g_ee_link)
+        f.addRow(ee)
         return w
+
+    def _build_ee_adapter_combos(self, grip):
+        """(Re)build the per-backend sim-grasp-adapter combos from deployment.modes, preselected
+        to the current per-backend choice. Called on gripper-block select (project is loaded)."""
+        while self.g_ee_adapter_form.rowCount():
+            self.g_ee_adapter_form.removeRow(0)
+        self.g_ee_adapter_combos = {}
+        try:
+            modes = self.ctrl.project.deployment.modes
+        except Exception:  # noqa: BLE001
+            modes = []
+        for backend in modes:
+            tok = str(backend)
+            combo = QComboBox()
+            combo.addItems(['surface_gripper', 'link_attacher', 'none'])
+            try:
+                combo.setCurrentText(grip.grasp_adapter_for(backend).value)
+            except Exception:  # noqa: BLE001
+                pass
+            self.g_ee_adapter_form.addRow(tok, combo)
+            self.g_ee_adapter_combos[tok] = combo
 
     def _wait_form(self) -> QWidget:
         w = QWidget()
@@ -2540,6 +2584,17 @@ class BlocksPage(QWizardPage):
             labels = {'close': 0, 'open': 1, 'attach': 2, 'detach': 3}
             self.g_action.setCurrentIndex(labels.get(b['action'], 0))
             self.g_payload.setText(b.get('payload', ''))
+            # end-effector config (shared GripperSpec/SceneSpec) shown in the block
+            try:
+                grip = self.ctrl.project.robot.gripper
+                scene = self.ctrl.project.scene
+                i = self.g_ee_act.findData(grip.actuation.value)
+                self.g_ee_act.setCurrentIndex(i if i >= 0 else 0)
+                self._build_ee_adapter_combos(grip)
+                self.g_ee_topic.setCurrentText(scene.gripper_cmd_topic or '')
+                self.g_ee_link.setText(scene.attach_link or '')
+            except Exception:  # noqa: BLE001
+                pass
         elif b['kind'] == 'wait':
             self.w_ms.setValue(int(b['ms']))
         elif b['kind'] == 'loop':
@@ -2606,6 +2661,17 @@ class BlocksPage(QWizardPage):
         elif b['kind'] == 'gripper':
             b.update(action=('close', 'open', 'attach', 'detach')[self.g_action.currentIndex()],
                      payload=self.g_payload.text().strip())
+            # write the shared end-effector config (GripperSpec/SceneSpec) via the controller
+            try:
+                self.ctrl.set_gripper_actuation(actuation=self.g_ee_act.currentData())
+                if self.g_ee_adapter_combos:
+                    self.ctrl.set_sim_grasp_adapter(
+                        {tok: c.currentText() for tok, c in self.g_ee_adapter_combos.items()})
+                self.ctrl.set_scene_loader_params(
+                    gripper_cmd_topic=(self.g_ee_topic.currentText().strip() or None),
+                    attach_link=(self.g_ee_link.text().strip() or None))
+            except Exception as exc:  # noqa: BLE001
+                self.status.setText(f'end-effector config: {exc}')
         elif b['kind'] == 'wait':
             b.update(ms=self.w_ms.value())
         elif b['kind'] == 'detect':
@@ -2660,9 +2726,6 @@ class BlocksPage(QWizardPage):
 
     def _show_deployment(self):  # pragma: no cover - simple dialog
         DeploymentDialog(self.ctrl, self).exec_()
-
-    def _show_end_effector(self):  # pragma: no cover - exec loop; dialog is unit-tested
-        EndEffectorDialog(self.ctrl, self.wizard(), self).exec_()
 
     # ---- rendering + model sync ---------------------------------------------
     def _label(self, b: dict) -> str:

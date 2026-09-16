@@ -864,3 +864,29 @@ def test_base_ingest_classifies_joint_gripper_as_parallel(tmp_path):
     assert grip.actuation is EndEffectorActuation.JOINT_POSITION
     assert grip.controller_name == 'gripper_position_controller'
     assert grip.command_joint == 'robotiq_85_left_knuckle_joint'
+
+
+def test_gripper_block_configures_end_effector(qapp):
+    """W2: the end-effector config (actuation + per-backend sim adapter + grasp topic + attach
+    link) lives INSIDE the Gripper block's inspector and writes the shared GripperSpec/SceneSpec."""
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    from trainit_setup_assistant.model.enums import Backend, EndEffectorActuation, SimGraspAdapter
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    ctrl.project.deployment.modes = [Backend.MOCK, Backend.GAZEBO]   # a gazebo adapter row
+    wiz = SetupWizard(ctrl)
+    bp = wiz.blocks_page
+    bp.blocks = [{'kind': 'gripper', 'action': 'close', 'payload': ''}]
+    bp._on_select(0)                       # select -> populate the EEF controls from the model
+    assert bp.g_ee_act.count() == 2 and 'gazebo' in bp.g_ee_adapter_combos
+    # configure in the block
+    bp.g_ee_act.setCurrentIndex(bp.g_ee_act.findData('joint_position'))
+    bp.g_ee_adapter_combos['gazebo'].setCurrentText('link_attacher')
+    bp.g_ee_topic.setCurrentText('/gripper_cmd')
+    bp.g_ee_link.setText('wrist_3_link')
+    bp.apply_inspector()
+    grip = ctrl.project.robot.gripper
+    assert grip.actuation is EndEffectorActuation.JOINT_POSITION
+    assert grip.grasp_adapter_for(Backend.GAZEBO) is SimGraspAdapter.LINK_ATTACHER
+    assert ctrl.project.scene.gripper_cmd_topic == '/gripper_cmd'
+    assert ctrl.project.scene.attach_link == 'wrist_3_link'

@@ -149,6 +149,13 @@ def launch_setup(context, *args, **kwargs):
 {% endif %}
         for prev, nxt in zip(gz_spawners, gz_spawners[1:]):
             nodes.append(RegisterEventHandler(OnProcessExit(target_action=prev, on_exit=[nxt])))
+{% if gazebo_link_attacher %}
+        # Gazebo LinkAttacher grasp adapter (ADR-0010): on the grasp Bool (gripper_cmd_topic)
+        # it welds the grasp target to the attach link via /ATTACHLINK|/DETACHLINK. Generated
+        # by TSA from Step 7 (the base moveit_config does not carry it). Needs IFRA_LinkAttacher.
+        nodes.append(Node(package=MOVEIT_CONFIG_PACKAGE, executable="link_attacher_bridge.py",
+                          output="screen", parameters=[{{ gazebo_link_attacher_py }}]))
+{% endif %}
 {% endif %}
     else:  # real: no ros2_control — the vendor bridges impersonate the same action names
         if REAL_INCLUDE:

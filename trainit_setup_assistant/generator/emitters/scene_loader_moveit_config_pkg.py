@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ...model.enums import Backend, GripperKind
+from ...model.enums import Backend, GripperKind, SimGraspAdapter
 from ..camera_variant import rewrite_camera_include
 from ..scene_yaml import build_scene_yaml
 from .base import Emitter, GenContext
@@ -114,10 +114,34 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                             'camera_info': camera.camera_info_topic,
                             'depth': camera.depth_topic,
                             'points': camera.points_topic}
+
+        # W3 (ADR-0010/0011): wire the Gazebo LinkAttacher grasp adapter. When the gripper's
+        # gazebo sim adapter is link_attacher and a grasp target exists, TSA GENERATES the
+        # bridge (the base moveit_config does not carry it — ROS2ML stays untouched): the kit
+        # script is copied into the package and run in the gazebo bring-up, welding the object
+        # to the attach link (/ATTACHLINK|/DETACHLINK) on the grasp Bool. object_model = the
+        # grasp target's id (its Gazebo <model> name); needs IFRA_LinkAttacher in the workspace.
+        gazebo_link_attacher = None
+        grasp_ids = project.scene.grasp_target_ids()
+        if (Backend.GAZEBO in dep.modes and grasp_ids
+                and robot.gripper.grasp_adapter_for(Backend.GAZEBO) is SimGraspAdapter.LINK_ATTACHER):
+            gazebo_link_attacher = {
+                'gripper_cmd_topic': project.scene.gripper_cmd_topic or '/gripper_cmd',
+                'robot_model': robot.robot_name,
+                'ee_link': project.scene.attach_link,
+                'object_model': grasp_ids[0],
+                'object_link': 'link',
+            }
+            from pathlib import Path as _P
+            _kit = (_P(__file__).parents[2] / 'resources' / 'gazebo_cell_kit' /
+                    'scripts' / 'link_attacher_bridge.py')
+            ctx.copy_file(str(_kit), f'{pkg}/scripts/link_attacher_bridge.py')
         ctx.render_to(f'{pkg}/launch/bringup.launch.py',
                       'moveit_config/scene_loader_bringup.launch.py.j2',
                       robot_name=robot.robot_name,
                       world_default=(project.scene.world_path or ''),
+                      gazebo_link_attacher=(gazebo_link_attacher is not None),
+                      gazebo_link_attacher_py=repr(gazebo_link_attacher),
                       moveit_config_package=pkg,
                       arm_controller=robot.arm_controller.name,
                       valid_modes_py=repr(tuple(m.value for m in dep.modes)),
@@ -154,7 +178,7 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                       bridge_packages=dep.bridge_packages(),
                       camera_cloud_dep=bool(camera_cloud))
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'moveit_config/scene_loader_CMakeLists.txt.j2',
-                      package_name=pkg)
+                      package_name=pkg, has_link_attacher=bool(gazebo_link_attacher))
 
     @staticmethod
     def _rewrite_srdf(project, ctx: GenContext, base_config: Path, pkg: str) -> None:

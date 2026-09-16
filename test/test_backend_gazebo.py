@@ -200,3 +200,55 @@ def test_gazebo_absent_emits_no_gazebo_branch():
     xacro = (out / 'gzcell_trainit_config' / 'config' / 'gzcell.ros2_control.xacro').read_text()
     assert 'GazeboSystem' not in xacro
     assert 'use_gazebo' not in xacro
+
+
+def test_gazebo_link_attacher_bridge_generated_from_step7(tmp_path):
+    """W3 (ADR-0010): when the gripper's gazebo sim adapter is link_attacher and a grasp target
+    exists, TSA GENERATES the LinkAttacher bridge into the scene_loader (the base moveit_config
+    does not carry it): the kit script is copied + installed, and a node runs it with the grasp
+    topic / robot / ee_link / object params. mock/isaac/real (no gazebo adapter) get nothing."""
+    from trainit_setup_assistant.generator.emitters.base import GenContext
+    from trainit_setup_assistant.generator.emitters.scene_loader_moveit_config_pkg import (
+        SceneLoaderMoveitConfigEmitter)
+    from trainit_setup_assistant.generator.manifest import GenerationManifest
+    from trainit_setup_assistant.model import (Backend, BundleSpec, CanonicalProject,
+        DeploymentSpec, MotionSegment, SceneObject, Waypoint)
+    from trainit_setup_assistant.model.enums import (AppType, GripperKind,
+        SceneObjectCategory, ShapeType, WaypointType)
+    from trainit_setup_assistant.model.robot import (ArmControllerSpec, DescriptionSource,
+        GripperSpec, PlanningGroupSpec, RobotSpec)
+
+    cfg = tmp_path / 'base' / 'config'
+    cfg.mkdir(parents=True)
+    (cfg / 'ur.urdf.xacro').write_text('<?xml version="1.0"?>\n'
+        '<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="r"/>\n')
+    (cfg / 'ur.srdf').write_text('<?xml version="1.0"?>\n<robot name="r"></robot>\n')
+    for f in ('kinematics.yaml', 'joint_limits.yaml', 'ompl_planning.yaml',
+              'moveit_controllers.yaml', 'ros2_controllers.yaml'):
+        (cfg / f).write_text('{}\n')
+    g = GripperSpec(kind=GripperKind.PARALLEL, controller_name='gripper_position_controller',
+                    command_joint='robotiq_85_left_knuckle_joint')       # gazebo -> link_attacher
+    p = CanonicalProject(project_name='ur5', bundle=BundleSpec.from_prefix('ur5'),
+        robot=RobotSpec(robot_name='ur',
+            description=DescriptionSource(urdf_dir='/tmp', top_xacro='x.urdf.xacro'),
+            base_frame='base_link', tip_link='tcp', base_moveit_config_path=str(tmp_path / 'base'),
+            planning_group=PlanningGroupSpec(name='arm', joints=['j1']), gripper=g,
+            arm_controller=ArmControllerSpec()))
+    p.deployment = DeploymentSpec(modes=[Backend.MOCK, Backend.GAZEBO], default_mode=Backend.GAZEBO)
+    p.scene.gripper_cmd_topic = '/gripper_cmd'
+    p.scene.attach_link = 'wrist_3_link'
+    p.scene.objects = [SceneObject(id='red_cube', shape=ShapeType.BOX, dims=[0.05, 0.05, 0.05],
+        position=[0.5, 0, 0.3], category=SceneObjectCategory.DYNAMIC, grasp_target=True)]
+    p.application.type = AppType.PICK_AND_PLACE
+    p.application.waypoints = [Waypoint(name='home', type=WaypointType.JOINT, named='home')]
+    p.application.segments = [MotionSegment(to_waypoint='home')]
+    p.application.sequence = ['home']
+
+    out = Path(tempfile.mkdtemp())
+    SceneLoaderMoveitConfigEmitter().emit(
+        p, GenContext(out, build_jinja_env(), GenerationManifest('ur5', 'ur5')))
+    launch = (out / 'ur5_trainit_config' / 'launch' / 'bringup.launch.py').read_text()
+    assert 'link_attacher_bridge.py' in launch
+    assert "'ee_link': 'wrist_3_link'" in launch and "'object_model': 'red_cube'" in launch
+    assert (out / 'ur5_trainit_config' / 'scripts' / 'link_attacher_bridge.py').is_file()
+    assert 'link_attacher_bridge.py' in (out / 'ur5_trainit_config' / 'CMakeLists.txt').read_text()

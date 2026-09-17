@@ -627,7 +627,7 @@ class AssistantController:
                     update[k] = v or None      # '' -> None (clear)
             elif v is not None:
                 update[k] = v
-        per.camera = cam.model_copy(update=update)
+        per.camera = cam.copy(update=update)
 
     def set_perception_timing(self, settle_ms: Optional[int] = None,
                               detect_timeout_ms: Optional[int] = None) -> None:
@@ -786,8 +786,9 @@ class AssistantController:
     def _norm_topic(value: str, what: str) -> str:
         """Normalise a ROS topic typed by a human or read out of a USD ActionGraph.
 
-        Done HERE, not in a pydantic validator: no model sets validate_assignment, so a
-        @field_validator never fires on plain attribute assignment — and every writer
+        Done HERE, not in a pydantic validator: the scene model does not set
+        validate_assignment, so a field @validator never fires on plain attribute
+        assignment — and every writer
         (the GUI combo, the USD auto-apply, import_scene_yaml) goes through this method.
         An empty topic would reach rclcpp's create_subscription and throw
         InvalidTopicNameError at scene_manager_node construction.

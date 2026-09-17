@@ -1,5 +1,6 @@
 """M6: controller + Qt wizard, driven headless (QT_QPA_PLATFORM=offscreen)."""
 
+import json
 import os
 import tempfile
 
@@ -558,13 +559,13 @@ def test_blocks_page_no_edit_apply_is_identity_on_the_golden(qapp):
     wiz = SetupWizard(ctrl)
     bp = wiz.blocks_page
     bp.initializePage()
-    before = ctrl.project.model_dump(mode='json')
+    before = json.loads(ctrl.project.json())
     row = next(i for i, b in enumerate(bp.blocks)
                if b['kind'] == 'move' and b.get('detector'))
     bp.seq.setCurrentRow(row)
     bp.apply_inspector()
     assert bp.validatePage()
-    assert ctrl.project.model_dump(mode='json') == before
+    assert json.loads(ctrl.project.json()) == before
 
 
 def test_literal_quaternion_binding_survives_step7(qapp):

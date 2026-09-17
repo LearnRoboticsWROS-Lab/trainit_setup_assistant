@@ -3,6 +3,8 @@
 Byte-stability of the golden is covered by the byte gate + generator golden (the new fields
 are inert data in F1; the generator is unchanged)."""
 
+import json
+
 import pytest
 
 from trainit_setup_assistant.model import (
@@ -68,7 +70,7 @@ def test_round_trip_idempotent():
                     controller_name='gripper_position_controller', action_ns='gripper_cmd',
                     joint_target=GripperJointTarget.SRDF_STATE, open_state='open',
                     closed_state='closed', sim_grasp_adapter={'gazebo': SimGraspAdapter.LINK_ATTACHER})
-    d = g.model_dump(mode='json')
+    d = json.loads(g.json())   # v1/v2-overlap for model_dump(mode='json')
     assert d['actuation'] == 'joint_position'        # scalar tokens, not enum reprs
     assert d['sim_grasp_adapter'] == {'gazebo': 'link_attacher'}
     g2 = GripperSpec(**d)

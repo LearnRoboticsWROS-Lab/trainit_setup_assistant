@@ -11,8 +11,9 @@ import shutil
 import sys
 from pathlib import Path
 
-from ..generator import Orchestrator
-from ..model import load_project
+# The core model/generator imports (which need pydantic/jinja2/pyyaml) are deferred INTO
+# main(), so argparse --help works with no deps and a MISSING dependency fails fast with a
+# clear, actionable message instead of a raw ImportError traceback.
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,6 +34,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+
+    try:
+        from ..generator import Orchestrator
+        from ..model import load_project
+    except ImportError as exc:
+        from ._deps import die_on_missing_dependency
+        return die_on_missing_dependency(exc)
 
     try:
         project = load_project(args.project)

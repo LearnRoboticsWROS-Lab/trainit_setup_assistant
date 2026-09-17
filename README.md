@@ -50,6 +50,32 @@ colcon build --packages-select trainit_motion_runtime trainit_setup_assistant --
 source install/setup.bash
 ```
 
+## Dependencies (rosdep / apt — no pip needed)
+
+TrainIt Community installs entirely through `rosdep`/`apt`; it does **not** require `pip`.
+From the workspace root:
+
+```bash
+cd <ros2_ws>
+rosdep install --from-paths src --ignore-src -r -y
+```
+
+That reads each `package.xml` and apt-installs every dependency, including
+`python3-pydantic`, `python3-jinja2`, `python3-yaml` and `python_qt_binding` (the GUI).
+The Python models are written against the **pydantic v1/v2 overlap API**, so Ubuntu 22.04's
+`python3-pydantic` (1.9.x) is sufficient — no pip upgrade to pydantic 2 is required (TrainIt
+runs unchanged on pydantic 1.9 and 2.x).
+
+**Quick diagnosis.** If a command (GUI or headless) prints
+
+```
+error: missing required Python dependency 'pydantic'.
+```
+
+then that package is not installed — run the `rosdep install` above (it is a **core**
+dependency, not a GUI extra). Only `python_qt_binding` is GUI-specific: the headless
+`trainit_generate` / `trainit_verify` do not need it, so they run on a display-less host.
+
 ## The flow (wizard, 8 steps — the on-screen numbering)
 
 **Phase A — build a faithful configuration environment**

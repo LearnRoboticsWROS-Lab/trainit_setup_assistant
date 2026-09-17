@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, root_validator
 
 from .enums import (
     Backend,
@@ -177,8 +177,10 @@ class GripperSpec(BaseModel):
     # generator derives them (byte-safe fallback), so existing bundles are unchanged.
     link_attacher: Optional[LinkAttacherConfig] = None
 
-    @model_validator(mode='before')
-    @classmethod
+    # @root_validator(pre=True): v1/v2-overlap (mode='before' == pre=True), runs on both
+    # pydantic 1.9 and 2.x; receives the raw pre-validation dict, so the default below is
+    # byte-identical to the model_validator form.
+    @root_validator(pre=True)
     def _default_actuation_from_kind(cls, data):
         """A parallel jaw defaults to JOINT_POSITION actuation; everything else keeps the
         TRIGGER default. Only when ``actuation`` was not given, so the YAML round-trip is

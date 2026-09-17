@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, validator
 
 from .enums import (
     AppType,
@@ -123,8 +123,10 @@ class PolicyStep(BaseModel):
     calibration_frame: CalibrationFrame = CalibrationFrame.BASE
     calibration_note: str = ''                  # why it is set (for the record)
 
-    @field_validator('calibration_offset')
-    @classmethod
+    # Classic @validator (not @field_validator): the deprecated-but-functional API that
+    # runs on BOTH pydantic 1.9 (apt python3-pydantic) and 2.x, so TrainIt installs via
+    # rosdep with no pip. Semantics identical (post-coercion, value-only).
+    @validator('calibration_offset')
     def _check_calibration(cls, v):
         if v is not None and len(v) != 6:
             raise ValueError('calibration_offset needs 6 values '

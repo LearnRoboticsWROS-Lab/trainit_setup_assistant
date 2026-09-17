@@ -163,8 +163,8 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                       arm_controller=robot.arm_controller.name,
                       valid_modes_py=repr(tuple(m.value for m in dep.modes)),
                       arm_js_remap_to_py=repr(dep.arm_joint_states_remap_to),
-                      bridges_py=repr([b.model_dump() for b in dep.bridges]),
-                      real_include_py=(repr(dep.real_include.model_dump())
+                      bridges_py=repr([b.dict() for b in dep.bridges]),
+                      real_include_py=(repr(dep.real_include.dict())
                                        if dep.real_include else 'None'),
                       default_mode=dep.default_mode.value,
                       modes_human=' | '.join(m.value for m in dep.modes),

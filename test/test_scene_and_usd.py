@@ -1,5 +1,6 @@
 """M8 (scene primitives) + M9 (USD import)."""
 
+import json
 import os
 import tempfile
 
@@ -121,7 +122,7 @@ def test_legacy_dynamic_flag_infers_category_and_roundtrips():
     from trainit_setup_assistant.model.enums import SceneObjectCategory
     o = SceneObject(id='part', dynamic=True)          # legacy: only `dynamic` given
     assert o.category is SceneObjectCategory.DYNAMIC
-    assert SceneObject.model_validate(o.model_dump()) == o   # idempotent round-trip
+    assert SceneObject.parse_obj(o.dict()) == o   # idempotent round-trip (v1/v2-overlap)
     s = SceneObject(id='wall')                        # defaults -> static
     assert s.category is SceneObjectCategory.STATIC and not s.dynamic
 
@@ -177,7 +178,7 @@ def test_mesh_object_and_dynamic_attributes_roundtrip():
     assert bottle.release_policy is ReleasePolicy.FREEZE
     assert bottle.isaac_grasp_method is IsaacGraspMethod.FIXED_JOINT   # default
     assert bottle.touchable_collision_ids == ['prewash_station']
-    assert SceneObject.model_validate(bottle.model_dump(mode='json')) == bottle
+    assert SceneObject.parse_obj(json.loads(bottle.json())) == bottle
 
     # the crate: dynamic (collision-allowed) but NOT a grasp target -> never attached
     crate = SceneObject(id='crate', shape='mesh',
@@ -198,7 +199,7 @@ def test_segment_attached_collision_check_flag():
     assert on.attached_collision_check is True
     assert off.attached_collision_check is False
     assert default.attached_collision_check is None   # inherit runtime state
-    assert MotionSegment.model_validate(on.model_dump()) == on
+    assert MotionSegment.parse_obj(on.dict()) == on
 
 
 if __name__ == '__main__':

@@ -49,7 +49,7 @@ def test_motion_and_type_enums_parse():
 def test_roundtrip_yaml_dict_revalidates():
     project = load_project(EXAMPLE)
     data = project_to_dict(project)
-    again = CanonicalProject.model_validate(data)
+    again = CanonicalProject.parse_obj(data)
     assert again == project
 
 
@@ -63,7 +63,7 @@ def test_waypoint_allowed_start_tolerance_default_and_roundtrip():
     assert Waypoint(name='home').allowed_start_tolerance == 0.1        # default 0.1
     wp = Waypoint(name='approach', named='approach_prewash', allowed_start_tolerance=0.0)
     assert wp.allowed_start_tolerance == 0.0                           # 0.0 disables
-    assert Waypoint.model_validate(wp.model_dump()) == wp              # round-trips
+    assert Waypoint.parse_obj(wp.dict()) == wp              # round-trips (v1/v2-overlap)
 
 
 def test_add_move_sets_per_waypoint_start_tolerance():

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, root_validator
 
 from .enums import (
     IsaacGraspMethod,
@@ -59,8 +59,10 @@ class SceneObject(BaseModel):
     #   allowed even when attached_collision_check is ON.
     touchable_collision_ids: List[str] = Field(default_factory=list)
 
-    @model_validator(mode='before')
-    @classmethod
+    # Classic @root_validator(pre=True) (not @model_validator): the v1/v2-overlap API that
+    # runs on both pydantic 1.9 and 2.x. mode='before' == pre=True: both receive the raw
+    # pre-validation dict (defaults not yet applied), so the mutation below is byte-identical.
+    @root_validator(pre=True)
     def _reconcile_category(cls, data):
         """Keep ``category`` and the legacy ``dynamic`` flag consistent.
 

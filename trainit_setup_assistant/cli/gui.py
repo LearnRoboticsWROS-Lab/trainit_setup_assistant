@@ -15,9 +15,11 @@ def main(argv=None) -> int:
     try:
         from python_qt_binding.QtWidgets import QApplication
         from ..gui.wizard import SetupWizard
-    except Exception as exc:  # noqa: BLE001
-        print(f'error: GUI deps unavailable: {exc}', file=sys.stderr)
-        return 1
+    except ImportError as exc:
+        # Name the ACTUAL missing package + the exact fix (it may be a core dep like
+        # pydantic pulled in transitively, or the Qt binding) — never a vague "GUI deps".
+        from ._deps import die_on_missing_dependency
+        return die_on_missing_dependency(exc)
 
     app = QApplication(sys.argv if argv is None else argv)
     wizard = SetupWizard()

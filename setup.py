@@ -34,7 +34,10 @@ setup(
             'resources/gazebo_cell_kit/worlds/*',
         ],
     },
-    install_requires=['setuptools', 'pydantic>=2', 'jinja2', 'pyyaml'],
+    # pydantic >= 1.9 (NOT >=2): the code uses only the v1/v2-overlap API, so TrainIt installs
+    # via rosdep/apt on Ubuntu 22.04 (python3-pydantic 1.9.x) with no pip. jinja2/pyyaml are the
+    # pip names; package.xml carries the matching rosdep keys (python3-jinja2, python3-yaml).
+    install_requires=['setuptools', 'pydantic>=1.9', 'jinja2', 'pyyaml'],
     zip_safe=True,
     maintainer='fra',
     maintainer_email='ros.master.ai@gmail.com',

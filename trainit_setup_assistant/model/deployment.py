@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from .enums import Backend
 
@@ -25,7 +25,7 @@ class LaunchNodeSpec(BaseModel):
     parameters: List[Dict[str, Any]] = Field(default_factory=list)
     remappings: List[List[str]] = Field(default_factory=list)  # [[from, to], ...]
     # backend tokens this node runs in; kept as plain strings (matched at runtime against
-    # the launch `mode:=` string) so `.model_dump()` serialises byte-identically.
+    # the launch `mode:=` string) so `.dict()` serialises byte-identically.
     modes: List[str] = Field(default_factory=lambda: ['mock', 'isaac'])
 
 
@@ -39,7 +39,9 @@ class RealIncludeSpec(BaseModel):
 class DeploymentSpec(BaseModel):
     # validate_assignment: coerce a raw-string assignment (e.g. controller.set_mode)
     # back into a Backend member, so `default_mode` is always a Backend downstream.
-    model_config = ConfigDict(validate_assignment=True)
+    # `class Config` (not ConfigDict): honoured by both pydantic 1.9 and 2.x.
+    class Config:
+        validate_assignment = True
 
     # The execution backends this cell supports (ADR-0008). A first-class Backend enum
     # instead of a free string, so an unknown backend token is rejected at load. Serialises

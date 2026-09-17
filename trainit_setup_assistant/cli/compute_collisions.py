@@ -56,7 +56,7 @@ def main(argv=None) -> int:
         save_project(project, args.project)
         print(f'wrote matrix into {args.project}', file=sys.stderr)
     else:
-        block = {'disable_collisions': [s.model_dump() for s in specs]}
+        block = {'disable_collisions': [s.dict() for s in specs]}
         print(yaml.safe_dump(block, sort_keys=False, default_flow_style=False))
     return 0
 

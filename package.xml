@@ -10,8 +10,6 @@
   <maintainer email="ros.master.ai@gmail.com">fra</maintainer>
   <license>Apache-2.0</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
-
   <!-- Runtime: the assistant tooling (model/generator are pure-python; the live
        session + GUI need ROS + MoveIt). pxr (USD) is pip-local, imported lazily. -->
   <exec_depend>rclpy</exec_depend>

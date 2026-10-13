@@ -94,6 +94,39 @@ hardcoded to a specific robot.
 
 ---
 
+## Install (TrainIt Community, from source)
+
+TrainIt Community is five public repositories released together: their `main` branches always
+belong together. [`trainit_community.repos`](trainit_community.repos) lists them for `vcs import`.
+You need Ubuntu 22.04 with ROS 2 Humble, `python3-vcstool` and an initialised `rosdep`
+(`sudo rosdep init`, once per machine); `rosdep` installs everything else, MoveIt 2 and
+BehaviorTree.CPP 4 included:
+
+```bash
+mkdir -p ~/trainit_ws/src && cd ~/trainit_ws
+curl -fsSLO https://raw.githubusercontent.com/LearnRoboticsWROS-Lab/trainit_setup_assistant/main/trainit_community.repos
+vcs import src < trainit_community.repos
+source /opt/ros/humble/setup.bash
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y
+colcon build
+source install/setup.bash
+ros2 run trainit_setup_assistant trainit_generate --help    # prints the usage: installed
+```
+
+| Repository | What it is | Needed for |
+|---|---|---|
+| `trainit_interfaces` | the messages and services TMR and the hardware layer share | every bundle |
+| `trainit_motion_runtime` | TMR, the Behaviour-Tree runtime a bundle runs on | every bundle |
+| `trainit_hardware_layer` | the end-effector adapters | a bundle with an end-effector contract |
+| `trainit_setup_assistant` | this package: the wizard and the headless generator | generating a bundle |
+| `trainit_perception` | the detectors | vision and bin-picking applications |
+
+Then start the wizard on your own robot's URDF/xacro
+(`ros2 run trainit_setup_assistant trainit_setup_assistant`, the flow below). There is no public
+sample cell yet: `examples/fr3wml_project.yaml` describes the reference cell, whose robot
+description is not public.
+
 ## What the TSA does — and doesn't
 
 The TSA automates the **application layer**. It does **not** build your digital twin —
@@ -115,17 +148,22 @@ application is what you iterate on and ship.
 ├── <cell>_isaac/              # your Isaac scene + assets + grasp-physics Script Node   (Adaptation Sprint)
 ├── <robot>_moveit_config/     # hand-made base: mock/isaac/real bring-up + bridges       (Adaptation Sprint)
 ├── <vendor>_bridge/           # real arm + gripper bridges (only for mode:=real)         (Adaptation Sprint)
-├── trainit_motion_runtime/    # the engine (BT runtime + scene loader)   — clone; keep versions bound
-└── trainit_setup_assistant/   # this package                             — clone; keep versions bound
+├── trainit_interfaces/        # the shared messages and services         — vcs import (Install)
+├── trainit_motion_runtime/    # the engine (BT runtime + scene loader)   — vcs import (Install)
+├── trainit_hardware_layer/    # the end-effector adapters                — vcs import (Install)
+├── trainit_perception/        # the detectors                            — vcs import (Install)
+└── trainit_setup_assistant/   # this package                             — vcs import (Install)
 ```
 
-`trainit_setup_assistant` and `trainit_motion_runtime` **ship together** — always use
-matching (committed) versions.
+The five TrainIt repositories **ship together**: build their `main` branches together
+(Install, above), never one on its own -- TMR needs `trainit_interfaces`, and a bundle with an
+end-effector contract needs the hardware layer.
 
 ```bash
 cd <ros2_ws>
 source /opt/ros/humble/setup.bash
-colcon build --packages-select trainit_motion_runtime trainit_setup_assistant --symlink-install
+rosdep install --from-paths src --ignore-src -r -y
+colcon build
 source install/setup.bash
 ```
 
@@ -142,8 +180,8 @@ rosdep install --from-paths src --ignore-src -r -y
 That reads each `package.xml` and apt-installs every dependency, including
 `python3-pydantic`, `python3-jinja2`, `python3-yaml` and `python_qt_binding` (the GUI).
 The Python models are written against the **pydantic v1/v2 overlap API**, so Ubuntu 22.04's
-`python3-pydantic` (1.9.x) is sufficient — no pip upgrade to pydantic 2 is required (TrainIt
-runs unchanged on pydantic 1.9 and 2.x).
+`python3-pydantic` (1.8.2) is sufficient — no pip upgrade to pydantic 2 is required (TrainIt
+runs unchanged on pydantic 1.8 and 2.x).
 
 **Quick diagnosis.** If a command (GUI or headless) prints
 
@@ -478,6 +516,9 @@ pointed at the robot by hand (its MotionPlanning display's *Move Group Namespace
 the plugin reason above.
 
 ## CLIs (headless)
+
+Each runs as `ros2 run trainit_setup_assistant <command>`: an `ament_python` package installs
+its commands under `lib/trainit_setup_assistant`, not on `PATH`.
 
 - `trainit_generate <project.yaml> -o <dir>` — generate the bundle (pure; no ROS needed).
 - `trainit_verify <project.yaml> --golden <dir> [--build]` — equivalence + optional build.

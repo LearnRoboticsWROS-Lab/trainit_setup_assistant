@@ -1,0 +1,22 @@
+# TrainIt Community: the public repositories, for `vcs import`.
+repositories:
+  trainit_interfaces:
+    type: git
+    url: https://github.com/LearnRoboticsWROS-Lab/trainit_interfaces.git
+    version: main
+  trainit_motion_runtime:
+    type: git
+    url: https://github.com/LearnRoboticsWROS-Lab/trainit_motion_runtime.git
+    version: main
+  trainit_hardware_layer:
+    type: git
+    url: https://github.com/LearnRoboticsWROS-Lab/trainit_hardware_layer.git
+    version: main
+  trainit_setup_assistant:
+    type: git
+    url: https://github.com/LearnRoboticsWROS-Lab/trainit_setup_assistant.git
+    version: main
+  trainit_perception:
+    type: git
+    url: https://github.com/LearnRoboticsWROS-Lab/trainit_perception.git
+    version: main

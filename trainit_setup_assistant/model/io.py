@@ -7,16 +7,131 @@ from pathlib import Path
 from typing import Union
 
 import yaml
+from pydantic import BaseModel
 
-from .project import CanonicalProject
+from .project import SCHEMA_VERSION_EEF_CONTRACT, CanonicalProject
+
+# The ToolAction fields of the end-effector contract (ADR-0022): written only when set.
+_EEF_TOOL_ACTION_KEYS = ('actuator', 'target', 'site')
+# Where the contract lives in project.yaml (ADR-0022 D6), key by key.
+_CONTRACT_PATH = ('robot', 'gripper', 'contract')
 
 
 def load_project(path: Union[str, Path]) -> CanonicalProject:
     """Parse + validate a project.yaml into a CanonicalProject."""
-    data = yaml.safe_load(Path(path).read_text())
+    text = Path(path).read_text()
+    data = yaml.safe_load(text)
     if data is None:
         raise ValueError(f'empty project file: {path}')
+    if _contract_of(data) is not None:
+        refuse_duplicate_contract_keys(text, path)
     return CanonicalProject.parse_obj(data)
+
+
+def _contract_of(data):
+    node = data
+    for key in _CONTRACT_PATH:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def refuse_duplicate_contract_keys(text: str, path: Union[str, Path] = '<text>') -> None:
+    """R3 'a duplicate' (ADR-0022): a contract id is a mapping KEY, so two actuators, sites or
+    targets with one id can only be a duplicate key in the file -- which ``yaml.safe_load``
+    silently resolves to the LAST one, dropping the first definition without a word. Refused at
+    load, naming the mapping, the key and both lines. Read from the document's node tree
+    (``yaml.compose``); only the contract block is checked, so a legacy project loads exactly as
+    it always did."""
+    loader = yaml.SafeLoader('')
+    node = yaml.compose(text, Loader=yaml.SafeLoader)
+    dotted = []
+    for key in _CONTRACT_PATH:
+        if not isinstance(node, yaml.MappingNode):
+            return
+        found = [v for k, v in node.value
+                 if isinstance(k, yaml.ScalarNode) and k.value == key]
+        if not found:
+            return
+        if key == _CONTRACT_PATH[-1] and len(found) > 1:
+            _duplicate('.'.join(dotted), key, node, path)
+        node = found[-1]                       # the one safe_load kept
+        dotted.append(key)
+    stack = [('.'.join(dotted), node)]
+    while stack:
+        where, current = stack.pop()
+        if isinstance(current, yaml.MappingNode):
+            seen = {}
+            for k, v in current.value:
+                if not isinstance(k, yaml.ScalarNode):
+                    continue
+                try:                                   # the key safe_load would build: 'on'
+                    ident = loader.construct_object(k)  # and 'yes' are one key (True)
+                except yaml.YAMLError:
+                    ident = (k.tag, k.value)
+                if ident in seen:
+                    raise ValueError(
+                        f'end-effector contract (ADR-0022 R3): {path}: {where} has the key '
+                        f'{k.value!r} twice (lines {seen[ident] + 1} and '
+                        f'{k.start_mark.line + 1}) -- an id names ONE actuator, site or target, '
+                        'and YAML would silently keep only the last one.')
+                seen[ident] = k.start_mark.line
+                stack.append((f'{where}.{k.value}', v))
+        elif isinstance(current, yaml.SequenceNode):
+            stack.extend((f'{where}[{i}]', v) for i, v in enumerate(current.value))
+
+
+def _duplicate(where: str, key: str, node, path) -> None:
+    lines = [k.start_mark.line + 1 for k, _v in node.value
+             if isinstance(k, yaml.ScalarNode) and k.value == key]
+    raise ValueError(f'end-effector contract (ADR-0022 R3): {path}: {where} has the key '
+                     f'{key!r} twice (lines {lines[0]} and {lines[-1]}) -- one device, one '
+                     'contract block.')
+
+
+def contract_as_written(contract) -> dict:
+    """The contract as the user wrote it (ADR-0022 D6 ``io.py``): every key whose value equals its
+    field's default DROPPED, ``default_factory`` fields included, inside every nested model --
+    the same bytes on pydantic 1.x and 2.x. (``exclude_defaults`` alone differs: pydantic 1.x
+    compares a ``default_factory`` field with None and keeps ``accepted_evidence`` / ``adapters:
+    {}`` -- review TSA-4.)"""
+    return _without_defaults(contract)
+
+
+def _fields(model: BaseModel) -> dict:
+    return getattr(type(model), 'model_fields', None) or type(model).__fields__
+
+
+def _default_of(field):
+    """(True, default) for a field that has one, (False, None) for a required field -- on a
+    pydantic 2 FieldInfo and a pydantic 1 ModelField alike."""
+    factory = getattr(field, 'default_factory', None)
+    if factory is not None:
+        return True, factory()
+    is_required = getattr(field, 'is_required', None)
+    required = is_required() if callable(is_required) else bool(getattr(field, 'required', False))
+    return (False, None) if required else (True, field.default)
+
+
+def _without_defaults(model: BaseModel) -> dict:
+    full = json.loads(model.json())              # plain tokens, on both versions
+    out = {}
+    for name, field in _fields(model).items():
+        if name not in full:
+            continue                             # excluded from the file (Field(exclude=True))
+        value = getattr(model, name)
+        has_default, default = _default_of(field)
+        if has_default and value == default:
+            continue
+        if isinstance(value, BaseModel):
+            out[name] = _without_defaults(value)
+        elif isinstance(value, dict) and any(isinstance(v, BaseModel) for v in value.values()):
+            out[name] = {key: (_without_defaults(v) if isinstance(v, BaseModel) else plain)
+                         for (key, plain), v in zip(full[name].items(), value.values())}
+        else:
+            out[name] = full[name]
+    return out
 
 
 def project_to_dict(project: CanonicalProject) -> dict:
@@ -27,8 +142,30 @@ def project_to_dict(project: CanonicalProject) -> dict:
     plain-string token and nested models become dicts, so ``yaml.safe_dump`` writes the
     same project.yaml. A bare ``.dict()`` would keep StrEnum *members* (a str subclass),
     which ``yaml.safe_dump`` cannot represent -> a changed/broken file. ``.json()`` is
-    present (deprecated in 2.x) on both versions."""
-    return json.loads(project.json())
+    present (deprecated in 2.x) on both versions.
+
+    The end-effector contract (ADR-0022 D6 ``io.py``) is written so a LEGACY project saves
+    byte-identical to TSA 7.6.0: ``robot.gripper.contract`` is omitted when None, and so are the
+    new ToolAction fields (``actuator``, ``target``, ``site``) and the never-saved
+    ``actuation_overridden`` (dropped here too, for a pydantic that ignores ``Field(exclude=)``).
+    A contract is written AS STORED -- a short form stays a short form, nothing derived is added
+    -- with its default-valued keys dropped (inside the contract only,
+    :func:`contract_as_written`), and ``schema_version`` is then 3."""
+    data = json.loads(project.json())
+    gripper = (data.get('robot') or {}).get('gripper')
+    contract = project.robot.gripper.contract
+    if isinstance(gripper, dict):
+        gripper.pop('actuation_overridden', None)
+        if contract is None:
+            gripper.pop('contract', None)
+        else:
+            gripper['contract'] = contract_as_written(contract)
+            data['schema_version'] = SCHEMA_VERSION_EEF_CONTRACT
+    for action in (data.get('application') or {}).get('tool_actions') or []:
+        for key in _EEF_TOOL_ACTION_KEYS:
+            if action.get(key) is None:
+                action.pop(key, None)
+    return data
 
 
 def save_project(project: CanonicalProject, path: Union[str, Path]) -> Path:

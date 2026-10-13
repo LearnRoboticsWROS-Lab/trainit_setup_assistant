@@ -1,6 +1,6 @@
 # ros2_control config (mock / isaac modes). Controller name matches the real bridge
 # action namespace so MoveIt's controller config is identical across mock/isaac/real.
-controller_manager:
+{{ node_key }}controller_manager:
   ros__parameters:
     update_rate: {{ arm.update_rate }}  # Hz
 
@@ -10,7 +10,7 @@ controller_manager:
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-{{ arm.name }}:
+{{ node_key }}{{ arm.name }}:
   ros__parameters:
     joints:
 {% for j in joints %}

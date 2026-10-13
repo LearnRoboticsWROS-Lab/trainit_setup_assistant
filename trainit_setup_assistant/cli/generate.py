@@ -69,7 +69,7 @@ def main(argv=None) -> int:
     print(f"Generated {info['file_count']} files into {out}")
     print(f"  packages: {project.bundle.description_package}, "
           f"{project.bundle.moveit_config_package}, {project.bundle.app_package}")
-    for warning in manifest.warnings:
+    for warning in manifest.local_warnings:        # this machine's paths; the manifest has none
         print(f'  warning: {warning}', file=sys.stderr)
     return 0
 

@@ -7,25 +7,48 @@ not the fast unit test.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-DEFAULT_UNDERLAY = '/home/fra/fr5_ws/install/setup.bash'
-ROS_SETUP = '/opt/ros/humble/setup.bash'
+AUTO = 'auto'      # underlay_setup default: the workspace the caller has sourced
+
+
+def default_underlay() -> Optional[str]:
+    """The ``setup.bash`` of the workspace the caller has SOURCED, or None.
+
+    colcon's setup scripts export ``COLCON_PREFIX_PATH``; its first entry holding a
+    ``setup.bash`` is the innermost sourced workspace. This used to be one machine's absolute
+    path, which on any other machine silently did not exist (vNext M0C #8).
+    """
+    for prefix in os.environ.get('COLCON_PREFIX_PATH', '').split(os.pathsep):
+        if prefix and (Path(prefix) / 'setup.bash').is_file():
+            return str(Path(prefix) / 'setup.bash')
+    return None
+
+
+def ros_setup() -> str:
+    """The ROS setup script of the sourced distro (Humble, the supported track, if unset)."""
+    return f"/opt/ros/{os.environ.get('ROS_DISTRO') or 'humble'}/setup.bash"
 
 
 def colcon_build_bundle(
     bundle_root: Path,
-    underlay_setup: Optional[str] = DEFAULT_UNDERLAY,
+    underlay_setup: Optional[str] = AUTO,
     timeout_s: int = 600,
 ) -> Tuple[bool, str]:
     """Copy every package in ``bundle_root`` into a temp ws and ``colcon build``.
 
+    ``underlay_setup``: ``'auto'`` (the default) = the sourced workspace
+    (:func:`default_underlay`); a path = that one; ``None`` = ROS alone.
+
     Returns (ok, combined_log).
     """
+    if underlay_setup == AUTO:
+        underlay_setup = default_underlay()
     bundle_root = Path(bundle_root)
     pkgs: List[Path] = [
         p for p in sorted(bundle_root.iterdir())
@@ -41,7 +64,7 @@ def colcon_build_bundle(
         for pkg in pkgs:
             shutil.copytree(pkg, src / pkg.name)
 
-        steps = [f'source {ROS_SETUP}']
+        steps = [f'source {ros_setup()}']
         if underlay_setup and Path(underlay_setup).is_file():
             steps.append(f'source {underlay_setup}')
         steps.append(f'cd {ws}')

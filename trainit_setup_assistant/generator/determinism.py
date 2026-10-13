@@ -14,7 +14,16 @@ from typing import Any
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from ..catalog import declared_planner_modes, tmr_planner_registry
+from ..model.enums import PlannerId
+
 TEMPLATES_DIR = Path(__file__).parent / 'templates'
+
+# The planner lists a bundle's texts carry, rendered from TSA's committed copy of TMR's planner
+# registry (ADR-0021) instead of typed into templates: the modes a project may select, and every
+# mode TMR parses. Computed once -- every render builds an env.
+OFFERED_PLANNER_MODES = ' | '.join(p.value for p in PlannerId)
+DECLARED_PLANNER_MODES = ' | '.join(declared_planner_modes(tmr_planner_registry()))
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -40,6 +49,8 @@ def build_jinja_env() -> Environment:
     )
     env.filters['fmtnum'] = fmtnum
     env.filters['fmtlist'] = fmtlist
+    env.globals['tsa_planner_modes'] = OFFERED_PLANNER_MODES
+    env.globals['tmr_planner_modes'] = DECLARED_PLANNER_MODES
     return env
 
 

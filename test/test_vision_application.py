@@ -242,12 +242,16 @@ def test_align_policy_gated_by_detector_metadata():
 # --- v4.1 verification-pass regressions -----------------------------------------
 
 def test_ptp_with_inherited_ompl_is_not_flagged():
+    """v4.1, restored at vNext G0 (owner section 8: the effective planner is canonical-only, a
+    legacy project unchanged): in a LEGACY project D-016 reads a blank ptp planner as the global
+    mode, as before M2.7, so under global ompl it is not flagged -- although TMR runs a blank ptp
+    as Pilz PTP (KNOWN_DEBT). The canonical half: test_m2_7_planner.py."""
     from trainit_setup_assistant.model.enums import MotionType, PlannerId
     p = _project()
     p.application.global_planner_mode = PlannerId.OMPL
     seg = p.application.segment_for('pick')
     seg.motion = MotionType.PTP
-    seg.planner = None                      # inherit -> OMPL: collision-aware, fine
+    seg.planner = None                      # legacy: read as the global mode (the docstring)
     problems = get_application(AppType.VISION_GUIDED_MOTION).validate(p)
     assert not any('ptp/pilz' in x for x in problems)
 

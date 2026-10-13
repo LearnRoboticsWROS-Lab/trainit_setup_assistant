@@ -66,21 +66,29 @@ def build_srdf(
     lines.append(f'        <chain base_link="{group.base_link}" tip_link="{group.tip_link}"/>')
     lines.append('    </group>')
 
+    # A COMPOSITE tool's group, end effector and named states: TSA never generates them
+    # (ADR-0022 F7, test F7; generating them is vNext M6): only the arm's.
+    composite = grip.kind is GripperKind.COMPOSITE
+
     # --- end-effector group (a single command joint), if any ---
-    if grip.kind is not GripperKind.NONE and grip.eef_group_name and grip.command_joint:
+    if (grip.kind is not GripperKind.NONE and not composite and grip.eef_group_name
+            and grip.command_joint):
         lines.append(f'    <group name="{grip.eef_group_name}">')
         lines.append(f'        <joint name="{grip.command_joint}"/>')
         lines.append('    </group>')
 
     # --- group states (named joint configurations) ---
     for state in robot.named_states:
+        if composite and state.group != group.name:
+            continue
         lines.append(f'    <group_state name="{state.name}" group="{state.group}">')
         for joint, value in state.joint_values.items():
             lines.append(f'        <joint name="{joint}" value="{_fmt_value(value)}"/>')
         lines.append('    </group_state>')
 
     # --- end effector ---
-    if grip.kind is not GripperKind.NONE and grip.eef_name and grip.eef_group_name:
+    if (grip.kind is not GripperKind.NONE and not composite and grip.eef_name
+            and grip.eef_group_name):
         parent_link = grip.eef_parent_link or group.tip_link
         lines.append(
             f'    <end_effector name="{grip.eef_name}" parent_link="{parent_link}" '

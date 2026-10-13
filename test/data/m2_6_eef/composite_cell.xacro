@@ -1,0 +1,117 @@
+<?xml version="1.0"?>
+<!-- ADR-0022 "The R1/R2-like synthetic fixture" (vNext M2.6), TSA's own copy: a 1-DOF arm stub
+     carrying ONE composite tool. Generic names and synthetic values only; every repository keeps
+     its own byte copy and never reads another's. The macro prefix p names one robot
+     (robot_a_, robot_b_, or empty for the root variant).
+
+     p tool0 (fixed) p tool_base
+       + p linear_axis_joint  prismatic 0..0.10 m : p carriage
+       |     + p rotary_axis_joint  revolute 0..1.0 rad : p rotor
+       |           + p jaw_a_joint  prismatic 0..0.02 (0 = closed)  + p jaw_a_follower_joint (mimic)
+       |           + fixed : p site_a_tcp
+       + p wrist_pitch_joint  revolute -0.5..0.5 : p wrist_link1
+       |     + p wrist_roll_joint  revolute -0.5..0.5 : p wrist_link2
+       |           + p jaw_b_joint  prismatic 0..0.02  + p jaw_b_follower_joint (mimic)
+       |           + fixed : p site_b_tcp
+       + fixed : p lock_link  (binary_lock drives no joint) -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="composite_cell" params="p">
+    <link name="${p}base_link"/>
+    <link name="${p}link1"/>
+    <joint name="${p}joint1" type="revolute">
+      <parent link="${p}base_link"/>
+      <child link="${p}link1"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-3.0" upper="3.0" effort="10.0" velocity="1.0"/>
+    </joint>
+    <link name="${p}tool0"/>
+    <joint name="${p}tool0_joint" type="fixed">
+      <parent link="${p}link1"/>
+      <child link="${p}tool0"/>
+      <origin xyz="0 0 0.5" rpy="0 0 0"/>
+    </joint>
+    <link name="${p}tool_base"/>
+    <joint name="${p}tool_base_joint" type="fixed">
+      <parent link="${p}tool0"/>
+      <child link="${p}tool_base"/>
+    </joint>
+
+    <link name="${p}carriage"/>
+    <joint name="${p}linear_axis_joint" type="prismatic">
+      <parent link="${p}tool_base"/>
+      <child link="${p}carriage"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="0.0" upper="0.10" effort="50.0" velocity="0.5"/>
+    </joint>
+    <link name="${p}rotor"/>
+    <joint name="${p}rotary_axis_joint" type="revolute">
+      <parent link="${p}carriage"/>
+      <child link="${p}rotor"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="0.0" upper="1.0" effort="5.0" velocity="2.0"/>
+    </joint>
+    <link name="${p}jaw_a_link"/>
+    <joint name="${p}jaw_a_joint" type="prismatic">
+      <parent link="${p}rotor"/>
+      <child link="${p}jaw_a_link"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="0.0" upper="0.02" effort="20.0" velocity="0.1"/>
+    </joint>
+    <link name="${p}jaw_a_follower_link"/>
+    <joint name="${p}jaw_a_follower_joint" type="prismatic">
+      <parent link="${p}rotor"/>
+      <child link="${p}jaw_a_follower_link"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="0.0" upper="0.02" effort="20.0" velocity="0.1"/>
+      <mimic joint="${p}jaw_a_joint" multiplier="1.0"/>
+    </joint>
+    <link name="${p}site_a_tcp"/>
+    <joint name="${p}site_a_tcp_joint" type="fixed">
+      <parent link="${p}rotor"/>
+      <child link="${p}site_a_tcp"/>
+      <origin xyz="0.05 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="${p}wrist_link1"/>
+    <joint name="${p}wrist_pitch_joint" type="revolute">
+      <parent link="${p}tool_base"/>
+      <child link="${p}wrist_link1"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-0.5" upper="0.5" effort="5.0" velocity="2.0"/>
+    </joint>
+    <link name="${p}wrist_link2"/>
+    <joint name="${p}wrist_roll_joint" type="revolute">
+      <parent link="${p}wrist_link1"/>
+      <child link="${p}wrist_link2"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-0.5" upper="0.5" effort="5.0" velocity="2.0"/>
+    </joint>
+    <link name="${p}jaw_b_link"/>
+    <joint name="${p}jaw_b_joint" type="prismatic">
+      <parent link="${p}wrist_link2"/>
+      <child link="${p}jaw_b_link"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="0.0" upper="0.02" effort="20.0" velocity="0.1"/>
+    </joint>
+    <link name="${p}jaw_b_follower_link"/>
+    <joint name="${p}jaw_b_follower_joint" type="prismatic">
+      <parent link="${p}wrist_link2"/>
+      <child link="${p}jaw_b_follower_link"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="0.0" upper="0.02" effort="20.0" velocity="0.1"/>
+      <mimic joint="${p}jaw_b_joint" multiplier="1.0"/>
+    </joint>
+    <link name="${p}site_b_tcp"/>
+    <joint name="${p}site_b_tcp_joint" type="fixed">
+      <parent link="${p}wrist_link2"/>
+      <child link="${p}site_b_tcp"/>
+      <origin xyz="0 0 0.04" rpy="0 0 0"/>
+    </joint>
+
+    <link name="${p}lock_link"/>
+    <joint name="${p}lock_joint" type="fixed">
+      <parent link="${p}tool_base"/>
+      <child link="${p}lock_link"/>
+    </joint>
+  </xacro:macro>
+</robot>

@@ -8,7 +8,14 @@
 #
 #   ros2 launch {{ app_package }} bringup.launch.py mode:=isaac
 #   ros2 launch {{ app_package }} trainit_bt.launch.py planner_mode:=ompl
-# -----------------------------------------------------------------------------
+{% if cell_namespace %}#
+# THE APPLICATION RUNS IN THE ROBOT'S NAMESPACE ({{ cell_namespace }}) — ADR-0016. trainit_run_bt is a
+# CLIENT of this robot's move_group: MoveGroupInterface resolves the move_group action and
+# every planning-scene service against its OWN node namespace, so a root-level BT would
+# wait for ever on an action nobody serves. The DETECTOR nodes below stay GLOBAL: they
+# publish /perception/<name>/detections, which DetectObject reads by absolute name, and
+# the detector that watches the bin is one detector however many arms reach into it.
+{% endif %}# -----------------------------------------------------------------------------
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -22,6 +29,9 @@ from trainit_motion_runtime.trainit_moveit_config import (
 
 MOVEIT_CONFIG_PACKAGE = "{{ moveit_config_package }}"
 ROBOT_NAME = "{{ robot_name }}"
+{% if cell_namespace %}
+NS = "{{ cell_namespace }}"                  # the robot slot (ADR-0016); see the note above
+{% endif %}
 
 
 def launch_setup(context, *args, **kwargs):
@@ -63,11 +73,35 @@ def launch_setup(context, *args, **kwargs):
                          "use_sim_time": use_sim}],
         ),
 {% endfor %}
+{% for e in external_detectors %}
+        # EXTERNAL-NODE detector "{{ e.detector }}" (D-015): this method is implemented by
+        # this node, not by trainit_perception, and it publishes the SAME contract on
+        # /perception/{{ e.detector }}/detections, so DetectObject consumes it without
+        # knowing the difference. GLOBAL like the pure-python detectors above (ADR-0016):
+        # the detector that watches the bin is one detector however many arms reach in.
+        # Its package is NOT an <exec_depend> of this bundle (ADR-0003: a package name
+        # rosdep cannot resolve would break `rosdep install` for the whole workspace);
+        # install it beside the bundle. See the comment in package.xml.
+        Node(
+            package="{{ e.package }}",
+            executable="{{ e.executable }}",
+            name="{{ e.node_name }}",
+            output="screen",
+{{ e.arguments_block }}
+        ),
+{% endfor %}
         Node(
             package="trainit_motion_runtime",
             executable="trainit_run_bt",
+{% if cell_namespace %}
+            namespace=NS,
+{% endif %}
             output="screen",
             parameters=[params, bt_params, node_params, {"use_sim_time": use_sim}],
+{% if cell_namespace %}
+            # /tf and /tf_static stay global: one tree for the whole cell (ADR-0016).
+            remappings=[("/tf", "/tf"), ("/tf_static", "/tf_static")],
+{% endif %}
         ),
     ]
 
@@ -75,7 +109,7 @@ def launch_setup(context, *args, **kwargs):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("planner_mode", default_value="{{ default_planner_mode }}",
-                              description="pilz | ompl | ompl_chomp | stomp"),
+                              description="{{ tmr_planner_modes }}"),
         DeclareLaunchArgument("bt_tree_file", default_value="",
                               description="BT XML (default: {{ tree_filename }})"),
         DeclareLaunchArgument("groot_monitor", default_value="true",

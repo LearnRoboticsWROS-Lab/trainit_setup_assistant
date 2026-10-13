@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from ..model import CanonicalProject, Waypoint
+from ..model import CanonicalProject, Waypoint, effective_planner
 from ..model.enums import AppType
 from .pick_and_place import PickAndPlace
 
@@ -27,7 +27,8 @@ class VisionGuidedMotion(PickAndPlace):
 
     # --- validation -------------------------------------------------------------
     def validate(self, project: CanonicalProject) -> List[str]:
-        problems = self._validate_sequence(project)
+        problems = self.validate_common(project)      # app-agnostic (ADR-0015 execution)
+        problems += self._validate_sequence(project)
         problems += self._validate_payload_refs(project)
         problems += self._validate_policies(project)
         # NO grasp/release requirement: a vision-guided motion may carry no gripper.
@@ -120,10 +121,12 @@ class VisionGuidedMotion(PickAndPlace):
                                 'waypoint has none — the runtime would fail')
         bound_detectors = {wp.vision.detector for wp in bound}
         for d in per.detectors:
-            if not d.emits_node:
-                problems.append(f'note: detector "{d.name}" ({d.method.value}) is an '
-                                'external-node method — its node is not generated; '
-                                'launch it yourself so it publishes the contract')
+            # NOTE: "this external-node detector has no launch block" is reported ONCE,
+            # app-agnostically, by the app emitter (generator/external_node_launch.py)
+            # — perception.yaml is emitted whatever the app type, so the fact belongs
+            # there and not in one template's validate(). It used to live here and said
+            # "launch it yourself", which was the only answer before DetectorSpec had an
+            # external_node block; now the bundle can launch it.
             if d.name in bound_detectors and not d.continuous:
                 problems.append(
                     f'detector "{d.name}" is on-demand (continuous: false) but the '
@@ -144,13 +147,29 @@ class VisionGuidedMotion(PickAndPlace):
             # the wrist through the camera on the way to a vision-computed approach.
             # A vision goal lands anywhere, so the travel INTO it must be
             # collision-aware.
+            # vNext M2.7 D3, in a CANONICAL project (owner G0 section 8): judged on the planner
+            # TMR RUNS -- a blank ptp planner is Pilz PTP whatever the global mode
+            # (model.effective_planner), as its bundle says. A legacy project keeps the reading it
+            # had before M2.7, a blank planner = the global mode (KNOWN_DEBT: TMR runs a blank ptp
+            # as Pilz PTP all the same).
             seg = project.application.segment_for(wp.name)
             if seg is not None and seg.motion is MotionType.PTP:
-                planner = seg.planner or project.application.global_planner_mode
+                if project.robot.gripper.contract is not None:
+                    planner = effective_planner(seg.motion, seg.planner,
+                                                project.application.global_planner_mode)
+                else:
+                    planner = seg.planner or project.application.global_planner_mode
                 if planner is PlannerId.PILZ:
+                    # the one NEW case (a blank planner under another global mode, reachable in a
+                    # canonical project only) says why; every case flagged before keeps its
+                    # message byte for byte
+                    blank = ('' if (seg.planner is not None or project.application
+                                    .global_planner_mode is PlannerId.PILZ) else
+                             ' (no planner set: a blank ptp planner runs Pilz PTP, whatever '
+                             'the global planner)')
                     problems.append(
                         f'waypoint "{wp.name}" is vision-driven but reached with '
-                        'ptp/pilz — a blind joint interpolation that cannot avoid '
+                        f'ptp/pilz{blank} — a blind joint interpolation that cannot avoid '
                         'obstacles (it hit the camera on the reference cell). Use '
                         'motion "free" with OMPL for the travel into a vision goal.')
         return problems
@@ -194,9 +213,11 @@ class VisionGuidedMotion(PickAndPlace):
         return lines
 
     def _detector_group(self, project: CanonicalProject, det_name: str,
-                        indent: str) -> List[str]:
+                        indent: str, fault: str = '') -> List[str]:
         """One sampling: DetectObject + this detector's waypoint updates + the
-        relative steps whose reference those updates just finalized."""
+        relative steps whose reference those updates just finalized. ``fault``: the gate key
+        DetectObject's ``fault`` output is remapped to (a canonical bin-picking cycle, ADR-0022
+        D5); empty -- every other caller -- emits the line as it always was."""
         per = project.perception
         d = per.detector_by_name(det_name) if per else None
         if d is None:
@@ -204,10 +225,11 @@ class VisionGuidedMotion(PickAndPlace):
         bound = [wp for wp in self._vision_waypoints(project)
                  if wp.vision.detector == det_name]
         out_key = f'detected.{d.name}'
+        gate = f' fault="{{{fault}}}"' if fault else ''
         lines = [
             f'{indent}<DetectObject detector="{d.name}" class_id="{d.class_id}" '
             f'target_frame="{project.robot.base_frame}" '
-            f'timeout_ms="{per.detect_timeout_ms}" out_key="{out_key}"/>']
+            f'timeout_ms="{per.detect_timeout_ms}" out_key="{out_key}"{gate}/>']
         for wp in bound:
             b = wp.vision
             # dx/dy only when set, so the golden (dz-only) stays byte-stable

@@ -29,9 +29,9 @@ from trainit_setup_assistant.model import (
 from trainit_setup_assistant.model.enums import GripperKind, ToolActionKind, WaypointType
 from trainit_setup_assistant.model.robot import (
     ArmControllerSpec, DescriptionSource, GripperSpec, PlanningGroupSpec, RobotSpec)
+import ws_paths
 
-GOLDEN_BUNDLE = Path('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-                     'fr3wml_suction_camera_tsa_4_1_bundle')
+GOLDEN_BUNDLE = ws_paths.GOLDEN_BUNDLE
 GOLDEN_PROJECT = GOLDEN_BUNDLE / 'project.yaml'
 GZ_MODES = [Backend.MOCK, Backend.ISAAC, Backend.GAZEBO, Backend.REAL]
 

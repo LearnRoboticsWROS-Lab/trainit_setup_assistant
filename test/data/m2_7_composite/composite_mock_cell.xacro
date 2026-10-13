@@ -1,0 +1,96 @@
+<?xml version="1.0"?>
+<!-- vNext M2.7 (owner section 13), TSA's synthetic composite mock fixture: a 1-DOF arm stub carrying
+     ONE composite tool whose ids follow the owner's section-13 sketch. Generic names, synthetic values,
+     no geometry. The macro prefix p names one robot (robot_a_, robot_b_, or empty for the root).
+
+     p tool0 (fixed) p tool_base
+       + p slide_joint      prismatic 0..0.10 m   : p slide_carriage       slide_axis    (FJT)
+       |   + p rotation_joint  revolute 0..1.6 rad : p head                rotation_axis (FJT)
+       |       + p gripper_jaw_joint  prismatic 0..0.02 (0 = closed)        controlled_gripper (GripperCommand)
+       |       + p gripper_jaw_follower_joint (mimic)
+       |       + fixed : p site_a_tcp                                       site_a (grip controlled_gripper)
+       |       + p binary_jaw_joint   prismatic 0..0.02 (0 = engaged)       binary_jaw (SetBool, a gripping element)
+       |       + fixed : p site_b_tcp                                       site_b (grip binary_jaw)
+       + fixed : p lock_link                                                binary_lock (SetBool, no joint)
+     Both site TCPs hang below the slide and the rotation (E1/E2: FJT-driven); the jaws are side
+     branches (they move no TCP), so their interfaces follow their actuator semantics. -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="composite_mock_cell" params="p">
+    <link name="${p}base_link"/>
+    <link name="${p}link1"/>
+    <joint name="${p}joint1" type="revolute">
+      <parent link="${p}base_link"/>
+      <child link="${p}link1"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-3.0" upper="3.0" effort="10.0" velocity="1.0"/>
+    </joint>
+    <link name="${p}tool0"/>
+    <joint name="${p}tool0_joint" type="fixed">
+      <parent link="${p}link1"/>
+      <child link="${p}tool0"/>
+      <origin xyz="0 0 0.5" rpy="0 0 0"/>
+    </joint>
+    <link name="${p}tool_base"/>
+    <joint name="${p}tool_base_joint" type="fixed">
+      <parent link="${p}tool0"/>
+      <child link="${p}tool_base"/>
+    </joint>
+
+    <link name="${p}slide_carriage"/>
+    <joint name="${p}slide_joint" type="prismatic">
+      <parent link="${p}tool_base"/>
+      <child link="${p}slide_carriage"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="0.0" upper="0.10" effort="50.0" velocity="0.5"/>
+    </joint>
+    <link name="${p}head"/>
+    <joint name="${p}rotation_joint" type="revolute">
+      <parent link="${p}slide_carriage"/>
+      <child link="${p}head"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="0.0" upper="1.6" effort="5.0" velocity="2.0"/>
+    </joint>
+
+    <link name="${p}gripper_jaw"/>
+    <joint name="${p}gripper_jaw_joint" type="prismatic">
+      <parent link="${p}head"/>
+      <child link="${p}gripper_jaw"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="0.0" upper="0.02" effort="20.0" velocity="0.1"/>
+    </joint>
+    <link name="${p}gripper_jaw_follower"/>
+    <joint name="${p}gripper_jaw_follower_joint" type="prismatic">
+      <parent link="${p}head"/>
+      <child link="${p}gripper_jaw_follower"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="0.0" upper="0.02" effort="20.0" velocity="0.1"/>
+      <mimic joint="${p}gripper_jaw_joint" multiplier="1.0"/>
+    </joint>
+    <link name="${p}site_a_tcp"/>
+    <joint name="${p}site_a_tcp_joint" type="fixed">
+      <parent link="${p}head"/>
+      <child link="${p}site_a_tcp"/>
+      <origin xyz="0.05 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="${p}binary_jaw"/>
+    <joint name="${p}binary_jaw_joint" type="prismatic">
+      <parent link="${p}head"/>
+      <child link="${p}binary_jaw"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="0.0" upper="0.02" effort="20.0" velocity="0.1"/>
+    </joint>
+    <link name="${p}site_b_tcp"/>
+    <joint name="${p}site_b_tcp_joint" type="fixed">
+      <parent link="${p}head"/>
+      <child link="${p}site_b_tcp"/>
+      <origin xyz="-0.05 0 0" rpy="0 0 3.141592653589793"/>
+    </joint>
+
+    <link name="${p}lock_link"/>
+    <joint name="${p}lock_joint" type="fixed">
+      <parent link="${p}tool_base"/>
+      <child link="${p}lock_link"/>
+    </joint>
+  </xacro:macro>
+</robot>

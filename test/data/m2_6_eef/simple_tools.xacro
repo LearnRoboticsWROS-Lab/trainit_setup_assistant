@@ -1,0 +1,99 @@
+<?xml version="1.0"?>
+<!-- ADR-0022 fixture (vNext M2.6), TSA's own copy: the short-form devices beside the composite
+     tool, each on the same 1-DOF arm stub. Generic names and synthetic values only.
+       suction_tool     a suction body with a TCP and the description PSEUDO-JOINT
+                        (suctioncup_joint, a side-branch prismatic: echoed, never evidence)
+       jaw_tool         a GripperCommand jaw: finger_joint plus a mimic follower
+       binary_jaw_tool  a pneumatic (SetBool) jaw: jaw_joint -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="arm_stub" params="p">
+    <link name="${p}base_link"/>
+    <link name="${p}link1"/>
+    <joint name="${p}joint1" type="revolute">
+      <parent link="${p}base_link"/>
+      <child link="${p}link1"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-3.0" upper="3.0" effort="10.0" velocity="1.0"/>
+    </joint>
+    <link name="${p}tool0"/>
+    <joint name="${p}tool0_joint" type="fixed">
+      <parent link="${p}link1"/>
+      <child link="${p}tool0"/>
+      <origin xyz="0 0 0.5" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="suction_tool" params="p">
+    <xacro:arm_stub p="${p}"/>
+    <link name="${p}suction_body"/>
+    <joint name="${p}suction_mount_joint" type="fixed">
+      <parent link="${p}tool0"/>
+      <child link="${p}suction_body"/>
+    </joint>
+    <link name="${p}tcp"/>
+    <joint name="${p}tcp_joint" type="fixed">
+      <parent link="${p}suction_body"/>
+      <child link="${p}tcp"/>
+      <origin xyz="0 0 0.08" rpy="0 0 0"/>
+    </joint>
+    <link name="${p}suctioncup_link"/>
+    <joint name="${p}suctioncup_joint" type="prismatic">
+      <parent link="${p}suction_body"/>
+      <child link="${p}suctioncup_link"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="0.0" upper="1.0" effort="0.0" velocity="0.0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="jaw_tool" params="p">
+    <xacro:arm_stub p="${p}"/>
+    <link name="${p}gripper_body"/>
+    <joint name="${p}gripper_mount_joint" type="fixed">
+      <parent link="${p}tool0"/>
+      <child link="${p}gripper_body"/>
+    </joint>
+    <link name="${p}finger_link"/>
+    <joint name="${p}finger_joint" type="revolute">
+      <parent link="${p}gripper_body"/>
+      <child link="${p}finger_link"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="0.0" upper="0.8" effort="10.0" velocity="2.0"/>
+    </joint>
+    <link name="${p}finger_follower_link"/>
+    <joint name="${p}finger_follower_joint" type="revolute">
+      <parent link="${p}gripper_body"/>
+      <child link="${p}finger_follower_link"/>
+      <axis xyz="0 0 -1"/>
+      <limit lower="0.0" upper="0.8" effort="10.0" velocity="2.0"/>
+      <mimic joint="${p}finger_joint" multiplier="1.0"/>
+    </joint>
+    <link name="${p}tcp"/>
+    <joint name="${p}tcp_joint" type="fixed">
+      <parent link="${p}gripper_body"/>
+      <child link="${p}tcp"/>
+      <origin xyz="0 0 0.12" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="binary_jaw_tool" params="p">
+    <xacro:arm_stub p="${p}"/>
+    <link name="${p}gripper_body"/>
+    <joint name="${p}gripper_mount_joint" type="fixed">
+      <parent link="${p}tool0"/>
+      <child link="${p}gripper_body"/>
+    </joint>
+    <link name="${p}jaw_link"/>
+    <joint name="${p}jaw_joint" type="prismatic">
+      <parent link="${p}gripper_body"/>
+      <child link="${p}jaw_link"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="0.0" upper="0.02" effort="20.0" velocity="0.1"/>
+    </joint>
+    <link name="${p}tcp"/>
+    <joint name="${p}tcp_joint" type="fixed">
+      <parent link="${p}gripper_body"/>
+      <child link="${p}tcp"/>
+      <origin xyz="0 0 0.1" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>

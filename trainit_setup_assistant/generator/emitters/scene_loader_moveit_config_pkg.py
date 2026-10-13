@@ -24,7 +24,13 @@ from pathlib import Path
 
 from ...model.enums import Backend, GripperKind, SimGraspAdapter
 from ..camera_variant import rewrite_camera_include
+from ..eef_contract import (HARDWARE_LAYER, bridges_with_adapters, device,
+                            namespace_isaac_warning, scene_gripper_cmd_topic,
+                            scene_package_references)
+from ..namespace import bare_param_file_keys, cell_namespace, namespace_handoff_warnings
+from ..runtime_requirements import hardware_layer_requirement, requirement, use_of
 from ..scene_yaml import build_scene_yaml
+from ..servo_yaml import build_servo_context
 from .base import Emitter, GenContext
 
 
@@ -48,7 +54,8 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
             return
         base_config = Path(base_path) / 'config'
         if not base_config.is_dir():
-            ctx.manifest.warn(f'scene_loader emitter: base config dir not found: {base_config}')
+            ctx.warn_path(lambda shown: f'scene_loader emitter: base config dir not found: '
+                                        f'{shown}', base_config, directory=True)
             return
 
         # Safety net: a mesh object with no mesh_resource is emitted with an empty
@@ -63,6 +70,17 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
 
         # 1) COPY the base config/ verbatim (preserves the tuned mode-switch + SRDF).
         ctx.copy_tree(base_config, f'{pkg}/config')
+        # The copied ros2_controllers.yaml is cell DATA, reported rather than rewritten (see
+        # namespace_handoff_warnings): bare node keys in it bind nothing in the robot's slot,
+        # so the controllers would come up undefined under the namespace (vNext M0C #5).
+        if cell_namespace(project):
+            bare = bare_param_file_keys(base_config / 'ros2_controllers.yaml')
+            if bare:
+                ctx.manifest.warn(
+                    f'cell_namespace "{cell_namespace(project)}": the base config\'s '
+                    f'ros2_controllers.yaml keys {", ".join(bare)} by BARE node name, which '
+                    f'binds nothing under the namespace -- the controllers would be '
+                    f'undefined there. Key them "/**/<name>" in the base config.')
 
         # 1a) CAMERA VARIANT (TSA v4, D-015): swap the URDF include named by the
         # project's CameraSpec so TF carries the camera frames DetectObject
@@ -97,7 +115,29 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         ctx.generate_to(f'{pkg}/config/scene.yaml', build_scene_yaml(project),
                         source='scene_from_project')
 
+        # 2a) MoveIt Servo (ADR-0015): a cell with at least one `execution: servo` move
+        # gets config/servo.yaml + a servo_node in the bring-up below. BOTH are gated on
+        # the same fact, so an all-`plan` cell emits neither byte and the published
+        # golden bundle regenerates unchanged. Servo is an out-of-process node, not a
+        # library: TSA only configures and launches it (Decision 5).
+        uses_servo = project.application.uses_servo()
+        # The robot slot (ADR-0016 Decision 3). Empty => every node at the ROOT and not one
+        # byte differs from a pre-ADR-0016 bundle; the warnings below are empty too.
+        cell_ns = cell_namespace(project)
+        for problem in namespace_handoff_warnings(project):
+            ctx.manifest.warn(problem)
+        if uses_servo:
+            ctx.render_to(f'{pkg}/config/servo.yaml', 'moveit_config/servo.yaml.j2',
+                          **build_servo_context(project))
+
         # 3) TEMPLATE the self-referential bringup (mode-switch + planners + scene loader).
+        # The end-effector contract (ADR-0022), canonical projects only: its adapter rows are
+        # APPENDED to BRIDGES (nothing removed: a legacy EEF bridge row is refused, R18).
+        eef_dev = device(project)
+        if eef_dev is not None:
+            warning = namespace_isaac_warning(project, eef_dev)
+            if warning:
+                ctx.manifest.warn(warning)
         gripper_present = (robot.gripper.kind is not GripperKind.NONE
                            and bool(robot.gripper.controller_name))
         gripper_action = robot.gripper.gripper_action_ns() if gripper_present else ''
@@ -142,7 +182,9 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                 object_link=object_link)
             spawn_entity_name = names['robot_model']
             gazebo_link_attacher = {
-                'gripper_cmd_topic': project.scene.gripper_cmd_topic or '/gripper_cmd',
+                # a canonical weld follows the device's scene signal (ADR-0022 D8)
+                'gripper_cmd_topic': (scene_gripper_cmd_topic(eef_dev) if eef_dev is not None
+                                      else project.scene.gripper_cmd_topic or '/gripper_cmd'),
                 'robot_model': names['robot_model'],
                 'ee_link': names['robot_link'],
                 'object_model': names['object_model'],
@@ -155,6 +197,11 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         ctx.render_to(f'{pkg}/launch/bringup.launch.py',
                       'moveit_config/scene_loader_bringup.launch.py.j2',
                       robot_name=robot.robot_name,
+                      # the robot slot (ADR-0016 Decision 3). '' => every node at the
+                      # ROOT, which is byte-for-byte the pre-ADR-0016 bring-up.
+                      cell_namespace=cell_ns,
+                      # MoveIt Servo node (ADR-0015), gated on the same fact as servo.yaml
+                      servo=uses_servo,
                       spawn_entity_name=spawn_entity_name,
                       world_default=(project.scene.world_path or ''),
                       gazebo_link_attacher=(gazebo_link_attacher is not None),
@@ -163,7 +210,7 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                       arm_controller=robot.arm_controller.name,
                       valid_modes_py=repr(tuple(m.value for m in dep.modes)),
                       arm_js_remap_to_py=repr(dep.arm_joint_states_remap_to),
-                      bridges_py=repr([b.dict() for b in dep.bridges]),
+                      bridges_py=repr(bridges_with_adapters(project)),
                       real_include_py=(repr(dep.real_include.dict())
                                        if dep.real_include else 'None'),
                       default_mode=dep.default_mode.value,
@@ -189,11 +236,34 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                           if gripper_present and robot.gripper.controller_name
                           else None))
 
-        # 4) package.xml + CMakeLists (exec_depend the framework + connector packages).
+        # 4) package.xml + CMakeLists (exec_depend the framework + connector packages). The
+        # TMR floor is the bring-up's (vNext M2.4): the launch helper's backend=, a scene
+        # manager under a namespace -- read from the launch files this generation wrote.
+        use = use_of(launches=ctx.written(f'{pkg}/launch/', '.py'))
+        for unreadable in use.unreadable:
+            ctx.manifest.warn(f'runtime requirement: {unreadable} does not parse -- the bundle '
+                              f'will not run as generated; trainit_motion_runtime is required at '
+                              f'the newest version TSA dates')
+        tmr = requirement(use, needs=('scene_manager_node',))
+        # ADR-0022 [D]: the hardware layer, versioned, iff this package's launch starts one of its
+        # adapters -- read from the files this generation wrote, fail closed (canonical only).
+        hardware = (hardware_layer_requirement(ctx.written(f'{pkg}/launch/', '.py'))
+                    if eef_dev is not None else None)
+        bridge_packages = [p for p in dep.bridge_packages()
+                           if not (hardware and p == HARDWARE_LAYER)]
+        if eef_dev is not None:
+            # ADR-0022 [D], canonical only: every package this package's scene.yaml loads a mesh
+            # from is declared HERE, where it is used -- cell geometry first, as the connector
+            # comment orders it -- even when no bridge row names it any more.
+            geometry = scene_package_references(
+                ctx.written(f'{pkg}/config/scene.yaml').values())
+            bridge_packages = [p for p in geometry
+                               if p != pkg and p not in bridge_packages] + bridge_packages
         ctx.render_to(f'{pkg}/package.xml', 'moveit_config/scene_loader_package.xml.j2',
                       package_name=pkg, meta=project.meta, robot_name=robot.robot_name,
-                      bridge_packages=dep.bridge_packages(),
-                      camera_cloud_dep=bool(camera_cloud))
+                      bridge_packages=bridge_packages,
+                      servo_dep=uses_servo,
+                      camera_cloud_dep=bool(camera_cloud), tmr=tmr, hardware_layer=hardware)
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'moveit_config/scene_loader_CMakeLists.txt.j2',
                       package_name=pkg, has_link_attacher=bool(gazebo_link_attacher))
 
@@ -221,8 +291,13 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
         additions = []
 
         existing = {(gs.get('name'), gs.get('group')) for gs in root.findall('group_state')}
+        # A COMPOSITE tool's named states are not generated (ADR-0022 F7): only the planning
+        # group's captured states are merged -- the filter srdf_builder applies from scratch.
+        composite = project.robot.gripper.kind is GripperKind.COMPOSITE
+        arm = project.robot.planning_group.name
         missing = [s for s in project.robot.named_states
-                   if (s.name, s.group) not in existing]
+                   if (s.name, s.group) not in existing
+                   and not (composite and s.group != arm)]
         if missing:
             blocks = []
             for s in missing:

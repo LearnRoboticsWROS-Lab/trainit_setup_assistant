@@ -33,7 +33,7 @@ ros2 launch {{ moveit_config_package }} bringup.launch.py mode:={{ default_mode 
 ```bash
 ros2 launch {{ app_package }} trainit_bt.launch.py planner_mode:={{ default_planner_mode }}
 ```
-`planner_mode` ∈ `pilz | ompl | ompl_chomp`. Watch it live in Groot2 (port 1667).
+`planner_mode` ∈ `{{ tsa_planner_modes }}`. Watch it live in Groot2 (port 1667).
 
 ## Where to tune the application (the degrees of freedom)
 | What | File |
@@ -42,8 +42,22 @@ ros2 launch {{ app_package }} trainit_bt.launch.py planner_mode:={{ default_plan
 | The sequence / tool actions (grasp, release, per-move flags) | `{{ app_package }}/bt_trees/{{ tree_filename }}` |
 | Scene obstacles + dynamic-object flags (attach, collision, freeze/gravity) | `{{ moveit_config_package }}/config/scene.yaml` |
 | Planner limits (velocity/accel, cartesian) | `{{ moveit_config_package }}/config/joint_limits.yaml`, `pilz_cartesian_limits.yaml` |
+{% if servo %}| MoveIt Servo settings for the streamed moves (scales, rate, thresholds) | `{{ moveit_config_package }}/config/servo.yaml` |
+{% endif %}
 
-## Dynamic objects (Isaac)
+{% if servo %}## Streamed moves (`execution: servo`, ADR-0015)
+At least one move in this application is **streamed** instead of planned. Those moves are
+the `<ServoTrack waypoint="…"/>` nodes in the tree (the planned ones are
+`<MoveWaypoint …/>`); both read the same waypoint block in `bt_params.yaml`.
+
+The cell bring-up above therefore also starts an out-of-process **`moveit_servo`** node,
+configured by `{{ moveit_config_package }}/config/servo.yaml`. Its output goes to the
+**same arm controller** MoveIt execution feeds, so exactly one of the two may own that
+controller at a time: `ServoTrack` pauses Servo around every trajectory execution on the
+group. If you ever see a trajectory goal abort on a tolerance violation with no useful
+message, suspect both talking at once.
+
+{% endif %}## Dynamic objects (Isaac)
 The BT toggles two things automatically during the cycle:
 - **`SetAttachedCollisionCheck`** — when the gripper holds objects, ON makes the planner
   route the held payload around the static meshes (e.g. into the prewash); OFF makes it

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, validator
 from .enums import (
     AppType,
     CalibrationFrame,
+    ExecutionMode,
     MotionType,
     PlannerId,
     PolicyMode,
@@ -52,7 +53,17 @@ class MotionSegment(BaseModel):
 
     to_waypoint: str
     motion: MotionType = MotionType.FREE
-    planner: Optional[PlannerId] = None        # override; None => global planner_mode
+    # None = no planner chosen: in a CANONICAL project generation writes the planner TMR runs
+    # for it instead (effective_planner below: ptp -> pilz, free -> the global planner_mode;
+    # vNext M2.7 D3, canonical-only since G0); a legacy project writes none, as before M2.7
+    planner: Optional[PlannerId] = None
+    # HOW this move is executed (ADR-0015): plan the trajectory and run it, or stream it
+    # with MoveIt Servo. Its own axis — orthogonal to `motion` and to the planner. Like
+    # `motion` (and unlike `planner`) it is NON-optional with a default: the semantics are
+    # ABSOLUTE, not inherit-from-global, so there is no ApplicationSpec.global_execution.
+    # `plan` emits zero bytes: the BT node name carries the choice (<MoveWaypoint> vs
+    # <ServoTrack>) and servo.yaml + the servo_node launch entry are gated on it.
+    execution: ExecutionMode = ExecutionMode.PLAN
     speed: int = Field(default=50, ge=1, le=100)
     aux: Optional[List[float]] = None          # circ only: auxiliary point [x,y,z]
     aux_is_center: bool = False                # circ only
@@ -65,6 +76,37 @@ class MotionSegment(BaseModel):
     # Process-layer pause AFTER this waypoint (and its tool actions): a Wait block in
     # the sequence editor. Emitted as the BT.CPP built-in <Sleep msec="..."/>.
     wait_after_ms: int = Field(default=0, ge=0)
+
+
+def effective_planner(motion: Optional[MotionType], planner: Optional[PlannerId],
+                      global_mode: PlannerId) -> Optional[PlannerId]:
+    """The planner TMR's ``MoveWaypoint`` RUNS for a move into a waypoint -- the ONE meaning of a
+    blank planner in a CANONICAL project (one with an end-effector contract, ADR-0022; vNext M2.7,
+    owner decision D3, scoped to canonical projects by the owner at vNext G0). For such a project
+    generation writes it explicitly into ``bt_params.yaml``, so no generated move relies on TMR's
+    rules for a blank planner, and D-016 and the blocks page's switch to free/OMPL judge it. A
+    legacy project keeps the reading it had before M2.7: nothing is written for a blank planner,
+    and D-016 and the switch read it as the global mode. ``motion`` None = the waypoint has no
+    incoming segment (TMR's motion default is free).
+
+    * a chosen planner: itself, unchanged;
+    * ``lin`` / ``circ``: None -- always Pilz LIN / CIRC; TMR never reads the planner, so nothing
+      is written for a blank one (an explicit one stays, inert: KNOWN_DEBT);
+    * ``ptp``, blank: ``pilz`` -- TMR runs a blank ptp as Pilz PTP (``bt_nodes.cpp``
+      ``MoveWaypoint::tick``: ``else if (motion == "ptp") mode = PlannerMode::PILZ``);
+    * ``free`` (or no motion), blank: ``global_mode`` -- TMR runs it with the runner's
+      ``planner_mode``, which every generated launch sets from the same ``global_planner_mode``.
+
+    The execution mode does not enter: ``bt_params`` is the same block for a planned and a streamed
+    move (ServoTrack reads no planner), as before.
+    """
+    if planner is not None:
+        return planner
+    if motion in (MotionType.LIN, MotionType.CIRC):
+        return None
+    if motion is MotionType.PTP:
+        return PlannerId.PILZ
+    return global_mode
 
 
 class DetectPoint(BaseModel):
@@ -84,6 +126,11 @@ class ToolAction(BaseModel):
     at_waypoint: str
     kind: ToolActionKind
     payload_ref: Optional[str] = None          # SceneSpec.payload.id for attach/detach
+    # --- the end-effector contract (ADR-0022): logical ids, never an endpoint -----------------
+    # Omitted from project.yaml when None (model/io.py), so a legacy project saves byte-identical.
+    actuator: Optional[str] = None             # actuate: the contract actuator commanded
+    target: Optional[str] = None               # actuate: one of its NAMED targets
+    site: Optional[str] = None                 # grasp/release: the grasp site (multi-site device)
 
 
 class PolicyStep(BaseModel):
@@ -134,6 +181,44 @@ class PolicyStep(BaseModel):
         return v
 
 
+class BinPickingSpec(BaseModel):
+    """The emptying loop's configuration (ADR-0016 Decision 4).
+
+    Everything here is CONFIGURATION, not code: the number of candidates to try, whether
+    the lift is verified, and the recovery step fired when the bin stalls. What the
+    recovery step ACTUATES is cell I/O (ADR-0013) — a shake is a machine with an
+    amplitude, a frequency and a direction; in the twin it is one line of physics and in
+    a cell it is a signal on a PLC. The template emits the *step* only.
+
+    The standoff and retreat DISTANCES are configuration too, and they already have a
+    home: the approach waypoint's ``Waypoint.vision.dz`` and the retreat waypoint's
+    ``Waypoint.relative.dz``. They are deliberately not duplicated here.
+    """
+
+    # Candidates tried per delivered object, in the detector's published order (ADR-0016
+    # Decision 1). Also DetectObject's ``keep``: asking for more candidates than the loop
+    # can try would publish blackboard entries nothing reads. Measured on the reference
+    # cell: K = 3,33 candidates tried per object delivered, so 3 is the floor that makes
+    # the retry worth having — one pick in three does not succeed on the first candidate.
+    tries: int = Field(default=3, ge=1)
+    # CheckRobotState after the retreat: what turns "the cup closed" into "the capsule
+    # came up". The two differ on 1 lift in 22 on the reference cell, which is exactly the
+    # rate a linear sequence would silently report as a successful pick.
+    holding_check: bool = True
+    # std_msgs/Bool, true while the object is held — the signal the holding check reads.
+    # Empty => CheckRobotState is emitted without it and the runtime uses its own default.
+    attached_topic: str = ''
+    holding_timeout_ms: int = Field(default=3000, ge=100)
+    # --- the stall recovery (cell I/O, ADR-0013) ---
+    # The ProcessController channel pulsed when the bin stalls. EMPTY = no recovery step:
+    # the tree then only logs "bin empty" and the next cycle re-detects. "No plan" and
+    # "the plans do not work" are the same stall to an operator, and treating only the
+    # first is why an early measurement reported N = 15 where the recovered one reports 21.
+    recovery_channel: str = ''
+    # How long the channel stays enabled (a <Sleep> between Enable and DisableProcess).
+    recovery_dwell_ms: int = Field(default=1500, ge=0)
+
+
 class ApplicationSpec(BaseModel):
     type: AppType = AppType.PICK_AND_PLACE
     global_planner_mode: PlannerId = PlannerId.PILZ
@@ -149,6 +234,10 @@ class ApplicationSpec(BaseModel):
     detections: List[DetectPoint] = Field(default_factory=list)
     # learned-policy steps (ADR-0005); empty = fully deterministic (unchanged behaviour)
     policies: List[PolicyStep] = Field(default_factory=list)
+    # The emptying loop's configuration (ADR-0016 Decision 4). Read ONLY by the
+    # bin_picking template, so every other application ignores it and a project that
+    # never selects bin_picking generates exactly what it generated before.
+    bin_picking: BinPickingSpec = Field(default_factory=BinPickingSpec)
     # Explicit tree order (waypoint-name references, repeats allowed — e.g. home at
     # start AND end). Empty => the application template derives order from roles.
     # Each waypoint is DEFINED once (bt_params) but may be VISITED multiple times.
@@ -169,6 +258,15 @@ class ApplicationSpec(BaseModel):
             if seg.to_waypoint == waypoint_name:
                 return seg
         return None
+
+    def uses_servo(self) -> bool:
+        """True when at least one move is streamed with MoveIt Servo (ADR-0015).
+
+        THE gate for every servo artefact: ``config/servo.yaml`` and the ``servo_node``
+        launch entry are emitted only when this is True, so an all-``plan`` project (the
+        golden) is byte-identical to a pre-ADR-0015 bundle.
+        """
+        return any(seg.execution is ExecutionMode.SERVO for seg in self.segments)
 
     def waypoint_by_name(self, name: str) -> Optional[Waypoint]:
         for wp in self.waypoints:

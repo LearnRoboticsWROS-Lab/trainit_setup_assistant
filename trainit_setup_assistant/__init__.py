@@ -10,4 +10,4 @@ web GUI can replace ``gui/`` by emitting the same project. ``trainit_generate``
 (headless) is the contract test that keeps them decoupled.
 """
 
-__version__ = '0.1.0'
+__version__ = '7.8.0'

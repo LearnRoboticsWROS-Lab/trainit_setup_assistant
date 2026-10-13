@@ -15,7 +15,8 @@
   <!-- self-contained robot geometry -->
   <exec_depend>{{ description_package }}</exec_depend>
   <!-- generic planner pipelines (ompl/pilz/chomp) are pulled from the framework -->
-  <exec_depend>trainit_motion_runtime</exec_depend>
+  <!-- {{ tmr.comment }} -->
+  <exec_depend version_gte="{{ tmr.version }}">trainit_motion_runtime</exec_depend>
 
   <exec_depend>moveit_configs_utils</exec_depend>
   <exec_depend>moveit_ros_move_group</exec_depend>
@@ -23,6 +24,11 @@
   <exec_depend>pilz_industrial_motion_planner</exec_depend>
   <exec_depend>moveit_planners_ompl</exec_depend>
   <exec_depend>moveit_planners_chomp</exec_depend>
+{% if servo_dep %}
+  <!-- MoveIt Servo (ADR-0015): config/servo.yaml is shipped here; the app bring-up
+       runs the servo_node with it -->
+  <exec_depend>moveit_servo</exec_depend>
+{% endif %}
   <exec_depend>xacro</exec_depend>
   <exec_depend>topic_based_ros2_control</exec_depend>
 

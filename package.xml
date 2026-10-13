@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>trainit_setup_assistant</name>
-  <version>4.3.1</version>
+  <version>7.8.0</version>
   <description>TrainIt Setup Assistant — a GUI + headless generator that produces a
     robot application bundle (description + moveit_config + app) for the TrainIt Motion
     Runtime, the way the MoveIt Setup Assistant produces a moveit_config. Robot- and
@@ -25,6 +25,13 @@
   <exec_depend>python_qt_binding</exec_depend>
   <exec_depend>trainit_motion_runtime</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+  <!-- numpy: already an undeclared de-facto dependency (the live tuner's QImage path), and
+       now the grasp-face picker's whole engine — the STL/OBJ parse, the ray cast, the flood
+       fill and the three orthographic rasters (ADR-0018 Decision 2). Declared, not added:
+       python3-numpy is a rosdep key in jammy and rclpy pulls it anyway, which is exactly
+       why the picker uses it instead of VTK (no rosdep key, pulls MPI) or pyqtgraph (no
+       triangle picking). FreeCAD stays OUT: STEP is probed at run time, never required. -->
+  <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-jinja2</exec_depend>
   <exec_depend>python3-pydantic</exec_depend>
 

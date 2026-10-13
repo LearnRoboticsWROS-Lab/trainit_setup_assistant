@@ -9,7 +9,14 @@ from __future__ import annotations
 
 from ...applications import build_bt_params_context, get_application
 from ...model.enums import AppType, Backend, GripperKind
-from ..perception_yaml import build_perception_yaml
+from ...model.faces import param_floors, version_key
+from ..eef_contract import (HARDWARE_LAYER, bridges_with_adapters, device,
+                            namespace_isaac_warning)
+from ..external_node_launch import (external_node_context, external_node_packages,
+                                    external_node_warnings)
+from ..namespace import cell_namespace, namespace_handoff_warnings
+from ..perception_yaml import build_perception_yaml, detector_params
+from ..runtime_requirements import hardware_layer_requirement, requirement, use_of
 from .base import Emitter, GenContext
 
 
@@ -23,12 +30,28 @@ class AppEmitter(Emitter):
         gripper_present = (robot.gripper.kind is not GripperKind.NONE
                            and bool(robot.gripper.controller_name))
         gripper_action = robot.gripper.gripper_action_ns() if gripper_present else ''
+        # The end-effector contract (ADR-0022): a canonical project has no legacy gripper action
+        # and no generated mock server (the TrainIt adapter serves the device, [A]).
+        eef_dev = device(project)
+        legacy_gripper = gripper_present and eef_dev is None
 
         template = get_application(app.type)
+        # The robot slot (ADR-0016 Decision 3). Empty => every generated node at the ROOT,
+        # byte-for-byte the pre-ADR-0016 bundle. The from-scratch flow reports the
+        # hand-off warnings here (the scene-loader flow reports them in its own emitter).
+        cell_ns = cell_namespace(project)
+        if not robot.base_moveit_config_path:
+            for problem in namespace_handoff_warnings(project):
+                ctx.manifest.warn(problem)
 
-        # validation problems are surfaced (do not abort: a partial bundle still helps)
+        # validation problems are surfaced (do not abort: a partial bundle still helps). A
+        # problem may quote a policy card's path for the GUI: the manifest names it portably.
+        cards = [pol.card for pol in (project.application.policies or []) if pol.card]
         for problem in template.validate(project):
-            ctx.manifest.warn(f'application: {problem}')
+            recorded = problem
+            for card in cards:
+                recorded = recorded.replace(f'"{card}"', f'"{ctx.portable(card)}"')
+            ctx.manifest.warn(f'application: {recorded}', local=f'application: {problem}')
 
         # In-tree AddCollisionObject is BOX-only, so a non-box object added in the tree
         # is emitted as its AABB. This ONLY applies to the from-scratch path; with a
@@ -66,16 +89,47 @@ class AppEmitter(Emitter):
         # themselves and only appear in perception.yaml for the record.
         per = project.perception
         detector_nodes = [d.name for d in per.detectors if d.emits_node] if per else []
+        # The second kind of method (D-015): a node of the project's own, launched beside
+        # the pure-python ones. Empty for every project without an external_node block, so
+        # a deterministic bundle stays byte-identical. The orchestrator has already
+        # REFUSED an incomplete block, so everything here is launchable.
+        external_detectors = external_node_context(project)
+        external_packages = external_node_packages(project)
+        for problem in external_node_warnings(project):
+            ctx.manifest.warn(f'perception: {problem}')
         if per and per.detectors:
             ctx.generate_to(f'{pkg}/config/perception.yaml',
                             build_perception_yaml(project),
                             source='perception_from_project')
-        # D-015 noise-filter params exist only from trainit_perception 0.2.0: on an
-        # older runtime they merge silently into params and are IGNORED — the deployed
-        # mask would differ from what was tuned, with no error. Pin the minimum.
-        _V015_KEYS = ('blur_px', 'depth_min_m', 'depth_max_m')
-        needs_v02 = any(k in d.params for d in (per.detectors if per else [])
-                        for k in _V015_KEYS)
+        # A perception parameter the deployed runtime does not know MERGES SILENTLY into
+        # params and is IGNORED: the cell would run with a mask, or an order, that is not
+        # the one that was configured, and nothing would say so. So every generation of
+        # parameters pins the trainit_perception version that reads it, and the floor is
+        # the HIGHEST pin the project's parameters demand.
+        #   0.2.0  D-015 noise filters (blur / depth band)
+        #   0.3.0  the candidate ranking (ADR-0017): candidate_rule + the terms' numbers,
+        #          and the grasp FACE (ADR-0018) — `grasp_face` is a key 0.3.0 already
+        #          READS, and the face parameters come from its own registry, so the
+        #          list is complete by construction instead of by maintenance.
+        #          Without this pin a bundle generated WITH a rule runs on a TP that
+        #          ignores it — publishing the model's own order under the name of a
+        #          ranking, which is the one failure ADR-0017 Decision 3 exists to stop.
+        #          A face family NEWER than the deployed TP is a different failure and a
+        #          safe one: `make_face` raises on a name it does not know, so the node
+        #          stops at start-up and says which faces it has. The pin exists for the
+        #          SILENT case — a parameter that merges into params and is ignored.
+        #          Every floor is trainit_perception's own date for the parameter, read from
+        #          TSA's snapshot of its vocabulary (`param_floors`, ADR-0021 amendment M2.2):
+        #          a floor kept here as a literal has to be remembered on the other side of a
+        #          repository boundary -- and it already was not: `tool_max_tilt_deg` arrived
+        #          in 0.4.0 and would have been written under a 0.3.0 floor, which is the
+        #          silent case this exists for. The noise filters' 0.2.0 is TP's date too.
+        detector_param_keys = set()
+        for d in (per.detectors if per else []):
+            detector_param_keys |= set(detector_params(project, d))
+        floors = param_floors()
+        candidates = [floors[k] for k in detector_param_keys if k in floors]
+        perception_min_version = (max(candidates, key=version_key) if candidates else None)
         # bootstrap flow (no base config): the camera extras live in the scene-loader
         # emitter only — say so instead of silently dropping them.
         if per and per.camera and not robot.base_moveit_config_path:
@@ -94,7 +148,11 @@ class AppEmitter(Emitter):
                       tree_filename=tree_name,
                       default_planner_mode=app.global_planner_mode.value,
                       gazebo_supported=(Backend.GAZEBO in dep.modes),
-                      detectors=detector_nodes)
+                      # trainit_run_bt is a CLIENT of this robot's move_group, so it runs
+                      # in the robot slot; the detector nodes stay GLOBAL (ADR-0016).
+                      cell_namespace=cell_ns,
+                      detectors=detector_nodes,
+                      external_detectors=external_detectors)
 
         if robot.base_moveit_config_path:
             # Bundle flow: the trainit_config package HAS a full cell bringup (planners,
@@ -121,15 +179,28 @@ class AppEmitter(Emitter):
         else:
             # From-scratch bootstrap: no base config bringup exists — the app bringup
             # assembles move_group + controllers itself (and a mock gripper server).
+            if eef_dev is not None:
+                warning = namespace_isaac_warning(project, eef_dev)
+                if warning:
+                    ctx.manifest.warn(warning)
             ctx.render_to(f'{pkg}/launch/bringup.launch.py',
                           'app/bringup_bootstrap.launch.py.j2',
                           robot_name=robot.robot_name,
+                          # this flow's bring-up IS the cell bring-up, so the robot slot
+                          # lands here (ADR-0016); empty => byte-identical.
+                          cell_namespace=cell_ns,
+                          # MoveIt Servo node (ADR-0015): this flow's bring-up IS the
+                          # cell bring-up, so the servo_node lives here, reading the
+                          # moveit_config package's config/servo.yaml. Gated on the same
+                          # fact that emits that file, so an all-`plan` project is
+                          # byte-identical.
+                          servo=app.uses_servo(),
                           moveit_config_package=project.bundle.moveit_config_package,
                           app_package=pkg,
                           arm_controller=robot.arm_controller.name,
                           valid_modes_py=repr(tuple(m.value for m in dep.modes)),
                           arm_js_remap_to_py=repr(dep.arm_joint_states_remap_to),
-                          bridges_py=repr([b.dict() for b in dep.bridges]),
+                          bridges_py=repr(bridges_with_adapters(project)),
                           real_include_py=(repr(dep.real_include.dict())
                                            if dep.real_include else 'None'),
                           default_mode=dep.default_mode.value,
@@ -145,10 +216,10 @@ class AppEmitter(Emitter):
                           # mock gripper: run the generated no-op server in mock mode when
                           # a gripper exists but no cell bridge serves it (empty bridges).
                           gripper_mock_action_py=(repr(gripper_action)
-                                                  if gripper_present else 'None'))
+                                                  if legacy_gripper else 'None'))
 
         # --- mock gripper action server (GENERATE, only if the robot has a gripper) ---
-        if gripper_present:
+        if legacy_gripper:
             ctx.render_to(f'{pkg}/scripts/mock_gripper_action_server.py',
                           'app/mock_gripper_action_server.py.j2',
                           make_executable=True,          # installed with install(PROGRAMS)
@@ -160,6 +231,9 @@ class AppEmitter(Emitter):
         if robot.base_moveit_config_path:
             ctx.render_to(f'{pkg}/README.md', 'app/README.md.j2',
                           robot_name=robot.robot_name, app_type=app.type.value,
+                          # the streamed-moves section + the servo.yaml row (ADR-0015):
+                          # gated, so an all-`plan` bundle's README is byte-identical
+                          servo=app.uses_servo(),
                           app_package=pkg,
                           moveit_config_package=project.bundle.moveit_config_package,
                           description_package=project.bundle.description_package,
@@ -174,17 +248,47 @@ class AppEmitter(Emitter):
         ctx.generate_to(f'{pkg}/groot2/{robot.robot_name}_{app.type.value}.btproj',
                         btproj_text, source='app/btproj.j2')
 
+        # --- what this package needs to RUN (vNext M2.4, ADR-0021 amendment M2.4): the oldest
+        # TMR that has every capability its tree, bt_params and launch files use, and the
+        # learned-policy runtime iff a tree runs RunPolicy or a launch file starts its node. Read
+        # from the files this generation wrote, never from an installed component or the
+        # capability snapshot.
+        use = use_of(trees=ctx.written(f'{pkg}/bt_trees/', '.xml'),
+                     bt_params=ctx.written(f'{pkg}/config/', 'bt_params.yaml'),
+                     launches=ctx.written(f'{pkg}/launch/', '.py'))
+        for unreadable in use.unreadable:
+            ctx.manifest.warn(f'runtime requirement: {unreadable} does not parse -- the bundle '
+                              f'will not run as generated; trainit_motion_runtime is required at '
+                              f'the newest version TSA dates')
+        tmr = requirement(use, needs=('trainit_run_bt',))
+        # ADR-0022 [D]: the hardware layer, versioned, iff THIS package's launch files start one
+        # of its adapters (the from-scratch bring-up does; the scene-loader flow's config does).
+        hardware = (hardware_layer_requirement(ctx.written(f'{pkg}/launch/', '.py'))
+                    if eef_dev is not None else None)
+
         # --- package files (TEMPLATE) ---
         ctx.render_to(f'{pkg}/package.xml', 'app/package.xml.j2',
                       package_name=pkg, meta=project.meta, robot_name=robot.robot_name,
                       app_type=app.type.value,
                       moveit_config_package=project.bundle.moveit_config_package,
                       description_package=project.bundle.description_package,
-                      bridge_packages=dep.bridge_packages(),
+                      bridge_packages=[p for p in dep.bridge_packages()
+                                       if not (hardware and p == HARDWARE_LAYER)],
                       has_perception=bool(detector_nodes),
-                      perception_min_version=('0.2.0' if needs_v02 else None))
+                      # DOCUMENTED, never declared (ADR-0003): an external detector's
+                      # package is usually customer IP that is not in this workspace and
+                      # has no rosdep key, so an <exec_depend> on it would make
+                      # `rosdep install --from-paths src` fail for everyone. Empty list
+                      # => the manifest is byte-identical.
+                      external_packages=external_packages,
+                      # the from-scratch bring-up (above) runs the servo_node from this
+                      # package's launch, so it must declare moveit_servo (ADR-0015)
+                      servo_dep=(app.uses_servo()
+                                 and not robot.base_moveit_config_path),
+                      perception_min_version=perception_min_version,
+                      tmr=tmr, policy_runtime=use.policy_runtime, hardware_layer=hardware)
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'app/CMakeLists.txt.j2',
-                      package_name=pkg, has_gripper_script=gripper_present,
+                      package_name=pkg, has_gripper_script=legacy_gripper,
                       has_policies=bool(project.application.policies))
 
     def _emit_policies(self, project, ctx: GenContext, pkg: str) -> None:
@@ -204,9 +308,9 @@ class AppEmitter(Emitter):
         for pol in app.policies:
             dest_dir = f'{pkg}/policies/{pol.name}'
             if not pol.card or not os.path.isfile(pol.card):
-                ctx.manifest.warn(
-                    f'policy "{pol.name}": card not found at "{pol.card}" — not shipped; '
-                    f'add it under {dest_dir}/ by hand')
+                ctx.warn_path(lambda shown: f'policy "{pol.name}": card not found at '
+                                            f'"{shown}" — not shipped; add it under '
+                                            f'{dest_dir}/ by hand', pol.card)
                 continue
             ctx.copy_file(pol.card, f'{dest_dir}/policy_card.yaml')
             try:
@@ -225,9 +329,13 @@ class AppEmitter(Emitter):
                     ctx.copy_file(src, f'{dest_dir}/{os.path.basename(rel)}')
                     shipped_any = True
                 else:
+                    # the card's own entry may be absolute or climb out of its directory: the
+                    # manifest names the file it points at portably, the user sees the entry
                     ctx.manifest.warn(
-                        f'policy "{pol.name}": card lists "{rel}" but it is not beside the '
-                        f'card — ship it into {dest_dir}/ by hand')
+                        f'policy "{pol.name}": card lists "{ctx.portable(src)}" but it is not '
+                        f'beside the card — ship it into {dest_dir}/ by hand',
+                        local=f'policy "{pol.name}": card lists "{rel}" but it is not beside the '
+                              f'card — ship it into {dest_dir}/ by hand')
             if not shipped_any:
                 ctx.manifest.warn(
                     f'policy "{pol.name}": no exported policy file (.pt/.onnx) shipped — '

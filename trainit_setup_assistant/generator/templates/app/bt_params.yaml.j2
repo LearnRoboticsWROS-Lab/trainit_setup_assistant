@@ -23,6 +23,12 @@
     gripper_cmd_topic: "{{ g.gripper_cmd_topic }}"
 {% endif %}
 {% endif %}
+{% if g.eef_block %}
+    # The end-effector contract (ADR-0022): every actuator, grasp site and the verification
+    # policy, resolved. trainit_run_bt and the device's adapter read this same block; the
+    # actuators are commanded on their own standard interfaces at RELATIVE names.
+{{ g.eef_block }}
+{% endif %}
 
     task_parameters:
 {% for key, vals in scene_params %}

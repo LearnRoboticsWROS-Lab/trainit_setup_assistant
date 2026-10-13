@@ -14,7 +14,12 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <!-- framework: planner pipelines + the scene loader node -->
-  <exec_depend>trainit_motion_runtime</exec_depend>
+  <!-- {{ tmr.comment }} -->
+  <exec_depend version_gte="{{ tmr.version }}">trainit_motion_runtime</exec_depend>
+{% if hardware_layer %}
+  <!-- {{ hardware_layer.comment }} -->
+  <exec_depend version_gte="{{ hardware_layer.version }}">trainit_hardware_layer</exec_depend>
+{% endif %}
 {% if camera_cloud_dep %}
   <exec_depend>depth_image_proc</exec_depend>
 {% endif %}
@@ -26,6 +31,11 @@
   <exec_depend>pilz_industrial_motion_planner</exec_depend>
   <exec_depend>moveit_planners_ompl</exec_depend>
   <exec_depend>moveit_planners_chomp</exec_depend>
+{% if servo_dep %}
+  <!-- MoveIt Servo (ADR-0015): this cell streams at least one move, so the bring-up
+       runs an out-of-process servo_node configured by config/servo.yaml -->
+  <exec_depend>moveit_servo</exec_depend>
+{% endif %}
   <exec_depend>xacro</exec_depend>
 
   <!-- bring-up: controllers, state publisher, sim hardware, viewer -->

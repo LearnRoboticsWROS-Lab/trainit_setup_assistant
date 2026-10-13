@@ -49,6 +49,28 @@ The first two are configurable at wizard Step 2, and the gripper one is **auto-d
 from the stage's ActionGraph (the TSA reads every `std_msgs/Bool` `ROS2Subscriber`), so
 naming your subscriber correctly is usually all it takes.
 
+The table above is the **LEGACY** contract: what a project without an end-effector contract
+gets, unchanged. A project that opts in to the **canonical end-effector contract** (ADR-0022)
+keeps the stage as it is and changes who talks to it:
+
+| Channel | Type | Who | Meaning |
+|---|---|---|---|
+| stage command (the Bool `ROS2Subscriber` detected at Step 2) | `std_msgs/Bool`, latched | `isaac_eef_adapter` (trainit_hardware_layer) → cell | `true` = close. The adapter's required `stage_cmd_topic`; it republishes the applied value, starts released, and refuses a command while the stage has no subscriber |
+| stage status (optional) | `std_msgs/String` `"<Open\|Closing\|Closed> <gripped count>"` | cell → `isaac_eef_adapter` | the SurfaceGripper's status, read BY NAME, as simulator ground truth. Without it the adapter reports no grasp detection (the site is UNAVAILABLE): a grasp is never inferred from the command echo |
+| scene reset (`scene.scene_reset_topic`) | `std_msgs/Bool` | `scene_manager_node` → cell, and the adapter listens | as above; the adapter records the reset's opening as a release. Always written for a canonical isaac project: the project's topic, else `/isaac_scene_reset` -- relative (`isaac_scene_reset`) under a cell namespace |
+| `eef/<id>/engaged` | `std_msgs/Bool`, latched | the adapter → `scene_manager_node` | the scene signal: the APPLIED engage, which attaches in the planning scene. The stage never publishes it |
+
+- The robot side of the contract is the adapter's, not the stage's: `eef/<id>/state`
+  (`trainit_interfaces/EndEffectorState`) and the SetBool `eef/<id>/actuators/<a>/set_engaged`,
+  relative to the robot's cell namespace.
+- `/isaac_release_policy` is not emitted for a canonical project.
+- Under a cell namespace the stage's channels are per robot, and each robot's SurfaceGripper is
+  bound by its prim path (not "the first SurfaceGripper of the stage"): an absolute stage topic
+  outside the namespace is refused (give it relative), and the generation warns with the RESOLVED
+  names the stage must bind and reset on (e.g. `/r1/suction_cmd`, `/r1/isaac_scene_reset`).
+- No stage of this kit publishes the status today. Until one does, a canonical Isaac project
+  cannot require grasp confirmation (ADR-0022 EEF-D5).
+
 ---
 
 ## Procedure for a new cell

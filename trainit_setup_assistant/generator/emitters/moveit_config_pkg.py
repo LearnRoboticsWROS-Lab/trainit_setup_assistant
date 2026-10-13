@@ -12,6 +12,9 @@ from typing import Optional, Sequence
 
 from ...model.enums import Backend, GripperKind
 from ...robotmodel.srdf_builder import DisablePair, build_srdf
+from ..namespace import cell_namespace
+from ..runtime_requirements import requirement, use_of
+from ..servo_yaml import build_servo_context
 from .base import Emitter, GenContext
 
 
@@ -26,8 +29,11 @@ class MoveitConfigEmitter(Emitter):
         def cfg(name: str) -> str:
             return f'{pkg}/config/{name}'
 
+        # A COMPOSITE device's tool joints, controllers and named states: TSA never generates
+        # them (ADR-0022 F7; generating them is vNext M6). A composite mock bundle gets nothing
+        # of the tool in ros2_control, the controllers or the SRDF (test F7).
         gripper_present = (
-            robot.gripper.kind is not GripperKind.NONE
+            robot.gripper.kind not in (GripperKind.NONE, GripperKind.COMPOSITE)
             and bool(robot.gripper.controller_name)
         )
 
@@ -46,13 +52,23 @@ class MoveitConfigEmitter(Emitter):
         ctx.render_to(cfg('pilz_cartesian_limits.yaml'),
                       'moveit_config/pilz_cartesian_limits.yaml.j2',
                       pilz=robot.pilz_cartesian_limits)
+        # node keys follow the robot slot ('/**/' under a namespace, bare at the root:
+        # byte-identical) -- a bare key binds nothing under /r3 (vNext M0C #5)
         ctx.render_to(cfg('ros2_controllers.yaml'), 'moveit_config/ros2_controllers.yaml.j2',
-                      arm=robot.arm_controller, joints=group.joints)
+                      arm=robot.arm_controller, joints=group.joints,
+                      node_key='/**/' if cell_namespace(project) else '')
         ctx.render_to(cfg('moveit_controllers.yaml'), 'moveit_config/moveit_controllers.yaml.j2',
                       arm=robot.arm_controller, joints=group.joints,
                       gripper_present=gripper_present, grip=robot.gripper)
         ctx.render_to(cfg('initial_positions.yaml'), 'moveit_config/initial_positions.yaml.j2',
                       initial_positions=robot.initial_positions)
+        # MoveIt Servo (ADR-0015): only when a move chose `execution: servo`. The
+        # from-scratch flow keeps the servo_node in the app bring-up (which is where this
+        # flow assembles move_group), so the app emitter gates the launch entry on the
+        # same fact — an all-`plan` project emits neither file nor node.
+        if project.application.uses_servo():
+            ctx.render_to(cfg('servo.yaml'), 'moveit_config/servo.yaml.j2',
+                          **build_servo_context(project))
 
         # --- xacros (TEMPLATE) ---
         ros2_control_name = f'{robot.robot_name.upper()}System'
@@ -71,13 +87,22 @@ class MoveitConfigEmitter(Emitter):
                       gazebo_supported=gazebo_supported,
                       gripper_command_joint=(robot.gripper.command_joint
                                              if gripper_present else None))
+        # RViz runs at the ROOT even for a namespaced cell (the MotionPlanning plugin
+        # builds no interactive marker from inside a namespace), so what it needs is the
+        # move_group namespace + the namespaced scene/trajectory topics in the config.
+        # Empty namespace => byte-identical to the pre-ADR-0016 file.
         ctx.render_to(cfg('moveit.rviz'), 'moveit_config/moveit.rviz.j2',
-                      base_frame=robot.base_frame)
+                      base_frame=robot.base_frame,
+                      cell_namespace=cell_namespace(project))
 
         # --- package files (TEMPLATE) ---
+        # This package launches nothing: TMR's launch helper READS its files, so its TMR floor
+        # is the first version TMR's package.xml stated (vNext M2.4).
         ctx.render_to(f'{pkg}/package.xml', 'moveit_config/package.xml.j2',
                       package_name=pkg, meta=project.meta, robot_name=robot.robot_name,
-                      description_package=project.bundle.description_package)
+                      servo_dep=project.application.uses_servo(),
+                      description_package=project.bundle.description_package,
+                      tmr=requirement(use_of()))
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'moveit_config/CMakeLists.txt.j2',
                       package_name=pkg)
 

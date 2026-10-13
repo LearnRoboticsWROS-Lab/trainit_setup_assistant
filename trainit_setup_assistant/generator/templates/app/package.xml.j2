@@ -12,7 +12,12 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <exec_depend>trainit_motion_runtime</exec_depend>
+  <!-- {{ tmr.comment }} -->
+  <exec_depend version_gte="{{ tmr.version }}">trainit_motion_runtime</exec_depend>
+{% if hardware_layer %}
+  <!-- {{ hardware_layer.comment }} -->
+  <exec_depend version_gte="{{ hardware_layer.version }}">trainit_hardware_layer</exec_depend>
+{% endif %}
 {% if has_perception %}
 {% if perception_min_version %}
   <exec_depend version_gte="{{ perception_min_version }}">trainit_perception</exec_depend>
@@ -20,11 +25,42 @@
   <exec_depend>trainit_perception</exec_depend>
 {% endif %}
 {% endif %}
+{% if policy_runtime %}
+  <!-- the learned-policy runtime (ADR-0005) that this package's policy step uses. Unversioned:
+       0.1.0 is the only version its package.xml has stated -->
+  <exec_depend>trainit_policy_runtime</exec_depend>
+{% endif %}
+{% if external_packages %}
+  <!-- EXTERNAL-NODE detector(s) (D-015): this bundle's trainit_bt.launch.py LAUNCHES
+{% for pkg in external_packages %}
+         {{ pkg }}
+{% endfor %}
+       but deliberately does NOT depend on them. They implement a detection method
+       outside trainit_perception and publish the same contract
+       (vision_msgs/Detection3DArray on /perception/<name>/detections).
+
+       Why no <exec_depend>: ADR-0003 — Community installs with rosdep, and `rosdep
+       install` over a source workspace fails with "cannot locate rosdep definition" for
+       any package name that is neither a rosdep key nor present in that workspace. An
+       external detector is normally customer IP, shipped separately or not at all, so
+       declaring it here would break the install of the WHOLE workspace for everyone,
+       including people who never run this cell. Instead the dependency fails where it
+       is used: `ros2 launch` reports the missing package by name the moment you start
+       the application.
+
+       To run this cell: install the package(s) above into the same workspace (or any
+       sourced overlay) before launching. -->
+{% endif %}
   <exec_depend>{{ moveit_config_package }}</exec_depend>
   <exec_depend>{{ description_package }}</exec_depend>
 
   <exec_depend>moveit_ros_move_group</exec_depend>
   <exec_depend>moveit_configs_utils</exec_depend>
+{% if servo_dep %}
+  <!-- MoveIt Servo (ADR-0015): the from-scratch bring-up in this package runs the
+       out-of-process servo_node for the cell's `execution: servo` moves -->
+  <exec_depend>moveit_servo</exec_depend>
+{% endif %}
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>

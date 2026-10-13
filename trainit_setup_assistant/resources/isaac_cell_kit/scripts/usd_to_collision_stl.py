@@ -9,8 +9,8 @@ include a group that has no mesh resource. The mesh must live in a ROS package a
 ``<mesh_pkg>/meshes/<...>.stl`` and be discoverable in that package's INSTALLED share
 (``importers/usd_scene.py`` -> ``_resolve_meshes_dir``).
 
-THE CONTRACT THIS TOOL IMPLEMENTS (verified against the BIG1500 reference cell)
-------------------------------------------------------------------------------
+THE CONTRACT THIS TOOL IMPLEMENTS (verified against a real industrial cell)
+--------------------------------------------------------------------------
 1. Units: **metres**. STL carries no units, so ``metersPerUnit`` is baked in here.
 2. Frame: the prim's **local** frame. TSA takes the object's pose from the USD prim and
    the geometry from the STL, so the STL must NOT have the prim's own transform baked in

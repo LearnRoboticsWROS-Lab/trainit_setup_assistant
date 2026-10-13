@@ -43,8 +43,9 @@ from python_qt_binding.QtWidgets import (
     QWizardPage,
 )
 
-from ..model.enums import (EndEffectorActuation, GripperJointTarget,
-                          SimGraspAdapter)
+from ..model.enums import (CandidateRule, EndEffectorActuation, ExecutionMode,
+                           GripperJointTarget, MotionType, PlannerId, SimGraspAdapter)
+from ..model.task import effective_planner
 from .controller import AssistantController
 
 
@@ -437,7 +438,7 @@ class ScenePage(QWizardPage):
         self.mesh_pkg.setPlaceholderText('mesh package: USD scan pkg, or (.world) the ROS pkg hosting the gazebo models')
         usd_form.addRow('Mesh package', self.mesh_pkg)
         # scene-loader attach param (not in the USD): links near the tool allowed to
-        # touch a grasped object (self-collision relief). BIG1500: end_effector, tcp, wrist3_link.
+        # touch a grasped object (self-collision relief), e.g. end_effector, tcp, wrist3_link.
         self.touch_links = QLineEdit('tcp')
         usd_form.addRow('Tool touch links (csv)', self.touch_links)
         # The two ROS contract topics scene_manager_node needs. They are NOT derivable
@@ -633,7 +634,7 @@ class ScenePage(QWizardPage):
             self.status.setText(
                 f'⚠ NO MESHES FOUND for package "{pkg}" — every suggestion is EMPTY, so the '
                 f'scene would not render. Check the Mesh package name (it must be the ROS '
-                f'package that ships meshes/, e.g. big1500_isaac).')
+                f'package that ships meshes/, e.g. my_cell_isaac).')
         else:
             self.status.setText(
                 f'{len(self._rules)} prim groups · scanned {mdir} ({len(stls)} STLs) · '
@@ -826,6 +827,42 @@ class PerceptionPage(QWizardPage):
                ('pcl_cluster', 'PCL 3D cluster (C++ node)', False),
                ('custom', 'Custom node (expert)', False)]
 
+    # WHICH candidate goes out first — and therefore THE RANKING (ADR-0017 Decision 1:
+    # the rank is a DETECTOR parameter, so it belongs beside the detector's parameters).
+    # Every shipped rule is listed and the ones THIS detector cannot compute are GREYED,
+    # the same way the roadmap methods above are: a rule a configurator can pick but the
+    # node would refuse is worse than no choice at all. The `score x …` family is what a
+    # colour mask can actually rank by — it publishes a score, a box and a mask area and
+    # runs no 3D fit, so `pose_quality` (and with it every `candidate_*` rule) is out.
+    RULES = [
+        (CandidateRule.AUTO.value,
+         'auto  (the best rule this detector can compute)'),
+        (CandidateRule.CANDIDATE_X_VISIBLE.value,
+         'candidate x visible face  (measured best, needs a 3D fit)'),
+        (CandidateRule.SCORE_X_VISIBLE.value,
+         'score x visible face  (the same idea without a 3D fit)'),
+        (CandidateRule.CANDIDATE_2D3D.value,
+         'candidate only  (score x pose quality)'),
+        (CandidateRule.CANDIDATE_X_NONOVERLAP.value,
+         'candidate x non-overlap  (boxes)'),
+        (CandidateRule.SCORE_X_NONOVERLAP.value,
+         'score x non-overlap  (boxes only — any detector)'),
+        (CandidateRule.CANDIDATE_X_CLEARANCE.value,
+         'candidate x tool clearance  (needs the tool numbers)'),
+        (CandidateRule.SCORE_X_CLEARANCE.value,
+         'score x tool clearance'),
+        (CandidateRule.SCORE.value,
+         'score alone'),
+        (CandidateRule.DETECTOR_ORDER.value,
+         "detector order  (an EXPLICIT 'no ranking')"),
+        # the edge_on pair (ADR-0021, M2.2): both need a 3D fit and the tool's tilt limit
+        # (`tool_max_tilt_deg` in the detector's params), so the colour mask greys them
+        (CandidateRule.CANDIDATE_X_SQUARE.value,
+         'candidate x square to the tool  (3D fit + a tilt limit)'),
+        (CandidateRule.CANDIDATE_X_VISIBLE_X_SQUARE.value,
+         'candidate x visible x square  (3D fit, face size, tilt limit)'),
+    ]
+
     def __init__(self, ctrl: AssistantController):
         super().__init__()
         self.ctrl = ctrl
@@ -919,6 +956,42 @@ class PerceptionPage(QWizardPage):
         mrow.addRow('Method', self.method)
         self.p_class = QLineEdit('object')
         mrow.addRow('Class id', self.p_class)
+        # the ranking, beside the detector's own parameters (ADR-0017 Decision 1): the
+        # rule's ONLY effect is the permutation the detector applies before it publishes,
+        # so it is configured here and not on the application's DetectObject.
+        self.p_rule = QComboBox()
+        self.p_rule.addItem('(unset — the runtime\'s own order)', '')
+        for tok, label in self.RULES:
+            self.p_rule.addItem(label, tok)
+        self.p_rule.setToolTip(
+            'WHICH candidate is published first — and the published ORDER *is* the '
+            'ranking the application retries through (ADR-0016). Every term still goes '
+            'out per candidate; this says which one sorts. "visible face" is the '
+            'measured default; "tool clearance" needs the end-effector\'s footprint '
+            'radius and grip window (Step 7 -> End-effector), and generation REFUSES a '
+            'rule whose terms this project cannot compute.')
+        self.p_rule.currentIndexChanged.connect(self._rule_hint)
+        mrow.addRow('Candidate rule', self.p_rule)
+        # The ranking's DENOMINATOR, beside the rule that divides by it (ADR-0018): the
+        # grasp face is measured on the object's own CAD instead of approximated from its
+        # bounding box, which on the reference capsule is 28,10 mm against a true 20,95 mm.
+        # It is configured here because this is where `visible_fraction` is chosen, and it
+        # is written onto the grasp TARGET, where shape and dims already live.
+        facerow = QHBoxLayout()
+        self.face_summary = QLabel('')
+        self.face_summary.setWordWrap(True)
+        self.face_btn = QPushButton('Measure grasp face…')
+        self.face_btn.setToolTip(
+            'Load the grasp target\'s mesh, click the face the tool comes down on, and '
+            'TSA writes the MEASURED size into the detector — three orthographic views, '
+            'no new dependency. STEP is read exactly when this machine has a headless '
+            'FreeCAD. Without this the face is approximated from the bounding box, which '
+            'over-states the area visible_fraction divides by (+80 % on the reference '
+            'capsule).')
+        self.face_btn.clicked.connect(self._measure_grasp_face)
+        facerow.addWidget(self.face_summary, 1)
+        facerow.addWidget(self.face_btn)
+        mrow.addRow('Grasp face', facerow)
         right.addLayout(mrow)
 
         params = QGroupBox('Colour mask parameters (tuned live)')
@@ -1067,6 +1140,102 @@ class PerceptionPage(QWizardPage):
         self.p_zmin.setValue(float(p.get('depth_min_m', 0.0)))
         self.p_zmax.setValue(float(p.get('depth_max_m', 0.0)))
 
+    def _detector_from_form(self) -> dict:
+        """The DetectorSpec-shaped dict this page holds per name. ``candidate_rule`` is
+        a FIELD beside ``params``, not a params key: the generator writes it into the
+        file's params (where the runtime reads it) only when it is set, which is what
+        keeps a project that never configured a ranking byte-identical (ADR-0017)."""
+        return {'method': 'color_mask',
+                'params': self._params_from_form(),
+                'candidate_rule': self.p_rule.currentData() or '',
+                'continuous': self.p_cont.isChecked(),
+                'rate_hz': self.p_rate.value()}
+
+    def _rule_hint(self) -> None:
+        """Warn, while the user is still choosing, when the selected rule's terms are
+        not computable from this project — the generator REFUSES such a rule (ADR-0017
+        Decision 3) and the refusal is more useful here than at generation."""
+        rule = self.p_rule.currentData() or ''
+        if not rule or self.ctrl.project is None:
+            return
+        try:
+            problem = self.ctrl.candidate_rule_problem(rule, params=self._params_from_form())
+        except Exception:                      # noqa: BLE001 - a hint must never block
+            return
+        if problem:
+            self._status(problem)
+        else:
+            self._status(f'candidates will be published best first by {rule}', ok=True)
+
+    def _refresh_face(self) -> None:
+        """Show what the ranking's face area currently IS — measured, or approximated."""
+        if self.ctrl.project is None:
+            return
+        try:
+            self.face_summary.setText(self.ctrl.grasp_face_summary())
+            self.face_btn.setEnabled(self.ctrl.grasp_face_target() is not None)
+        except Exception:                      # noqa: BLE001 - never block the page
+            return
+
+    def _measure_grasp_face(self) -> None:
+        """Open the picker, and write what it measured onto the grasp target.
+
+        The dialog itself never touches the project (it is usable with no project at all):
+        it hands back the face name, the parameters and the provenance, and this is the one
+        place that decides to keep them.
+        """
+        info = self.ctrl.grasp_face_target() if self.ctrl.project else None
+        if info is None:
+            self._status('No grasp target in the scene: mark the picked object as a '
+                         'dynamic grasp target in the Scene step first — the grasp face '
+                         'is a property of the object that is picked.')
+            return
+        from .face_picker import GraspFacePicker
+        dialog = GraspFacePicker(self, mesh_path=info['mesh'], scale=info['scale'],
+                                 face=info['face'], params=info['params'])
+        if not dialog.exec_():
+            return
+        face, params, source = dialog.result_face()
+        try:
+            self.ctrl.set_grasp_face(face, params, source)
+        except RuntimeError as exc:
+            self._status(str(exc))
+            return
+        self._refresh_face()
+        self._refresh_rules()                  # a measured face can UNLOCK visible_fraction
+        self._rule_hint()
+        if params:
+            numbers = ', '.join(f'{k}={v:.5f}' for k, v in sorted(params.items()))
+            self._status(f'grasp face measured on "{info["id"]}": {face} — {numbers}',
+                         ok=True)
+        else:
+            self._status(f'grasp face measurement CLEARED on "{info["id"]}" — the '
+                         f'bounding-box approximation is in charge again')
+
+    def _refresh_rules(self) -> None:
+        """Grey the rules THIS detector cannot compute and pre-select the measured best
+        among the rest (ADR-0017 Decision 4). Mirrors how the method combo greys its
+        roadmap entries — the enabled set is the answer to "what can this cell rank by",
+        and it depends on the scene's grasp target and the tool as much as on the method."""
+        if self.ctrl.project is None:
+            return
+        try:
+            offered, preferred = self.ctrl.candidate_rules_for(
+                params=self._params_from_form())
+        except Exception:                      # noqa: BLE001 - never block the page
+            return
+        tokens = {r.value for r in offered}
+        model = self.p_rule.model()
+        for i, (tok, _) in enumerate(self.RULES):
+            model.item(i + 1).setEnabled(tok in tokens)      # +1: the "(unset)" row
+        if self.p_rule.currentIndex() == 0:
+            j = self.p_rule.findData(preferred.value)
+            if j > 0:
+                # pre-select without arming it: the rule still only lands in the file when
+                # the user saves the detector, so an untouched project stays byte-identical
+                self.p_rule.setItemText(
+                    j, f'{dict(self.RULES)[preferred.value]}   [recommended]')
+
     # ---- detector list -------------------------------------------------------
     def _add_detector(self) -> None:
         name = self.det_name.text().strip()
@@ -1081,10 +1250,7 @@ class PerceptionPage(QWizardPage):
                 'letter (e.g. red_cube).')
             return
         self._deleted.discard(name)
-        self._detectors[name] = {'method': 'color_mask',
-                                 'params': self._params_from_form(),
-                                 'continuous': self.p_cont.isChecked(),
-                                 'rate_hz': self.p_rate.value()}
+        self._detectors[name] = self._detector_from_form()
         self._refresh_list(select=name)
 
     def _save_detector(self) -> None:
@@ -1093,10 +1259,7 @@ class PerceptionPage(QWizardPage):
         if not name:
             self._status('Select (or name) a detector to save into.')
             return
-        self._detectors[name] = {'method': 'color_mask',
-                                 'params': self._params_from_form(),
-                                 'continuous': self.p_cont.isChecked(),
-                                 'rate_hz': self.p_rate.value()}
+        self._detectors[name] = self._detector_from_form()
         self._refresh_list(select=name)
         self._status(f'saved detector "{name}" — it becomes perception.yaml entry, '
                      f'node detector_{name} and topic /perception/{name}/detections',
@@ -1113,6 +1276,8 @@ class PerceptionPage(QWizardPage):
         d = self._detectors.get(name)
         if d:
             self._form_from_params(d['params'])
+            i = self.p_rule.findData(d.get('candidate_rule') or '')
+            self.p_rule.setCurrentIndex(i if i >= 0 else 0)
             self.p_cont.setChecked(bool(d.get('continuous', True)))
             self.p_rate.setValue(float(d.get('rate_hz', 10.0)))
 
@@ -1269,9 +1434,13 @@ class PerceptionPage(QWizardPage):
             if d.name not in self._detectors and d.name not in self._deleted:
                 self._detectors[d.name] = {'method': d.method.value,
                                            'params': dict(d.params),
+                                           'candidate_rule': (d.candidate_rule.value
+                                                              if d.candidate_rule else ''),
                                            'continuous': d.continuous,
                                            'rate_hz': d.rate_hz}
         self._refresh_list()
+        self._refresh_rules()
+        self._refresh_face()
         # Auto-scan the live graph so the preview works against ANY simulator (the
         # RealSense-style defaults do not match a Gazebo libgazebo_ros_camera cell).
         self._autosniff()
@@ -1328,7 +1497,8 @@ class PerceptionPage(QWizardPage):
             try:
                 self.ctrl.upsert_detector(name, method=d['method'], params=d['params'],
                                           continuous=d['continuous'],
-                                          rate_hz=d['rate_hz'])
+                                          rate_hz=d['rate_hz'],
+                                          candidate_rule=d.get('candidate_rule') or None)
             except ValueError as exc:
                 self._status(str(exc))
                 return False
@@ -1340,6 +1510,7 @@ class ApplicationPage(QWizardPage):
     # (saved projects carry them); labels are the product names (D-015).
     APPS = [('pick_and_place', 'Blind pick and place', True),
             ('vision_guided_motion', 'Vision guided motion', True),
+            ('bin_picking', 'Bin picking (emptying loop)', True),
             ('gluing', 'Gluing', False), ('follow_path', 'Follow path', False),
             ('waypoint_replay', 'Waypoint replay', False), ('cnc', 'CNC tending', False)]
 
@@ -1350,8 +1521,11 @@ class ApplicationPage(QWizardPage):
         self.setSubTitle('Pick the robotic application. "Vision guided motion" is the '
                          'editable sequence with vision blocks: waypoints, EEF trigger, '
                          'per-segment planner, and the detectors from Step 5 bound to '
-                         'waypoints. Greyed entries are roadmap. Motion type + planner '
-                         'are chosen PER WAYPOINT in the next step.')
+                         'waypoints. "Bin picking" adds the emptying LOOP: ranked '
+                         'candidates, a retry over them, a check that the object really '
+                         'came up, and a recovery step when the bin stalls. Greyed '
+                         'entries are roadmap. Motion type + planner are chosen PER '
+                         'WAYPOINT in the next step.')
         form = QFormLayout(self)
         self.app_type = QComboBox()
         for _, label, enabled in self.APPS:
@@ -1360,7 +1534,59 @@ class ApplicationPage(QWizardPage):
         for i, (_, _, enabled) in enumerate(self.APPS):
             if not enabled:
                 model.item(i).setEnabled(False)
+        self.app_type.currentIndexChanged.connect(self._on_app_changed)
         form.addRow('Application', self.app_type)
+
+        # --- the emptying loop (ADR-0016 Decision 4): CONFIGURATION, not code ---
+        self.bin_box = QGroupBox('Bin picking — the emptying loop')
+        bin_form = QFormLayout(self.bin_box)
+        self.bp_tries = QSpinBox(); self.bp_tries.setRange(1, 20)
+        self.bp_tries.setValue(3)
+        self.bp_tries.setToolTip(
+            'How many candidates to try per object delivered, in the order the detector '
+            'published them (best first). Also DetectObject\'s "keep", so the loop never '
+            'asks for candidates it cannot try.\n\nThe reference cell needed 3,33 '
+            'candidates per object delivered: with tries=1 two picks in three stop at the '
+            'first refusal, and the loss looks like a perception problem.')
+        bin_form.addRow('Candidates to try', self.bp_tries)
+        self.bp_holding = QCheckBox('verify the object actually came up (CheckRobotState)')
+        self.bp_holding.setChecked(True)
+        self.bp_holding.setToolTip(
+            'Checks the lift after the retreat. This is what turns "the gripper closed" '
+            'into "the object came up" — the two differ on 1 lift in 22 on the reference '
+            'cell, and each of those would otherwise be placed empty and counted as a '
+            'good pick. A failure here is not an error: it is what sends the retry to the '
+            'next candidate.')
+        bin_form.addRow('Holding check', self.bp_holding)
+        self.bp_attached = QLineEdit()
+        self.bp_attached.setPlaceholderText('/suction/attached')
+        self.bp_attached.setToolTip('std_msgs/Bool, true while the object is held — the '
+                                    'signal the holding check reads. REQUIRED while the '
+                                    'holding check is on: CheckRobotState has no default '
+                                    'topic, so generation is refused without it.')
+        bin_form.addRow('Held-object topic', self.bp_attached)
+        self.bp_recovery = QLineEdit()
+        self.bp_recovery.setPlaceholderText('empty = no recovery, only log "bin empty"')
+        self.bp_recovery.setToolTip(
+            'The cell-I/O channel pulsed when the bin stalls — "nothing detected" and '
+            '"no candidate worked" are the same stall to an operator, so one branch '
+            'treats both.\n\nThe tree emits the STEP (EnableProcess / wait / '
+            'DisableProcess on this channel). What the channel ACTUATES is CELL I/O '
+            '(ADR-0013): a shake is a machine with an amplitude, a frequency and a '
+            'direction, and it belongs to the cell, not to this application.')
+        bin_form.addRow('Stall recovery channel', self.bp_recovery)
+        self.bp_dwell = QSpinBox(); self.bp_dwell.setRange(0, 60000)
+        self.bp_dwell.setSingleStep(100); self.bp_dwell.setValue(1500)
+        self.bp_dwell.setToolTip('How long the channel stays enabled (ms).')
+        bin_form.addRow('Recovery dwell (ms)', self.bp_dwell)
+        form.addRow(self.bin_box)
+        self.bin_box.setVisible(False)
+
+    def _on_app_changed(self, idx: int) -> None:
+        # The loop panel belongs to ONE application; showing it for the others would
+        # suggest the fields do something there (they do not — only bin_picking reads them).
+        token = self.APPS[idx][0] if 0 <= idx < len(self.APPS) else ''
+        self.bin_box.setVisible(token == 'bin_picking')
 
     def initializePage(self) -> None:
         try:
@@ -1369,13 +1595,21 @@ class ApplicationPage(QWizardPage):
         except Exception:  # noqa: BLE001
             return
         tokens = [t for t, _, _ in self.APPS]
+        cfg = self.ctrl.project.application.bin_picking
+        self.bp_tries.setValue(cfg.tries)
+        self.bp_holding.setChecked(cfg.holding_check)
+        self.bp_attached.setText(cfg.attached_topic)
+        self.bp_recovery.setText(cfg.recovery_channel)
+        self.bp_dwell.setValue(cfg.recovery_dwell_ms)
         if getattr(self, '_user_chose', False):
             # re-entry: mirror what the user already chose, never override it
             self.app_type.setCurrentIndex(tokens.index(cur) if cur in tokens else 0)
+            self._on_app_changed(self.app_type.currentIndex())
             return
         # first entry: suggest Vision guided motion when detectors exist
         if per is not None and per.detectors:
             self.app_type.setCurrentIndex(1)
+        self._on_app_changed(self.app_type.currentIndex())
 
     def validatePage(self) -> bool:
         idx = max(0, self.app_type.currentIndex())
@@ -1384,6 +1618,14 @@ class ApplicationPage(QWizardPage):
             token = 'pick_and_place'           # guard: a disabled row cannot be chosen
         # planner is per-waypoint; keep a sensible fallback for segments that don't set one
         self.ctrl.set_application(token, 'ompl')
+        # The loop's configuration is written whatever the application, because the fields
+        # are inert elsewhere — and that way switching to bin_picking and back does not
+        # lose what was typed.
+        self.ctrl.set_bin_picking(tries=self.bp_tries.value(),
+                                  holding_check=self.bp_holding.isChecked(),
+                                  attached_topic=self.bp_attached.text(),
+                                  recovery_channel=self.bp_recovery.text(),
+                                  recovery_dwell_ms=self.bp_dwell.value())
         self._user_chose = True
         return True
 
@@ -1394,9 +1636,10 @@ class WaypointsPage(QWizardPage):
         self.ctrl = ctrl
         self.setTitle('Step 6 — Waypoints, motions & dynamic-object flags')
         self.setSubTitle('The heart: for each move pick a named SRDF state (or capture a '
-                         'TCP pose with the gizmo) AND choose motion / planner / speed + '
-                         'the per-move attached-collision-check. Add grasp/release where '
-                         'the gripper acts. Re-add a waypoint to re-visit it.')
+                         'TCP pose with the gizmo) AND choose motion / planner / '
+                         'execution / speed + the per-move attached-collision-check. Add '
+                         'grasp/release where the gripper acts. Re-add a waypoint to '
+                         're-visit it.')
         layout = QVBoxLayout(self)
         self.seq = QListWidget()
         layout.addWidget(self.seq)
@@ -1429,8 +1672,18 @@ class WaypointsPage(QWizardPage):
         self.motion.addItems(['ptp', 'lin', 'circ', 'free'])
         form.addRow('Motion', self.motion)
         self.move_planner = QComboBox()
-        self.move_planner.addItems(['', 'pilz', 'ompl', 'ompl_chomp'])
-        form.addRow('Planner (blank=global)', self.move_planner)
+        self.move_planner.addItems([''] + [p.value for p in PlannerId])   # '' = blank (D3)
+        form.addRow('Planner (blank: ptp = pilz, free = global)', self.move_planner)
+        # HOW this move executes (ADR-0015): plan the whole trajectory and run it, or
+        # stream it with MoveIt Servo. Its own axis, orthogonal to motion and planner.
+        self.move_execution = QComboBox()
+        self.move_execution.addItems([e.value for e in ExecutionMode])
+        self.move_execution.setToolTip(
+            'plan = plan the trajectory, then execute it (every move until ADR-0015). '
+            'servo = stream it with MoveIt Servo (<ServoTrack>), for a move whose goal '
+            'keeps moving — a camera-guided or step-relative one. Not with lin/circ: '
+            'Servo has no Pilz LIN.')
+        form.addRow('Execution', self.move_execution)
         self.speed = QSpinBox()
         self.speed.setRange(1, 100)
         self.speed.setValue(50)
@@ -1511,6 +1764,7 @@ class WaypointsPage(QWizardPage):
         acc = {'inherit': None, 'on': True, 'off': False}[self.attached_check.currentText()]
         kwargs = dict(name=name, motion=self.motion.currentText(),
                       planner=self.move_planner.currentText() or None,
+                      execution=self.move_execution.currentText(),
                       speed=self.speed.value(), role=self.role.currentText(),
                       allowed_start_tolerance=self.start_tol.value(),
                       attached_collision_check=acc)
@@ -1561,7 +1815,7 @@ class BaseConfigPage(QWizardPage):
         pbrowse.clicked.connect(self._browse_project)
         prow = QHBoxLayout(); prow.addWidget(self.project_file); prow.addWidget(pbrowse)
         form.addRow('Open project.yaml', prow)
-        self.project_name = QLineEdit('big1500')
+        self.project_name = QLineEdit('robot_app')
         form.addRow('— or new — Project name', self.project_name)
         self.base_pkg = QLineEdit('fr30_eef_moveit_config')
         form.addRow('Base moveit_config package', self.base_pkg)
@@ -1570,6 +1824,24 @@ class BaseConfigPage(QWizardPage):
         bbrowse.clicked.connect(self._browse_base)
         brow = QHBoxLayout(); brow.addWidget(self.base_path); brow.addWidget(bbrowse)
         form.addRow('Base package path', brow)
+        # THE ROBOT SLOT (ADR-0016). Empty is the answer for almost every project, and
+        # saying so in the tooltip matters more than the field itself.
+        self.cell_ns = QLineEdit()
+        self.cell_ns.setPlaceholderText('empty = one robot, everything at the root')
+        self.cell_ns.setToolTip(
+            'THE ROBOT SLOT. Leave it EMPTY unless this cell has more than one robot: '
+            'empty means you are configuring ONE robot and every generated node lives at '
+            'the root — byte-for-byte what TSA generated before this field existed.\n\n'
+            'Fill it (e.g. r3) and this robot\'s whole motion stack moves under /r3: '
+            'move_group, the controllers, robot_state_publisher, the scene manager, the '
+            'behaviour tree and the servo topics. Two robots can then share one cell '
+            'without fighting over /robot_description or /controller_manager.\n\n'
+            'What it does NOT namespace, deliberately: /tf and /tf_static (one tree for '
+            'the cell — a split TF tree is a cell that cannot see itself), the cameras (a '
+            'camera serves a station, not a robot) and /perception/<detector>/... (one '
+            'detector serves every arm reaching into the bin).')
+        self.cell_ns.textEdited.connect(self._on_ns_edited)
+        form.addRow('Robot namespace (optional)', self.cell_ns)
         self.summary = QLabel('')
         self.summary.setWordWrap(True)
         form.addRow('Loaded', self.summary)
@@ -1584,27 +1856,58 @@ class BaseConfigPage(QWizardPage):
         if path:
             self.base_path.setText(path)
 
+    def _on_ns_edited(self, _text: str) -> None:
+        # textEdited fires on USER input only (setText does not), so a project opened on
+        # this page keeps its own saved namespace unless the user actually typed one.
+        self._ns_edited = True
+
+    def initializePage(self) -> None:
+        # Re-entry (Back/Next): show what the project actually carries.
+        try:
+            if self.ctrl.project is not None and not getattr(self, '_ns_edited', False):
+                self.cell_ns.setText(self.ctrl.cell_namespace())
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _apply_namespace(self) -> None:
+        """Write the robot slot. An opened project's saved value wins unless the user
+        typed over it on this page — a blank field must not silently un-namespace a cell.
+        """
+        if getattr(self, '_ns_edited', False) or not self.cell_ns.text().strip():
+            self.ctrl.set_cell_namespace(self.cell_ns.text())
+        self.cell_ns.setText(self.ctrl.cell_namespace())
+
     def validatePage(self) -> bool:
         try:
             if self.project_file.text().strip():
                 self.ctrl.open_project(_expand_path(self.project_file.text()))
+                if not getattr(self, '_ns_edited', False):
+                    self.cell_ns.setText(self.ctrl.cell_namespace())
+                self._apply_namespace()
             else:
                 self.ctrl.new_blank_project(self.project_name.text().strip() or 'robot_app')
                 info = self.ctrl.load_base_moveit_config(
                     self.base_pkg.text().strip(), _expand_path(self.base_path.text()))
                 nj = len(info.get('arm_joints') or [])
                 warn = '' if nj else '  ⚠ NO ARM JOINTS — captured named states would be EMPTY'
+                self._apply_namespace()
+                ns = self.ctrl.cell_namespace()
+                slot = f', namespace={ns}' if ns else ''
                 self.summary.setText(
                     f"{info['robot_name']}: group={info['group']}, "
                     f"joints={nj}, "
                     f"named states={len(info['named_states'])}, "
-                    f"arm={info['arm_controller']}, gripper={info['gripper_controller']}{warn}")
+                    f"arm={info['arm_controller']}, "
+                    f"gripper={info['gripper_controller']}{slot}{warn}")
                 return True
         except Exception as exc:  # noqa: BLE001
             self.summary.setText(f'ERROR: {exc}')
             return False
         s = self.ctrl.robot_summary()
-        self.summary.setText(f"opened project: {s['robot_name']} group={s['group']}")
+        ns = self.ctrl.cell_namespace()
+        slot = f' namespace={ns}' if ns else ' (one robot, at the root)'
+        self.summary.setText(
+            f"opened project: {s['robot_name']} group={s['group']}{slot}")
         return True
 
 
@@ -1669,7 +1972,7 @@ class GenerateConfigPage(QWizardPage):
         snippet = self.ctrl.build_snippet(pkg)   # ws_root derived at generate time
         lines = [f"Generated {manifest.as_dict()['file_count']} files -> {out}/{pkg}", '',
                  'Build it, then bring it up to configure the application:', snippet]
-        for w in manifest.as_dict().get('warnings', []):
+        for w in manifest.local_warnings:       # this machine's paths; the manifest has none
             lines.append(f'  warn: {w}')
         self.result.setPlainText('\n'.join(lines))
 
@@ -1752,6 +2055,9 @@ class ModeBringupPage(QWizardPage):
 _BLOCK_META = {
     'move':    ('\U0001F9BE', '#1565c0', 'Move (robot)'),
     'gripper': ('✊',     '#2e7d32', 'Gripper'),
+    # an end-effector CONTRACT action (ADR-0022): shown and kept as project.yaml has it, never
+    # offered in the palette (the GUI has no contract editor in M2.6)
+    'actuate': ('⚙',     '#2e7d32', 'Actuate (end-effector contract)'),
     'reset':   ('♻',     '#2e7d32', 'Reset scene'),
     'detect':  ('\U0001F4F7', '#6a1b9a', 'Detect'),
     'policy':  ('\U0001F9E0', '#00838f', 'Policy (learned)'),
@@ -1903,6 +2209,44 @@ class EndEffectorDialog(QDialog):
             self._adapter_combos[tok] = combo
         root.addWidget(self.g_adapters)
 
+        # axis 3 — the TOOL's own geometry (ADR-0017). Always shown, like the adapter
+        # matrix and for the same reason: it is orthogonal to how the tool is actuated.
+        # These two numbers had no home — the grip window was a Python default inside a
+        # node, which means it could not be reproduced from a bundle — and a tool
+        # property belongs on the tool. The generator copies them into every detector's
+        # params, where perception turns them into the obstruction/clearance terms; a
+        # `candidate x tool clearance` rule is REFUSED without them.
+        self.g_tool = QGroupBox('Tool geometry — the candidate clearance terms')
+        self.g_tool.setToolTip(
+            'What the perception layer needs in order to measure how much room this tool '
+            'has over a candidate. Independent of the actuation and of the sim adapter. '
+            'Both 0 = not declared: the clearance terms are simply not published, and '
+            'every other candidate rule is unaffected.')
+        tf = QFormLayout(self.g_tool)
+        self.g_tool_r = QDoubleSpinBox()
+        self.g_tool_r.setRange(0.0, 0.5)
+        self.g_tool_r.setDecimals(4)
+        self.g_tool_r.setSingleStep(0.001)
+        self.g_tool_r.setSuffix(' m')
+        self.g_tool_r.setToolTip(
+            'FOOTPRINT RADIUS: the radius of the disc the approach has to find empty '
+            'around the grasp point. Perception measures the depth inside exactly that '
+            'disc, so with no radius there is no footprint and no term. 0 = not declared.')
+        self.g_grip_w = QDoubleSpinBox()
+        self.g_grip_w.setRange(0.0, 200.0)
+        self.g_grip_w.setDecimals(2)
+        self.g_grip_w.setSingleStep(0.5)
+        self.g_grip_w.setSuffix(' mm')
+        self.g_grip_w.setToolTip(
+            'GRIP WINDOW: how far the tool can still bridge to the face and hold it (for '
+            'a suction cup, its own grip distance — the reference cup: 8 mm). An '
+            'obstruction of that much or more and the tool cannot reach the face however '
+            'well the pose was fitted, which is what turns millimetres of obstruction '
+            'into a 0..1 clearance. 0 = not declared.')
+        tf.addRow('Footprint radius', self.g_tool_r)
+        tf.addRow('Grip window', self.g_grip_w)
+        root.addWidget(self.g_tool)
+
         self.g_status = QLabel('')
         self.g_status.setWordWrap(True)
         root.addWidget(self.g_status)
@@ -1946,6 +2290,8 @@ class EndEffectorDialog(QDialog):
             self.g_open_ang.setValue(grip.open_angle)
         if grip.closed_angle is not None:
             self.g_closed_ang.setValue(grip.closed_angle)
+        self.g_tool_r.setValue(float(grip.tool_radius_m))
+        self.g_grip_w.setValue(float(grip.tool_reach_mm))
         self._reveal()
 
     def _reveal(self) -> None:
@@ -1998,6 +2344,8 @@ class EndEffectorDialog(QDialog):
                 closed_state=self.g_closed_state.currentText().strip() if is_srdf else '__keep__')
             self.ctrl.set_sim_grasp_adapter(
                 {tok: combo.currentText() for tok, combo in self._adapter_combos.items()})
+            self.ctrl.set_tool_geometry(tool_radius_m=self.g_tool_r.value(),
+                                        tool_reach_mm=self.g_grip_w.value())
         except Exception as exc:  # noqa: BLE001 - keep the dialog open, report to the user
             self.g_status.setText(f'could not save: {exc}')
             return
@@ -2108,6 +2456,7 @@ class BlocksPage(QWizardPage):
         self.stack.addWidget(self._reset_form())     # 5
         self.stack.addWidget(self._detect_form())    # 6
         self.stack.addWidget(self._policy_form())    # 7
+        self.stack.addWidget(self._actuate_form())   # 8
         insp.addWidget(self.stack, 1)
         apply_btn = QPushButton('Apply to block')
         apply_btn.clicked.connect(self.apply_inspector)
@@ -2151,8 +2500,19 @@ class BlocksPage(QWizardPage):
                                  'FK; the straight line itself must be feasible.')
         f.addRow('Motion', self.m_motion)
         self.m_planner = QComboBox()
-        self.m_planner.addItems(['', 'pilz', 'ompl', 'ompl_chomp'])
-        f.addRow('Planner (blank=global)', self.m_planner)
+        self.m_planner.addItems([''] + [p.value for p in PlannerId])   # '' = blank (D3)
+        f.addRow('Planner (blank: ptp = pilz, free = global)', self.m_planner)
+        # HOW this move executes (ADR-0015): its own axis, orthogonal to Motion (what
+        # shape the path has) and Planner (how free space is searched) — those are
+        # questions about a plan, this one is whether there is a plan at all.
+        self.m_execution = QComboBox()
+        self.m_execution.addItems([e.value for e in ExecutionMode])
+        self.m_execution.setToolTip(
+            'plan = plan the trajectory, then execute it (<MoveWaypoint>). '
+            'servo = stream it with MoveIt Servo (<ServoTrack>), for a move whose goal '
+            'keeps moving — camera-guided or step-relative. Refused with lin/circ: '
+            'MoveIt Servo has no Pilz LIN, so one of the two would be ignored.')
+        f.addRow('Execution', self.m_execution)
         self.m_speed = QSpinBox(); self.m_speed.setRange(1, 100); self.m_speed.setValue(50)
         f.addRow('Speed %', self.m_speed)
         self.m_tol = QDoubleSpinBox()
@@ -2553,6 +2913,21 @@ class BlocksPage(QWizardPage):
         v.addStretch(1)
         return w
 
+    def _actuate_form(self) -> QWidget:
+        """An end-effector CONTRACT action (ADR-0022), read-only: Step 7 shows it and keeps it as
+        project.yaml has it -- there is no contract editor in this release."""
+        w = QWidget()
+        f = QFormLayout(w)
+        self.a_summary = QLabel('')
+        f.addRow('CommandActuator', self.a_summary)
+        note = QLabel('An end-effector CONTRACT action (ADR-0022): one actuator of '
+                      'robot.gripper.contract driven to one of its NAMED targets. Step 7 keeps '
+                      'it exactly as project.yaml has it; edit it there. A grasp or a release '
+                      'of a multi-site device likewise keeps its site.')
+        note.setWordWrap(True)
+        f.addRow(note)
+        return w
+
     def _detect_form(self) -> QWidget:
         w = QWidget()
         f = QFormLayout(w)
@@ -2717,7 +3092,8 @@ class BlocksPage(QWizardPage):
         defaults = {
             'move':    {'kind': 'move', 'name': f'move_{sum(1 for b in self.blocks if b["kind"] == "move") + 1}',
                         'target': 'named', 'named': '', 'pos': '', 'quat': '0, 0, 0, 1',
-                        'motion': 'ptp', 'planner': '', 'speed': 50, 'tol': 0.1, 'check': 'inherit',
+                        'motion': 'ptp', 'planner': '', 'execution': 'plan',
+                        'speed': 50, 'tol': 0.1, 'check': 'inherit',
                         'detector': '', 'vdx': 0.0, 'vdy': 0.0, 'vdz': 0.0,
                         'vori': 'keep', 'vori_ref': '', 'vori_raw': '',
                         'rel_step': '', 'rdx': 0.0, 'rdy': 0.0, 'rdz': 0.0,
@@ -2766,8 +3142,10 @@ class BlocksPage(QWizardPage):
             return
         b = self.blocks[row]
         idx = {'move': 1, 'gripper': 2, 'wait': 3, 'loop': 4, 'reset': 5,
-               'detect': 6, 'policy': 7}[b['kind']]
+               'detect': 6, 'policy': 7, 'actuate': 8}[b['kind']]
         self.stack.setCurrentIndex(idx)
+        if b['kind'] == 'actuate':
+            self.a_summary.setText(f"{b.get('actuator')} → {b.get('target')}")
         if b['kind'] == 'detect':
             self._fill_detect_point(b)
         if b['kind'] == 'policy':
@@ -2781,6 +3159,7 @@ class BlocksPage(QWizardPage):
             self.m_quat.setText(b['quat'])
             self.m_motion.setCurrentText(b['motion'])
             self.m_planner.setCurrentText(b['planner'])
+            self.m_execution.setCurrentText(b.get('execution', 'plan'))
             self.m_speed.setValue(int(b['speed']))
             self.m_tol.setValue(float(b['tol']))
             self.m_check.setCurrentText(b['check'])
@@ -2883,6 +3262,7 @@ class BlocksPage(QWizardPage):
                      pos=self.m_pos.text().strip(), quat=self.m_quat.text().strip(),
                      motion=self.m_motion.currentText(),
                      planner=self.m_planner.currentText(),
+                     execution=self.m_execution.currentText(),
                      speed=self.m_speed.value(), tol=self.m_tol.value(),
                      check=self.m_check.currentText(),
                      detector=det, vdx=self.m_dx.value(), vdy=self.m_dy.value(),
@@ -2895,11 +3275,21 @@ class BlocksPage(QWizardPage):
             # a vision goal lands anywhere: the travel into it must be
             # collision-aware — so when the camera FIRST takes this move over,
             # default a resolved ptp/pilz to free/OMPL. A later deliberate
-            # ptp/pilz re-choice is respected (validate() still flags it).
+            # ptp/pilz re-choice is respected (validate() still flags it). "Resolved", in a
+            # CANONICAL project (owner G0 section 8), = the planner TMR runs
+            # (model.effective_planner, vNext M2.7 D3): a blank ptp planner is Pilz PTP whatever
+            # the global mode, as D-016 and the bundle say. A legacy project keeps the reading it
+            # had before M2.7, as D-016 does there: a blank planner is the global mode.
             switch_msg = ''
             try:
-                eff = (b['planner'] or
-                       self.ctrl.project.application.global_planner_mode.value)
+                if self.ctrl.project.robot.gripper.contract is not None:
+                    eff_id = effective_planner(
+                        MotionType(b['motion']), PlannerId(b['planner']) if b['planner'] else None,
+                        self.ctrl.project.application.global_planner_mode)
+                    eff = eff_id.value if eff_id is not None else ''   # lin/circ: none is read
+                else:
+                    eff = (b['planner'] or
+                           self.ctrl.project.application.global_planner_mode.value)
             except Exception:  # noqa: BLE001
                 eff = b['planner'] or 'pilz'
             if det and not old_det and b['motion'] == 'ptp' and eff == 'pilz':
@@ -3005,6 +3395,7 @@ class BlocksPage(QWizardPage):
         if b['kind'] == 'move':
             tgt = b['named'] or b['name'] if b['target'] == 'named' else 'tcp pose'
             chk = '' if b['check'] == 'inherit' else f"  · chk {b['check'].upper()}"
+            srv = '' if b.get('execution', 'plan') == 'plan' else '  · SERVO'
             cam = ''
             if b.get('detector'):
                 vdz = b.get('vdz', 0.0)
@@ -3016,12 +3407,15 @@ class BlocksPage(QWizardPage):
                        + (f" {rdz * 1000:+.0f}mm" if rdz else ''))
             return (f"{b['name']}   [{b['motion']}"
                     f"{('/' + b['planner']) if b['planner'] else ''} {b['speed']}%]"
-                    f"  → {tgt}{chk}{cam}")
+                    f"  → {tgt}{srv}{chk}{cam}")
         if b['kind'] == 'gripper':
             names = {'close': 'CLOSE (grasp)', 'open': 'OPEN (release)',
                      'attach': f"ATTACH {b.get('payload', '')}",
                      'detach': f"DETACH {b.get('payload', '')}"}
-            return f"Gripper {names[b['action']]}"
+            site = f"  @ site {b['site']}" if b.get('site') else ''
+            return f"Gripper {names[b['action']]}{site}"
+        if b['kind'] == 'actuate':
+            return f"Actuate {b.get('actuator')} → {b.get('target')}  (end-effector contract)"
         if b['kind'] == 'reset':
             return 'Reset scene → initial poses (sim)'
         if b['kind'] == 'detect':
@@ -3099,7 +3493,9 @@ class BlocksPage(QWizardPage):
         for b in self.blocks:
             if b['kind'] == 'move':
                 kwargs = dict(name=b['name'], motion=b['motion'],
-                              planner=b['planner'] or None, speed=int(b['speed']),
+                              planner=b['planner'] or None,
+                              execution=b.get('execution', 'plan'),
+                              speed=int(b['speed']),
                               allowed_start_tolerance=float(b['tol']),
                               attached_collision_check={'inherit': None, 'on': True,
                                                         'off': False}[b['check']],
@@ -3150,7 +3546,16 @@ class BlocksPage(QWizardPage):
                     continue
                 kind = {'close': 'grasp', 'open': 'release',
                         'attach': 'attach', 'detach': 'detach'}[b['action']]
-                ctrl.add_tool_action(prev_move, kind, b.get('payload') or None)
+                # a grasp/release keeps its site (ADR-0022, carried through the block dict)
+                ctrl.add_tool_action(prev_move, kind, b.get('payload') or None,
+                                     site=(b.get('site') if kind in ('grasp', 'release')
+                                           else None))
+            elif b['kind'] == 'actuate':
+                if prev_move is None:
+                    warn = 'an Actuate block needs a Move before it'
+                    continue
+                ctrl.add_tool_action(prev_move, 'actuate', actuator=b.get('actuator'),
+                                     target=b.get('target'))
             elif b['kind'] == 'reset':
                 if prev_move is None:
                     warn = 'a Reset scene block needs a Move before it'
@@ -3245,6 +3650,7 @@ class BlocksPage(QWizardPage):
                            'quat': ', '.join(format(v, 'g') for v in (wp.orientation or [0, 0, 0, 1])),
                            'motion': seg.motion.value if seg else 'ptp',
                            'planner': (seg.planner.value if seg and seg.planner else ''),
+                           'execution': (seg.execution.value if seg else 'plan'),
                            'speed': seg.speed if seg else 50,
                            'tol': wp.allowed_start_tolerance,
                            'check': ('inherit' if not seg or seg.attached_collision_check is None
@@ -3280,10 +3686,19 @@ class BlocksPage(QWizardPage):
             for act in acts:
                 if act.kind.value == 'reset_scene':
                     continue                      # rendered AFTER the wait (cycle boundary)
+                if act.kind.value == 'actuate':
+                    # an end-effector contract action (ADR-0022): its own block, kept as is --
+                    # folding it into a gripper block would turn it into a grasp
+                    blocks.append({'kind': 'actuate', 'actuator': act.actuator,
+                                   'target': act.target})
+                    continue
                 rev = {'grasp': 'close', 'release': 'open',
                        'attach': 'attach', 'detach': 'detach'}
-                blocks.append({'kind': 'gripper', 'action': rev.get(act.kind.value, 'close'),
-                               'payload': act.payload_ref or ''})
+                block = {'kind': 'gripper', 'action': rev.get(act.kind.value, 'close'),
+                         'payload': act.payload_ref or ''}
+                if act.site is not None:
+                    block['site'] = act.site      # carried through the block dict, as role/aux
+                blocks.append(block)
             if seg and seg.wait_after_ms > 0:
                 blocks.append({'kind': 'wait', 'ms': seg.wait_after_ms})
             for act in acts:

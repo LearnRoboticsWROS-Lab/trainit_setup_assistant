@@ -1,3 +1,4 @@
+{% set ns = cell_namespace + '/' if cell_namespace else '' %}
 Panels:
   - Class: rviz_common/Displays
     Name: Displays
@@ -14,12 +15,20 @@ Visualization Manager:
       Name: Grid
       Value: true
     - Class: moveit_rviz_plugin/MotionPlanning
+{% if cell_namespace %}
+      # The cell runs under {{ cell_namespace }} (ADR-0016) but RViz runs at the ROOT — MoveIt's
+      # MotionPlanning plugin builds no end-effector interactive marker from inside a
+      # namespace. So the display is pointed at this robot by hand: Move Group Namespace
+      # plus the two topics below. "Robot Description" is NOT absolute here (the plugin
+      # puts it inside a node name, where a '/' is illegal) — the bring-up remaps it.
+      Move Group Namespace: {{ cell_namespace }}
+{% endif %}
       Name: MotionPlanning
       Planned Path:
         Loop Animation: true
         State Display Time: 0.05 s
-        Trajectory Topic: display_planned_path
-      Planning Scene Topic: monitored_planning_scene
+        Trajectory Topic: {{ ns }}display_planned_path
+      Planning Scene Topic: {{ ns }}monitored_planning_scene
       Robot Description: robot_description
       Scene Geometry:
         Scene Alpha: 1

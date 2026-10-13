@@ -39,10 +39,10 @@ from trainit_setup_assistant.model import (
 from trainit_setup_assistant.model.enums import ToolActionKind, WaypointType
 from trainit_setup_assistant.model.robot import (
     ArmControllerSpec, DescriptionSource, GripperSpec, PlanningGroupSpec, RobotSpec)
+import ws_paths
 
 HERE = os.path.dirname(__file__)
-GOLDEN_BUNDLE = Path('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-                     'fr3wml_suction_camera_tsa_4_1_bundle')
+GOLDEN_BUNDLE = ws_paths.GOLDEN_BUNDLE
 GOLDEN_PROJECT = GOLDEN_BUNDLE / 'project.yaml'
 G_DESC = 'fr3wml_suction_camera_tsa_4_1_description'
 G_CFG = 'fr3wml_suction_camera_tsa_4_1_trainit_config'

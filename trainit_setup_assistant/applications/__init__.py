@@ -7,10 +7,12 @@ from .base import (
     scene_dims_key,
     scene_pos_key,
 )
+from .bin_picking import BinPicking
 from .registry import available_applications, get_application
 
 __all__ = [
     'ApplicationTemplate',
+    'BinPicking',
     'build_bt_params_context',
     'scene_dims_key',
     'scene_pos_key',

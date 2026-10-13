@@ -5,7 +5,11 @@ from .enums import (
     AppType,
     Backend,
     CalibrationFrame,
+    CandidateRule,
+    DEFAULT_CANDIDATE_RULE,
+    DEFAULT_RULE_PREFERENCE,
     EndEffectorActuation,
+    ExecutionMode,
     GripperJointTarget,
     SimGraspAdapter,
     DetectionMethod,
@@ -25,10 +29,21 @@ from .enums import (
     WaypointType,
 )
 from .deployment import DeploymentSpec, LaunchNodeSpec, RealIncludeSpec
+from .end_effector import (AdapterBinding, CommandInterface, ControllerFlavour, Device,
+                           EndEffectorAdapter, EndEffectorCapability, EndEffectorContract,
+                           EvidenceClass, FollowJointTrajectoryActuator, GraspSiteSpec,
+                           GripperCommandActuator, JointPositions, ResultPolicy, SceneSignal,
+                           SetBoolActuator, VerificationSpec, derive_device)
+from .external_node import INPUT_ROLES, ExternalNodeSpec
 from .io import load_project, project_to_dict, save_project
-from .perception import (CameraSpec, DetectorSpec, PerceptionSpec,
-                         RelativeBinding, VisionBinding)
-from .project import BundleSpec, CanonicalProject, ProjectMeta, SCHEMA_VERSION
+from .perception import (CANDIDATE_RULE_TERMS, DEFAULT_INPUT_TOPICS, METHOD_PROVIDES,
+                         TERM_NEEDS, CameraSpec,
+                         DetectorSpec, PerceptionSpec, RelativeBinding, VisionBinding,
+                         candidate_rule_refusal, computable_rules, computable_terms,
+                         effective_candidate_rule, missing_candidate_terms,
+                         preferred_candidate_rule)
+from .project import (BundleSpec, CanonicalProject, ProjectMeta, SCHEMA_VERSION,
+                      SCHEMA_VERSION_EEF_CONTRACT)
 from .robot import (
     ArmControllerSpec,
     DescriptionSource,
@@ -42,10 +57,11 @@ from .robot import (
     PilzCartesianLimits,
     PlanningGroupSpec,
     RobotSpec,
+    normalize_cell_namespace,
 )
 from .scene import Payload, SceneObject, SceneSpec
-from .task import (ApplicationSpec, DetectPoint, MotionSegment, PolicyStep,
-                   ToolAction, Waypoint)
+from .task import (ApplicationSpec, BinPickingSpec, DetectPoint, MotionSegment,
+                   PolicyStep, ToolAction, Waypoint, effective_planner)
 
 __all__ = [
     'SCHEMA_VERSION',
@@ -64,12 +80,15 @@ __all__ = [
     'PilzCartesianLimits',
     'GripperSpec',
     'ArmControllerSpec',
+    'normalize_cell_namespace',
     'SceneSpec',
     'SceneObject',
     'Payload',
     'ApplicationSpec',
+    'BinPickingSpec',
     'Waypoint',
     'MotionSegment',
+    'effective_planner',
     'ToolAction',
     'PolicyStep',
     'DeploymentSpec',
@@ -83,10 +102,28 @@ __all__ = [
     'RelativeBinding',
     'DetectPoint',
     'DetectionMethod',
+    'DEFAULT_INPUT_TOPICS',
+    # the external-node detector's LAUNCH half (D-015)
+    'ExternalNodeSpec',
+    'INPUT_ROLES',
+    # the candidate ranking as configuration (ADR-0014 / ADR-0016 / ADR-0017)
+    'CandidateRule',
+    'DEFAULT_CANDIDATE_RULE',
+    'DEFAULT_RULE_PREFERENCE',
+    'CANDIDATE_RULE_TERMS',
+    'METHOD_PROVIDES',
+    'TERM_NEEDS',
+    'computable_terms',
+    'computable_rules',
+    'preferred_candidate_rule',
+    'missing_candidate_terms',
+    'effective_candidate_rule',
+    'candidate_rule_refusal',
     # enums
     'WaypointType',
     'MotionType',
     'PlannerId',
+    'ExecutionMode',
     'GripperKind',
     'AppType',
     'SceneObjectSource',
@@ -108,6 +145,25 @@ __all__ = [
     'EndEffectorActuation',
     'GripperJointTarget',
     'SimGraspAdapter',
+    # the end-effector contract (ADR-0022)
+    'SCHEMA_VERSION_EEF_CONTRACT',
+    'EndEffectorContract',
+    'SetBoolActuator',
+    'GripperCommandActuator',
+    'FollowJointTrajectoryActuator',
+    'JointPositions',
+    'GraspSiteSpec',
+    'VerificationSpec',
+    'AdapterBinding',
+    'CommandInterface',
+    'ResultPolicy',
+    'EvidenceClass',
+    'EndEffectorCapability',
+    'EndEffectorAdapter',
+    'ControllerFlavour',
+    'SceneSignal',
+    'Device',
+    'derive_device',
     # io
     'load_project',
     'save_project',

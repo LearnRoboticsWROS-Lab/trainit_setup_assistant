@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import List
 
 from ..model import CanonicalProject
-from ..model.enums import (AppType, IMPLEMENTED_END_EFFECTORS,
+from ..model.enums import (AppType, ExecutionMode, IMPLEMENTED_END_EFFECTORS,
                            IMPLEMENTED_POLICY_CATEGORIES, PolicyMode, ToolActionKind)
 from .base import (
     ApplicationTemplate,
@@ -19,6 +19,12 @@ from .base import (
     scene_dims_key,
     scene_pos_key,
 )
+from .eef_tree import action_nodes, canonical_device, policy_verify
+
+# The BT node that runs a move, per execution mode (ADR-0015 Decision 4): an explicit, CLOSED map,
+# so a mode without a node fails the generation instead of becoming a planned move. TMR's planner
+# registry names the same nodes; test_planner_registry.py holds the two together (ADR-0021).
+MOVE_NODES = {ExecutionMode.PLAN: 'MoveWaypoint', ExecutionMode.SERVO: 'ServoTrack'}
 
 # Canonical pick_and_place order when no explicit sequence is given.
 _DEFAULT_ROLE_ORDER = [
@@ -46,7 +52,8 @@ class PickAndPlace(ApplicationTemplate):
     app_type = AppType.PICK_AND_PLACE.value
 
     def validate(self, project: CanonicalProject) -> List[str]:
-        return (self._validate_sequence(project)
+        return (self.validate_common(project)
+                + self._validate_sequence(project)
                 + self._validate_gripper_actions(project)
                 + self._validate_payload_refs(project)
                 + self._validate_policies(project))
@@ -161,13 +168,13 @@ class PickAndPlace(ApplicationTemplate):
             # pure drives the robot itself (no deterministic move); hybrid/residual keep
             # the MoveWaypoint (hybrid executes the decided target, residual the nominal).
             if policy is None or policy.mode is not PolicyMode.PURE:
-                out.append(f'{body_indent}<MoveWaypoint waypoint="{wp_name}"/>')
+                out.append(f'{body_indent}<{self._move_node(seg)} waypoint="{wp_name}"/>')
             if policy is not None:
                 out.extend(self._policy_check_after(project, policy, body_indent))
             acts = app.actions_at(wp_name)
             for action in acts:
                 if action.kind is not ToolActionKind.RESET_SCENE:
-                    out.append(body_indent + self._render_action(action, project))
+                    out.extend(self._tool_action_lines(action, project, body_indent))
             # process-layer pause (the Wait block): BT.CPP built-in Sleep.
             if seg is not None and seg.wait_after_ms > 0:
                 out.append(f'{body_indent}<Sleep msec="{seg.wait_after_ms}"/>')
@@ -193,6 +200,39 @@ class PickAndPlace(ApplicationTemplate):
         out.append('  </BehaviorTree>')
         out.append('</root>')
         return '\n'.join(out) + '\n'
+
+    # --- per-move execution mode (ADR-0015, Decision 4) ---
+    @staticmethod
+    def _move_node(seg) -> str:
+        """The BT node that performs the move into a waypoint.
+
+        ``execution`` picks a DIFFERENT NODE rather than a flag on one node, so the
+        choice is explicit in Groot2 and in the XML: ``plan`` keeps ``<MoveWaypoint>``
+        (plan, then execute), ``servo`` emits ``<ServoTrack>`` (the out-of-process
+        ``moveit_servo`` node — ADR-0015 Decision 5; the name the framework's migration
+        table reserves). ``ServoTrack`` reads the SAME ``<wp>.*`` blackboard keys, so
+        ``bt_params.yaml`` carries no second copy of the decision and the golden
+        bundle's bytes are untouched.
+        """
+        if seg is None:
+            return MOVE_NODES[ExecutionMode.PLAN]
+        try:
+            return MOVE_NODES[seg.execution]
+        except KeyError:
+            token = getattr(seg.execution, 'value', seg.execution)
+            raise ValueError(f'execution {token!r} has no BT node in TSA: a move must never '
+                             'fall back to a planned one silently') from None
+
+    def _tool_action_lines(self, action, project: CanonicalProject, indent: str,
+                           gate=None, verify_after_grasp: bool = True) -> List[str]:
+        """One tool action's lines at ``indent``. A LEGACY project keeps ``_render_action``'s
+        text exactly as it always was (its second line carries its own indent); a CANONICAL one
+        gets the end-effector contract's nodes (ADR-0022), one per line."""
+        dev = canonical_device(project)
+        nodes = action_nodes(action, project, dev, gate, verify_after_grasp) if dev else None
+        if nodes is None:
+            return [indent + self._render_action(action, project)]
+        return [indent + node for node in nodes]
 
     # --- subclass hooks (no-ops for the blind template) ---
     def _cycle_prologue(self, project: CanonicalProject, indent: str) -> List[str]:
@@ -261,6 +301,9 @@ class PickAndPlace(ApplicationTemplate):
                 'is self-checking. The card end_state (pure/full-skill end) is not asserted '
                 'here — it does not describe the grasp (ADR-0006). -->',
             ]
+        # A canonical project (ADR-0022): the POSITION half stays CheckRobotState, whatever the
+        # contract says; the ATTACHED half is the contract's VerifyGrasp, never require_attached.
+        dev = canonical_device(project)
         attrs: List[str] = []
         if policy.check_position:
             xyz, _ = self._card_end_state(policy)
@@ -271,12 +314,17 @@ class PickAndPlace(ApplicationTemplate):
             attrs.append('require_attached="true"')
             if policy.attached_topic:
                 attrs.append(f'attached_topic="{policy.attached_topic}"')
-        if not attrs:
-            return []
-        return [
-            f'{indent}<!-- assert the policy left the robot in the card\'s end_state -->',
-            f'{indent}<CheckRobotState {" ".join(attrs)}/>',
-        ]
+        if dev is not None:
+            attrs = [a for a in attrs if not a.startswith(('require_attached=', 'attached_topic='))]
+        lines: List[str] = []
+        if attrs:
+            lines = [
+                f'{indent}<!-- assert the policy left the robot in the card\'s end_state -->',
+                f'{indent}<CheckRobotState {" ".join(attrs)}/>',
+            ]
+        if dev is not None:
+            lines += [indent + node for node in policy_verify(dev)]
+        return lines
 
     @staticmethod
     def _card_end_state(policy):

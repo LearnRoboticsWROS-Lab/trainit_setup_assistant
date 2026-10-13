@@ -9,14 +9,15 @@ import pytest
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from trainit_setup_assistant.gui.controller import AssistantController  # noqa: E402
+import ws_paths  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), os.pardir, 'examples', 'fr3wml_project.yaml')
 # The robot description lives in fr5_app, the URDF and mesh root. It used to be read
 # from the hand-written golden bundle fr3wml_app, which was removed on 2026-08-24.
-FR3WML_XACRO = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-                'fr5_app/urdf/fr3wml_suction.urdf.xacro')
-FR3WML_MESHES = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-                 'fr5_app/meshes')
+FR3WML_XACRO = str(ws_paths.ws_src('fr3wml_digital_twin', 'fr5_app', 'urdf',
+                                  'fr3wml_suction.urdf.xacro'))
+FR3WML_MESHES = str(ws_paths.ws_src('fr3wml_digital_twin', 'fr5_app', 'meshes'))
 
 
 # ---- controller (ROS-free) ----
@@ -58,8 +59,8 @@ def test_mock_gripper_server_generated_for_bootstrap():
         assert 'mock_gripper_action_server.py' in open(os.path.join(app, 'CMakeLists.txt')).read()
 
 
-GOLDEN_SRDF = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-               'fr3wml_suction_camera_moveit_config/config/fr3wml_suction.srdf')
+GOLDEN_SRDF = str(ws_paths.ws_src('fr3wml_digital_twin', 'fr3wml_suction_camera_moveit_config',
+                                 'config', 'fr3wml_suction.srdf'))
 
 
 @pytest.mark.skipif(not os.path.isfile(GOLDEN_SRDF), reason='golden SRDF not present')
@@ -233,6 +234,7 @@ def test_wizard_app_pages_build_app(qapp):
     wp.quat.setText('-0.707, 0.707, 0.008, -0.009')
     wp.motion.setCurrentText('lin')
     wp.move_planner.setCurrentText('')
+    wp.move_execution.setCurrentText('plan')     # ADR-0015 default, stated explicitly
     wp.speed.setValue(30)
     wp.role.setCurrentText('pick')
     wp.tool_cbs['grasp'].setChecked(True)
@@ -243,6 +245,8 @@ def test_wizard_app_pages_build_app(qapp):
     assert ctrl.project.application.sequence == ['home', 'pick']
     kinds = {a.kind.value for a in ctrl.project.application.tool_actions}
     assert {'grasp', 'attach'} <= kinds
+    # neither move chose servo -> the whole app stays on the zero-byte path (ADR-0015)
+    assert ctrl.project.application.uses_servo() is False
 
     with tempfile.TemporaryDirectory() as tmp:
         wiz.generate_page.initializePage()
@@ -260,11 +264,11 @@ def test_wizard_app_pages_build_app(qapp):
         assert '<CloseGripper/>' in tree and 'AttachObject' in tree
 
 
-FR30_BASE = ('/home/fra/BIG1500_tending_nesting/src/big1500_digital_twin/'
-             'fr30_eef_moveit_config')
+FR30_BASE = ws_paths.external('TRAINIT_TEST_FR30_MOVEIT_CONFIG')
 
 
-@pytest.mark.skipif(not os.path.isdir(FR30_BASE), reason='fr30_eef base not present')
+@pytest.mark.skipif(not os.path.isdir(FR30_BASE),
+                    reason='set TRAINIT_TEST_FR30_MOVEIT_CONFIG to an fr30_eef_moveit_config to run this')
 def test_wizard_mvp_flow_offscreen(qapp):
     """Phase 4b: drive the MVP wizard — base config -> scene (mesh + grasp target) ->
     waypoints (per-move attached-check) -> generate a bundle with the flag nodes."""
@@ -273,7 +277,7 @@ def test_wizard_mvp_flow_offscreen(qapp):
     wiz = SetupWizard(ctrl)
 
     # Step 2: base config (bootstraps + auto-configures the robot)
-    wiz.base_page.project_name.setText('big1500')
+    wiz.base_page.project_name.setText('fr30_cell')
     wiz.base_page.base_pkg.setText('fr30_eef_moveit_config')
     wiz.base_page.base_path.setText(FR30_BASE)
     assert wiz.base_page.validatePage()
@@ -284,7 +288,7 @@ def test_wizard_mvp_flow_offscreen(qapp):
     sp = wiz.scene_page
     sp.obj_id.setText('bottle_0_0')
     sp.shape.setCurrentText('mesh')
-    sp.mesh_resource.setText('package://big1500_isaac/meshes/dynamic/bottle_50cl.stl')
+    sp.mesh_resource.setText('package://fr30_cell_isaac/meshes/dynamic/bottle_50cl.stl')
     sp.position.setText('0.5, 0.2, 0.7')
     sp.category.setCurrentText('dynamic')
     sp.grasp_target.setChecked(True)
@@ -316,30 +320,33 @@ def test_wizard_mvp_flow_offscreen(qapp):
     assert seg.attached_collision_check is True
 
     # Step 9: generate the bundle (generate_page derives bundle names from the project
-    # name via BundleSpec.from_prefix -> app='big1500_app', config='big1500_trainit_config')
+    # name via BundleSpec.from_prefix -> app='fr30_cell_app', config='fr30_cell_trainit_config')
     with tempfile.TemporaryDirectory() as tmp:
         wiz.generate_page.initializePage()
-        wiz.generate_page.project_name.setText('big1500')
+        wiz.generate_page.project_name.setText('fr30_cell')
         wiz.generate_page.output_dir.setText(tmp)
         wiz.generate_page.generate()
-        bundle = os.path.join(tmp, 'big1500_bundle')
-        tree = open(os.path.join(bundle, 'big1500_app', 'bt_trees', 'pick_place.xml')).read()
+        bundle = os.path.join(tmp, 'fr30_cell_bundle')
+        tree = open(os.path.join(bundle, 'fr30_cell_app', 'bt_trees', 'pick_place.xml')).read()
         assert '<SetAttachedCollisionCheck value="true"/>' in tree
         assert '<SetReleasePolicy policy="freeze"/>' in tree
         assert os.path.isfile(os.path.join(
-            bundle, 'big1500_trainit_config', 'config', 'fr30_eef.srdf'))
+            bundle, 'fr30_cell_trainit_config', 'config', 'fr30_eef.srdf'))
         # bundle flow: the app bringup INCLUDES the trainit_config cell bringup
-        bringup = open(os.path.join(bundle, 'big1500_app', 'launch', 'bringup.launch.py')).read()
+        bringup = open(os.path.join(bundle, 'fr30_cell_app', 'launch', 'bringup.launch.py')).read()
         assert 'IncludeLaunchDescription' in bringup
-        assert 'big1500_trainit_config' in bringup
+        assert 'fr30_cell_trainit_config' in bringup
 
 
-USD_SCENE = ('/home/fra/BIG1500_tending_nesting/src/big1500_digital_twin/big1500_isaac/'
-             'usd/scenes/big1500_tending_nesting_prewash.usd')
+USD_SCENE = ws_paths.external('TRAINIT_TEST_FR30_CELL_USD')
+# The mesh package is the one the cell USD lives in (the Isaac cell-kit layout,
+# <pkg>/usd/scenes/<cell>.usd): the importer finds <pkg>/meshes next to the base by it.
+MESH_PKG = Path(USD_SCENE).parents[2].name if USD_SCENE else ''
 
 
 @pytest.mark.skipif(not (os.path.isdir(FR30_BASE) and os.path.isfile(USD_SCENE)),
-                    reason='fr30 base or USD not present')
+                    reason='set TRAINIT_TEST_FR30_MOVEIT_CONFIG and TRAINIT_TEST_FR30_CELL_USD '
+                           'to run this')
 def test_wizard_usd_mapping_builds_baseline_scene(qapp):
     """Step 2 from the USD: load USD -> auto-suggested mesh mapping table -> apply ->
     the scene reproduces the baseline (23 mesh objects, bottles as grasp targets)."""
@@ -352,14 +359,14 @@ def test_wizard_usd_mapping_builds_baseline_scene(qapp):
     from trainit_setup_assistant.gui.wizard import SetupWizard
     ctrl = AssistantController()
     wiz = SetupWizard(ctrl)
-    wiz.base_page.project_name.setText('big1500')
+    wiz.base_page.project_name.setText('fr30_cell')
     wiz.base_page.base_pkg.setText('fr30_eef_moveit_config')
     wiz.base_page.base_path.setText(FR30_BASE)
     assert wiz.base_page.validatePage()
 
     sp = wiz.scene_page
     sp.usd_path.setText(USD_SCENE)
-    sp.mesh_pkg.setText('big1500_isaac')
+    sp.mesh_pkg.setText(MESH_PKG)
     sp.load_usd_mapping()
     # table filled; bottles + crate + prewash + belt auto-suggested; BW_0080_context off
     assert sp.map_table.rowCount() >= 4
@@ -526,8 +533,7 @@ def test_blocks_page_preserves_golden_loop_start_and_tree(qapp):
     """Regression (verification blocker): merely ENTERING Step 7 on a reopened
     project must not fold loop_start away — the regenerated tree must still equal
     the golden's shape (Repeat opening at pre_pick, detection inside the cycle)."""
-    GOLDEN_PROJECT = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-                      'fr3wml_suction_camera_tsa_4_1_bundle/project.yaml')
+    GOLDEN_PROJECT = str(ws_paths.GOLDEN_BUNDLE / 'project.yaml')
     if not os.path.isfile(GOLDEN_PROJECT):
         pytest.skip('golden bundle not present')
     from trainit_setup_assistant.applications import get_application
@@ -549,8 +555,7 @@ def test_blocks_page_no_edit_apply_is_identity_on_the_golden(qapp):
     """v4.1 regression: selecting a vision-bound move and clicking Apply with NO
     edits must not mutate the model (the auto free/OMPL switch fires only when the
     detector is NEWLY set; a literal orientation would ride vori_raw)."""
-    GOLDEN_PROJECT = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-                      'fr3wml_suction_camera_tsa_4_1_bundle/project.yaml')
+    GOLDEN_PROJECT = str(ws_paths.GOLDEN_BUNDLE / 'project.yaml')
     if not os.path.isfile(GOLDEN_PROJECT):
         pytest.skip('golden bundle not present')
     from trainit_setup_assistant.gui.wizard import SetupWizard
@@ -951,3 +956,183 @@ def test_gripper_block_grasp_target_is_selectable(qapp):
     bp.g_ee_target.setCurrentText('cube_b')                 # pick the other object
     bp.apply_inspector()
     assert ctrl.project.scene.grasp_target_ids() == ['cube_b']
+
+
+def test_cell_namespace_is_offered_where_the_robot_is_configured(qapp):
+    """ADR-0016 Decision 3: the robot slot lives on the step that configures the robot and
+    the cell (Step 1), it defaults to EMPTY, and the tooltip says plainly that empty means
+    one robot — because empty is the right answer for almost every project."""
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    wiz = SetupWizard(ctrl)
+    bp = wiz.base_page
+
+    tip = bp.cell_ns.toolTip()
+    assert 'EMPTY' in tip and 'ONE robot' in tip
+    assert 'robot slot' in tip.lower()
+    assert '/tf' in tip                       # what it does NOT namespace is in the tip
+    assert bp.cell_ns.text() == ''
+
+    # open the shipped project and type a namespace: it reaches the model
+    bp.project_file.setText(EXAMPLE)
+    bp.cell_ns.setText('r3')
+    bp._on_ns_edited('r3')                    # what typing emits (setText does not)
+    assert bp.validatePage()
+    assert ctrl.cell_namespace() == '/r3'
+    assert bp.cell_ns.text() == '/r3'         # shown back canonicalised
+    assert '/r3' in bp.summary.text()
+
+
+def test_opening_a_project_does_not_silently_un_namespace_it(qapp):
+    """A blank field on first entry must not wipe a namespace the project carries: the
+    user has not said anything, and silence is not "put it back at the root"."""
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    ctrl.set_cell_namespace('r3')
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = os.path.join(tmp, 'project.yaml')
+        ctrl.save(saved)
+
+        fresh = AssistantController()
+        wiz = SetupWizard(fresh)
+        bp = wiz.base_page
+        bp.project_file.setText(saved)
+        assert bp.cell_ns.text() == ''        # nothing typed
+        assert bp.validatePage()
+        assert fresh.cell_namespace() == '/r3'
+        assert bp.cell_ns.text() == '/r3'     # and now it is shown
+
+        # typing an empty value over it DOES clear it (an explicit choice)
+        bp.cell_ns.setText('')
+        bp._on_ns_edited('')
+        assert bp.validatePage()
+        assert fresh.cell_namespace() == ''
+
+
+def test_bin_picking_is_selectable_and_its_loop_panel_folds_to_the_model(qapp):
+    """ADR-0016 Decision 4: the application is offered beside the other two, and its loop
+    is configuration — the panel is shown only for bin_picking, because the fields are
+    inert for every other application."""
+    from trainit_setup_assistant.applications import get_application
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    from trainit_setup_assistant.model import AppType
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    wiz = SetupWizard(ctrl)
+    ap = wiz.application_page
+
+    tokens = [tok for tok, _, _ in ap.APPS]
+    assert 'bin_picking' in tokens
+    idx = tokens.index('bin_picking')
+    assert ap.APPS[idx][2] is True, 'bin_picking must not be greyed out'
+    assert 'emptying loop' in ap.APPS[idx][1]
+
+    ap.initializePage()
+    ap.app_type.setCurrentIndex(tokens.index('pick_and_place'))
+    assert ap.bin_box.isVisibleTo(ap) is False
+    ap.app_type.setCurrentIndex(idx)
+    assert ap.bin_box.isVisibleTo(ap) is True
+
+    ap.bp_tries.setValue(4)
+    ap.bp_attached.setText('/suction/attached')
+    ap.bp_recovery.setText('bin_agitator')
+    ap.bp_dwell.setValue(900)
+    assert ap.validatePage()
+
+    app = ctrl.project.application
+    assert app.type is AppType.BIN_PICKING
+    cfg = app.bin_picking
+    assert (cfg.tries, cfg.attached_topic) == (4, '/suction/attached')
+    assert (cfg.recovery_channel, cfg.recovery_dwell_ms) == ('bin_agitator', 900)
+    # the tooltips carry the MEASUREMENT, not a preference
+    assert '3,33' in ap.bp_tries.toolTip()
+    assert '1 lift in 22' in ap.bp_holding.toolTip()
+    assert 'ADR-0013' in ap.bp_recovery.toolTip()
+
+    # re-entry shows what was chosen instead of a lost default
+    ap.initializePage()
+    assert ap.bp_tries.value() == 4
+    assert ap.bp_recovery.text() == 'bin_agitator'
+    assert ap.bin_box.isVisibleTo(ap) is True
+    assert get_application(app.type).tree_filename(ctrl.project) == 'bin_picking.xml'
+
+
+def test_execution_mode_in_both_editors(qapp):
+    """ADR-0015: the per-move execution choice is in the MVP block editor (Step 7) AND in
+    the legacy waypoints page, and folds through to the model, the tree and the bundle."""
+    from trainit_setup_assistant.applications.registry import get_application
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    from trainit_setup_assistant.model import ExecutionMode
+
+    # --- Step 7, the MVP block editor ---
+    ctrl = AssistantController()
+    ctrl.open_project(EXAMPLE)
+    ctrl.clear_application()
+    wiz = SetupWizard(ctrl)
+    bp = wiz.blocks_page
+
+    bp.add_block('move')                     # a planned move: the default
+    bp.m_name.setText('home')
+    bp.m_target.setCurrentIndex(0)
+    bp.m_named.setText('home')
+    bp.m_motion.setCurrentText('ptp')
+    assert bp.m_execution.currentText() == 'plan'       # the default is shown, not blank
+    bp.apply_inspector()
+
+    bp.add_block('move')                     # a streamed move, camera-guided
+    bp.m_name.setText('track')
+    bp.m_target.setCurrentIndex(1)
+    bp.m_pos.setText('0.4, 0.0, 0.3')
+    bp.m_quat.setText('0, 1, 0, 0')
+    bp.m_motion.setCurrentText('free')
+    bp.m_execution.setCurrentText('servo')
+    bp.apply_inspector()
+    assert bp.validatePage()
+
+    app = ctrl.project.application
+    assert app.segment_for('home').execution is ExecutionMode.PLAN
+    assert app.segment_for('track').execution is ExecutionMode.SERVO
+    assert app.uses_servo() is True
+    assert '  · SERVO' in bp._label(bp.blocks[1])        # visible in the sequence list
+
+    xml = get_application(app.type).build_tree_xml(ctrl.project)
+    assert '<MoveWaypoint waypoint="home"/>' in xml
+    assert '<ServoTrack waypoint="track"/>' in xml
+
+    # reopen / back-navigation rebuilds the choice from the model (not a lost default)
+    bp.blocks = []
+    bp.initializePage()
+    rebuilt = {b['name']: b['execution'] for b in bp.blocks if b['kind'] == 'move'}
+    assert rebuilt == {'home': 'plan', 'track': 'servo'}
+
+    # an older project (a block dict without the key) must not crash the select handler
+    bp.blocks[0].pop('execution')
+    bp._on_select(0)
+    assert bp.m_execution.currentText() == 'plan'
+
+    # --- the legacy waypoints page, through to the generated bundle ---
+    ctrl2 = AssistantController()
+    ctrl2.open_project(EXAMPLE)
+    ctrl2.clear_application()
+    wiz2 = SetupWizard(ctrl2)
+    wp = wiz2.waypoints_page
+    wp.move_name.setText('track')
+    wp.target_mode.setCurrentText('named')
+    wp.named.setText('home')
+    wp.motion.setCurrentText('free')
+    wp.move_execution.setCurrentText('servo')
+    wp.add_move()
+    assert ctrl2.project.application.segment_for('track').execution is ExecutionMode.SERVO
+
+    with tempfile.TemporaryDirectory() as tmp:
+        wiz2.generate_page.initializePage()
+        wiz2.generate_page.project_name.setText('servo_wiz')
+        wiz2.generate_page.output_dir.setText(tmp)
+        wiz2.generate_page.generate()
+        bundle = os.path.join(tmp, 'servo_wiz_bundle')
+        assert os.path.isfile(os.path.join(
+            bundle, 'servo_wiz_trainit_config', 'config', 'servo.yaml'))
+        launch = open(os.path.join(
+            bundle, 'servo_wiz_app', 'launch', 'bringup.launch.py')).read()
+        assert 'executable="servo_node_main"' in launch

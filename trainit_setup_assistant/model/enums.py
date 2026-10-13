@@ -3,9 +3,20 @@
 All enums derive from ``str`` so they serialize to plain scalars in ``project.yaml``
 and compare cleanly against the string tokens used by the engine's ``bt_params.yaml``
 (e.g. ``motion: lin``, ``planner: pilz``).
+
+Two enums are BUILT from TSA's committed catalog (ADR-0021), because TSA only passes their tokens
+through to the component that owns them and so keeps no list of its own: ``PlannerId`` from the
+copy of TMR's planner registry, ``CandidateRule`` from the snapshot of trainit_perception's
+vocabulary (amendment M2.2). Every other enum here is TSA's own vocabulary (``ExecutionMode``
+decides which BT node TSA emits, ``DetectionMethod`` which node TSA launches), kept as code and
+parity-tested against the registry where the registry also speaks (test_planner_registry.py,
+test_tp_registry.py).
 """
 
 from enum import Enum
+
+from ..catalog import (REFRESH, missing_required_modes, offered_planner_modes,
+                       tmr_planner_registry, tp_registry, tp_vocabulary_problems)
 
 
 class StrEnum(str, Enum):
@@ -31,19 +42,54 @@ class MotionType(StrEnum):
     FREE = 'free'  # collision-free planning (planner selectable)
 
 
-class PlannerId(StrEnum):
-    """Per-segment planner override (acts on free/ptp; lin/circ are always Pilz)."""
+# HOW free space is searched is NOT typed in here: the members are the modes TMR's planner
+# registry offers (``catalog.offered_planner_modes``: deliverable and stable), read from TSA's
+# committed copy of that registry -- never from the installed TMR (ADR-0021). Names are the
+# tokens upper-cased.
+_PLANNERS = tmr_planner_registry()
+if missing_required_modes(_PLANNERS):
+    raise RuntimeError(
+        f"TMR's planner registry (catalog copy) no longer offers "
+        f'{missing_required_modes(_PLANNERS)}, which TSA\'s own code names (the default planner '
+        f'of a project file, the D-016 vision rule): change TSA first, then {REFRESH}')
+PlannerId = StrEnum('PlannerId', [(mode.upper(), mode) for mode in
+                                  offered_planner_modes(_PLANNERS)],
+                    module=__name__, qualname='PlannerId')
+PlannerId.__doc__ = """Per-segment planner override (acts on free/ptp; lin/circ are always Pilz).
 
-    PILZ = 'pilz'
-    OMPL = 'ompl'
-    OMPL_CHOMP = 'ompl_chomp'
+The offered modes of TMR's planner registry, from TSA's committed copy of it (ADR-0021)."""
+
+
+class ExecutionMode(StrEnum):
+    """How a move is EXECUTED (ADR-0015) — its own axis, orthogonal to ``MotionType``
+    (what SHAPE the path has) and to ``PlannerId`` (HOW free space is searched). Both of
+    those are questions about a plan; this one says WHETHER there is a plan at all.
+
+    PLAN  : plan the whole trajectory, then execute it (every move until ADR-0015).
+            Emitted as ``<MoveWaypoint>``; costs ZERO extra bytes in the bundle.
+    SERVO : stream the move with MoveIt Servo — an OUT-OF-PROCESS ``moveit_servo``
+            node driven by the ``ServoTrack`` BT node (Decision 5: ``moveit_servo``
+            2.5.10 on Humble is a node, not a library). Adds ``config/servo.yaml`` and
+            a ``servo_node`` launch entry to the cell, both gated on this value.
+
+    Deliberately NOT folded into ``MotionType``: that would make it accidentally
+    exclusive with ``lin`` and leave no room for the third value this axis already has
+    in the product (a learned policy, ADR-0005, today a separate ``RunPolicy`` node).
+    """
+
+    PLAN = 'plan'
+    SERVO = 'servo'
 
 
 class GripperKind(StrEnum):
-    """End-effector actuation type."""
+    """End-effector KIND -- what the tool IS, never what serves it (ADR-0022 D6: the adapter is a
+    separate row, ``model.end_effector.EndEffectorAdapter``)."""
 
     SUCTION = 'suction'    # SurfaceGripper-style, GripperCommand -> on/off services
     PARALLEL = 'parallel'  # jaw gripper (e.g. Robotiq), GripperCommand position
+    # ADR-0022: explicit actuator and grasp-site maps, in any mix of standard interfaces. Only
+    # with an end-effector contract; TSA 7.6.0 refuses the token at load (a silent-downgrade guard).
+    COMPOSITE = 'composite'
     NONE = 'none'          # no gripper
 
 
@@ -56,10 +102,25 @@ class AppType(StrEnum):
 
     PICK_AND_PLACE = 'pick_and_place'
     VISION_GUIDED_MOTION = 'vision_guided_motion'   # D-015: editable sequence + vision
+    # ADR-0016 Decision 4: the EMPTYING LOOP — ranked candidates, a retry over the
+    # candidate index, a holding check after the lift, and a gated stall recovery. The
+    # three things a LINEAR sequence cannot do, each one measured rather than supposed.
+    BIN_PICKING = 'bin_picking'
     GLUING = 'gluing'
     FOLLOW_PATH = 'follow_path'
     WAYPOINT_REPLAY = 'waypoint_replay'
     CNC = 'cnc'
+
+
+# trainit_perception's vocabulary, from TSA's committed snapshot of it -- never the installed TP
+# (ADR-0021, amendment M2.2). What TSA's own code names in it must still be there.
+_TP = tp_registry()
+if tp_vocabulary_problems(_TP):
+    raise RuntimeError(
+        "trainit_perception's vocabulary (catalog snapshot) no longer fits TSA's code: "
+        f'{"; ".join(tp_vocabulary_problems(_TP))}. If the snapshot was changed by hand or by a '
+        f'merge, restore it with git or run {REFRESH}; if trainit_perception really changed, '
+        f'change TSA first, then refresh')
 
 
 class DetectionMethod(StrEnum):
@@ -76,6 +137,30 @@ class DetectionMethod(StrEnum):
     COLOR_MASK = 'color_mask'
     CUSTOM = 'custom'
     PCL_CLUSTER = 'pcl_cluster'
+
+
+# WHICH candidate the detector publishes FIRST -- and therefore the RANKING. ADR-0016 Decision 1
+# made the published order of the detection array the rank; ADR-0017 Decision 1 says who computes
+# it: the DETECTOR, as one more detector parameter, travelling the road every tuned parameter
+# travels (the GUI -> ``DetectorSpec`` -> ``perception.yaml`` -> ``make_detector``). The tokens are
+# trainit_perception's (``auto`` and its rules, in its order), read from TSA's committed snapshot:
+# TSA keeps no list of its own (ADR-0021, amendment M2.2). Names are the tokens upper-cased.
+CandidateRule = StrEnum('CandidateRule', [(token.upper(), token) for token in
+                                          [_TP['auto']] + list(_TP['rules'])],
+                        module=__name__, qualname='CandidateRule')
+CandidateRule.__doc__ = """WHICH candidate the detector publishes FIRST -- so the ranking.
+
+``AUTO`` resolves the rule from what the detector can compute, in the default preference order;
+every other member is a trainit_perception rule, a PRODUCT of named terms (``CANDIDATE_RULE_TERMS``
+in ``model.perception``), from TSA's committed snapshot of TP's vocabulary (ADR-0021). Tokens are
+FROZEN: they are written into ``perception.yaml`` and read by the runtime's own rule check."""
+
+# The order a configurator is offered a rule in, best first -- trainit_perception's own preference
+# (ADR-0017 Decision 4), from the snapshot. "Default" is the value the GUI PRE-SELECTS among the
+# rules the chosen method can compute, NOT a model default: an unset rule writes NO key, so a
+# project that never configured a ranking keeps generating byte-identical output.
+DEFAULT_RULE_PREFERENCE = tuple(CandidateRule(token) for token in _TP['default_preference'])
+DEFAULT_CANDIDATE_RULE = DEFAULT_RULE_PREFERENCE[0]
 
 
 class SceneObjectSource(StrEnum):
@@ -171,6 +256,9 @@ class ToolActionKind(StrEnum):
     ATTACH = 'attach'    # AttachObject (payload follows the tcp)
     DETACH = 'detach'    # DetachObject
     RESET_SCENE = 'reset_scene'  # ResetScene: dynamic objects -> initial poses (sim loop)
+    # ADR-0022: CommandActuator -- one actuator of the end-effector contract to a NAMED target
+    # (``ToolAction.actuator`` / ``target``). Refused without a contract (R11).
+    ACTUATE = 'actuate'
 
 
 class PolicyMode(StrEnum):
@@ -257,11 +345,15 @@ IMPLEMENTED_BACKENDS = (Backend.MOCK, Backend.ISAAC, Backend.GAZEBO, Backend.REA
 
 
 class EndEffectorActuation(StrEnum):
-    """How the BT commands the end-effector on grasp/release (ADR-0010). Orthogonal to the
-    sim grasp adapter."""
+    """How the BT commands the end-effector on grasp/release (ADR-0010; ``contract``: ADR-0022).
+    Orthogonal to the sim grasp adapter."""
 
     TRIGGER = 'trigger'                # on/off signal to a service (suction, weld, on/off tool)
     JOINT_POSITION = 'joint_position'  # GripperCommand a joint to open/closed targets
+    # ADR-0022 D6: the end-effector CONTRACT commands the tool. Set by the gripper's pre-validator
+    # whenever ``contract`` is present (never chosen): the guard that makes TSA 7.6.0 refuse a
+    # canonical file at load instead of silently regenerating it as legacy.
+    CONTRACT = 'contract'
 
 
 class GripperJointTarget(StrEnum):

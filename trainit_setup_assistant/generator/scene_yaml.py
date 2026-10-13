@@ -1,6 +1,6 @@
 """Generate the ``scene_manager_node`` ``scene.yaml`` from the project SceneSpec.
 
-Mirrors ``big1500_isaac/scripts/scene_from_usd.py`` but sourced from the
+Mirrors an earlier cell's hand-written ``scene_from_usd.py`` but sourced from the
 ``CanonicalProject``: static/actuated objects become CHECKED collision meshes/prims
 the robot must avoid; dynamic objects are collision-ALLOWED; grasp targets become
 ``attach_object_ids`` (they attach to the tool on gripper close). Loaded by
@@ -12,6 +12,9 @@ from __future__ import annotations
 
 from ..model import CanonicalProject
 from ..model.enums import ShapeType
+from .eef_contract import device as eef_device
+from .eef_contract import scene_gripper_cmd_topic, scene_reset_topic
+from .namespace import param_file_node_key
 
 
 def _num(v) -> str:
@@ -38,7 +41,7 @@ def build_scene_yaml(project: CanonicalProject) -> str:
         '# Loaded by trainit_motion_runtime/scene_manager_node into the MoveIt planning',
         '# scene (mock | isaac | real). static/actuated = CHECKED collision; dynamic =',
         '# collision-allowed; grasp targets attach to the tool on gripper close.',
-        'scene_manager_node:',
+        f'{param_file_node_key(project, "scene_manager_node")}:',
         '  ros__parameters:',
         f'    frame_id: {frame}',
         f'    force_republish_hz: {_num(scene.force_republish_hz)}',
@@ -51,10 +54,20 @@ def build_scene_yaml(project: CanonicalProject) -> str:
     # ADR-0012 gate: a trigger-only end-effector (interacts_with_object False) wires no grasp
     # attach, so the topic is dropped even if a stale value lingers. Default True keeps the
     # golden byte-identical.
+    # The end-effector contract (ADR-0022 D6/D8): the scene signal is the device's own RELATIVE
+    # eef/<id>/engaged -- published by the adapter (a set_bool grip) or by TMR (a gripper_command
+    # grip) -- always written, so the scene manager's absolute default is never reached; and the
+    # reset topic is relative, per robot, under a cell namespace. The stage topic detected at
+    # Step 2 moved into the isaac binding's stage_cmd_topic. A legacy project: unchanged.
+    dev = eef_device(project)
+    if dev is not None:
+        out.append(f'    gripper_cmd_topic: "{scene_gripper_cmd_topic(dev)}"')
     if scene.gripper_cmd_topic and project.robot.gripper.interacts_with_object:
-        out.append(f'    gripper_cmd_topic: "{scene.gripper_cmd_topic}"')
-    if scene.scene_reset_topic:
-        out.append(f'    scene_reset_topic: "{scene.scene_reset_topic}"')
+        if dev is None:
+            out.append(f'    gripper_cmd_topic: "{scene.gripper_cmd_topic}"')
+    reset = scene_reset_topic(project)
+    if reset:
+        out.append(f'    scene_reset_topic: "{reset}"')
     out += [
         f'    attach_link: {scene.attach_link}',
         f'    attached_collision_check: {"true" if scene.attached_collision_check else "false"}',

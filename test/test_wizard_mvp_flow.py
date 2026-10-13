@@ -9,13 +9,13 @@ import tempfile
 import pytest
 
 from trainit_setup_assistant.gui.controller import AssistantController
+import ws_paths
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), os.pardir, 'examples', 'fr3wml_project.yaml')
-BASE = ('/home/fra/BIG1500_tending_nesting/src/big1500_digital_twin/'
-        'fr30_eef_moveit_config')
+BASE = ws_paths.external('TRAINIT_TEST_FR30_MOVEIT_CONFIG')
 
 pytestmark = pytest.mark.skipif(not os.path.isdir(BASE),
-                                reason='base fr30_eef_moveit_config not present')
+                                reason='set TRAINIT_TEST_FR30_MOVEIT_CONFIG to an fr30_eef_moveit_config to run this')
 
 
 def _configured():
@@ -23,18 +23,18 @@ def _configured():
     ctrl.open_project(EXAMPLE)
     # Step 2: load the hand-made base -> auto-config group/frames/named-states/controllers
     info = ctrl.load_base_moveit_config('fr30_eef_moveit_config', BASE)
-    ctrl.set_project_name('big1500', derive_bundle=False)
-    ctrl.project.bundle.moveit_config_package = 'big1500_trainit_config'
-    ctrl.project.bundle.app_package = 'big1500_app'
+    ctrl.set_project_name('fr30_cell', derive_bundle=False)
+    ctrl.project.bundle.moveit_config_package = 'fr30_cell_trainit_config'
+    ctrl.project.bundle.app_package = 'fr30_cell_app'
     # Step 5
     ctrl.set_mode('isaac')
     # scene: a static mesh + a dynamic grasp-target mesh
     ctrl.project.scene.objects = []
     ctrl.add_scene_object('prewash_station', [1, 1, 1], [0.58, -0.60, 1.57], shape='mesh',
-                          mesh_resource='package://big1500_isaac/meshes/prewash_station/base_collision.stl',
+                          mesh_resource='package://fr30_cell_isaac/meshes/prewash_station/base_collision.stl',
                           category='static')
     ctrl.add_scene_object('bottle_0_0', [1, 1, 1], [0.5, 0.2, 0.7], shape='mesh',
-                          mesh_resource='package://big1500_isaac/meshes/dynamic/bottle_50cl.stl',
+                          mesh_resource='package://fr30_cell_isaac/meshes/dynamic/bottle_50cl.stl',
                           category='dynamic')
     ctrl.set_object_grasp('bottle_0_0', grasp_target=True, release_policy='freeze')
     ctrl.set_scene_loader_params(touch_links=['end_effector', 'tcp', 'wrist3_link'])
@@ -79,13 +79,13 @@ def test_full_bundle_from_controller_has_per_move_flags():
     ctrl, _ = _configured()
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.generate(tmp)
-        tree = open(os.path.join(tmp, 'big1500_app', 'bt_trees', 'pick_place.xml')).read()
+        tree = open(os.path.join(tmp, 'fr30_cell_app', 'bt_trees', 'pick_place.xml')).read()
         # per-move flags emitted automatically
         assert '<SetAttachedCollisionCheck value="true"/>' in tree
         assert '<SetReleasePolicy policy="freeze"/>' in tree
         # the standalone config was copied from the base
-        assert os.path.isfile(os.path.join(tmp, 'big1500_trainit_config', 'config', 'fr30_eef.srdf'))
-        assert os.path.isfile(os.path.join(tmp, 'big1500_trainit_config', 'config', 'scene.yaml'))
+        assert os.path.isfile(os.path.join(tmp, 'fr30_cell_trainit_config', 'config', 'fr30_eef.srdf'))
+        assert os.path.isfile(os.path.join(tmp, 'fr30_cell_trainit_config', 'config', 'scene.yaml'))
 
 
 if __name__ == '__main__':

@@ -88,7 +88,12 @@ def import_usd(usd_path, default_frame: str = 'base_link', dynamic: bool = False
                 Usd.TimeCode.Default())
             base_inv = world.GetInverse()
         else:
-            base_prim = None  # invalid path -> world frame
+            # Only an EXPLICIT path can get here (the guess returns prims that exist), and a
+            # path the caller named is a mistake when it is not on the stage: falling back to
+            # the world frame put every object off by the robot's own pose, silently. Measured
+            # on the reference cell (its robot moved under /World): 1,06 m (vNext M0C #6).
+            raise ValueError(f'base prim {base_prim!r} is not on the stage {path} -- name the '
+                             'robot root or its base link, or pass none to auto-detect it')
 
     default_cat = (SceneObjectCategory(category) if category is not None
                    else (SceneObjectCategory.DYNAMIC if dynamic

@@ -88,7 +88,7 @@ def generate_launch_description():
                               description="Start the learned-policy runtime(s) with the cell"),
 {% endif %}
         DeclareLaunchArgument("planner_mode", default_value="{{ default_planner_mode }}",
-                              description="pilz | ompl | ompl_chomp"),
+                              description="{{ tsa_planner_modes }}"),
 {% if gazebo_supported %}
         DeclareLaunchArgument("world", default_value="{{ world_default }}",
                               description="Gazebo .world (mode:=gazebo); defaults to the cell "

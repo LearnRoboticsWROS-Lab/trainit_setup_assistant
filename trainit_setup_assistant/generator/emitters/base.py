@@ -7,15 +7,17 @@ recorded in the manifest with its action (COPY/TEMPLATE/GENERATE).
 
 from __future__ import annotations
 
+import os
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Union
+from typing import Callable, Dict, Union
 
 from jinja2 import Environment
 
 from ..determinism import sha256_bytes
 from ..manifest import COPY, GENERATE, TEMPLATE, GenerationManifest
+from ..provenance import SourceNamer
 
 
 class GenContext:
@@ -25,6 +27,7 @@ class GenContext:
         self.output_root = Path(output_root)
         self.env = env
         self.manifest = manifest
+        self.sources = SourceNamer()      # a COPY's source, as the manifest records it
 
     # --- low-level write (always records in the manifest) ---
     def write_bytes(self, rel_path: str, data: bytes, action: str, source: str = None,
@@ -68,9 +71,35 @@ class GenContext:
         return self.write_text(rel_path, text, GENERATE, source=source)
 
     # --- copying (byte-identical ingestion of robot geometry) ---
+    def portable(self, path: Union[str, Path], directory: bool = False) -> str:
+        """A file (or directory) as the manifest names it -- package://<package>/<path> or
+        external:<name>, never this machine's path (vNext M2.3); an unusable package.xml on the
+        way is reported once, as a manifest warning."""
+        name = self.sources(path, directory=directory)
+        for problem in self.sources.take_problems():
+            self.manifest.warn(problem)
+        return name
+
+    def warn_path(self, render: Callable[[str], str], path: Union[str, Path],
+                  directory: bool = False) -> None:
+        """A warning about a file or directory: the manifest names it portably, the user who
+        generates sees the path as given."""
+        raw = os.fspath(path) if path is not None else ''
+        # '' or '.' (Path('') is '.') would name the cwd -- a login name, another package
+        shown = raw if raw in ('', '.') else self.portable(path, directory=directory)
+        self.manifest.warn(render(shown), local=render(raw))
+
     def copy_file(self, src: Union[str, Path], rel_dest: str) -> Path:
         data = Path(src).read_bytes()
-        return self.write_bytes(rel_dest, data, COPY, source=str(src))
+        return self.write_bytes(rel_dest, data, COPY, source=self.portable(src))
+
+    def written(self, prefix: str, suffix: str = '') -> Dict[str, str]:
+        """The text of every file THIS generation rendered or generated (never a COPY) whose
+        bundle path starts with ``prefix`` and ends with ``suffix``, by path: what a later step
+        may read back from the files it wrote (vNext M2.4, the runtime requirement)."""
+        paths = sorted({e.path for e in self.manifest.files if e.action in (TEMPLATE, GENERATE)
+                        and e.path.startswith(prefix) and e.path.endswith(suffix)})
+        return {p: (self.output_root / p).read_text(encoding='utf-8') for p in paths}
 
     def copy_tree(self, src_dir: Union[str, Path], rel_dest_dir: str) -> int:
         """Copy a directory tree verbatim, recording each file. Returns file count."""

@@ -16,10 +16,10 @@ from trainit_setup_assistant.generator.orchestrator import (
     Orchestrator, generate_scene_loader_config)
 from trainit_setup_assistant.generator.scene_yaml import build_scene_yaml
 from trainit_setup_assistant.model import SceneObject
+import ws_paths
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), os.pardir, 'examples', 'fr3wml_project.yaml')
-BASE = ('/home/fra/BIG1500_tending_nesting/src/big1500_digital_twin/'
-        'fr30_eef_moveit_config')
+BASE = ws_paths.external('TRAINIT_TEST_FR30_MOVEIT_CONFIG')
 
 
 def _project_with_base():
@@ -28,19 +28,22 @@ def _project_with_base():
     p = ctrl.project
     p.robot.robot_name = 'fr30_eef'
     p.robot.base_moveit_config_package = 'fr30_eef_moveit_config'
-    p.robot.base_moveit_config_path = BASE
-    p.bundle.moveit_config_package = 'big1500_trainit_config'
-    p.bundle.app_package = 'big1500_app'
+    # A NON-EMPTY base path is what selects the scene-loader flow (SetReleasePolicy before
+    # OpenGripper, no in-tree AddCollisionObject); the tree and scene.yaml tests need only
+    # that, so they run without the real base. The tests that COPY the base are gated on it.
+    p.robot.base_moveit_config_path = BASE or 'fr30_eef_moveit_config'
+    p.bundle.moveit_config_package = 'fr30_cell_trainit_config'
+    p.bundle.app_package = 'fr30_cell_app'
     p.scene.touch_links = ['end_effector', 'tcp', 'wrist3_link']
     p.scene.objects = [
         SceneObject(id='prewash_station', shape='mesh',
-                    mesh_resource='package://big1500_isaac/meshes/prewash_station/base_collision.stl',
+                    mesh_resource='package://fr30_cell_isaac/meshes/prewash_station/base_collision.stl',
                     category='static', position=[0.58, -0.60, 1.57]),
         SceneObject(id='crate_00', shape='mesh',                       # dynamic, NOT grasped
-                    mesh_resource='package://big1500_isaac/meshes/dynamic/crate_20x50cl.stl',
+                    mesh_resource='package://fr30_cell_isaac/meshes/dynamic/crate_20x50cl.stl',
                     category='dynamic', position=[0.5, 0.2, 0.6]),
         SceneObject(id='bottle_0_0', shape='mesh',                     # dynamic grasp target
-                    mesh_resource='package://big1500_isaac/meshes/dynamic/bottle_50cl.stl',
+                    mesh_resource='package://fr30_cell_isaac/meshes/dynamic/bottle_50cl.stl',
                     category='dynamic', grasp_target=True, release_policy='freeze',
                     position=[0.5, 0.2, 0.7]),
     ]
@@ -56,7 +59,7 @@ def test_scene_yaml_has_meshes_and_attach_ids():
     _, p = _project_with_base()
     y = build_scene_yaml(p)
     assert 'type: mesh' in y
-    assert 'mesh_path: "package://big1500_isaac/meshes/dynamic/bottle_50cl.stl"' in y
+    assert 'mesh_path: "package://fr30_cell_isaac/meshes/dynamic/bottle_50cl.stl"' in y
     assert 'attach_object_ids: [bottle_0_0]' in y            # only the grasp target
     assert 'object_ids: [prewash_station, crate_00, bottle_0_0]' in y
     assert 'dynamic: true' in y and 'dynamic: false' in y     # crate/bottle vs prewash
@@ -71,7 +74,7 @@ def test_app_tree_emits_flag_nodes_and_skips_add_collision():
     ctrl, p = _project_with_base()
     with tempfile.TemporaryDirectory() as tmp:
         Orchestrator().generate(p, tmp)
-        tree = open(os.path.join(tmp, 'big1500_app', 'bt_trees', 'pick_place.xml')).read()
+        tree = open(os.path.join(tmp, 'fr30_cell_app', 'bt_trees', 'pick_place.xml')).read()
         assert '<SetAttachedCollisionCheck value="true"/>' in tree     # per-move flag
         assert '<SetReleasePolicy policy="freeze"/>' in tree           # before OpenGripper
         assert '<OpenGripper/>' in tree
@@ -80,19 +83,20 @@ def test_app_tree_emits_flag_nodes_and_skips_add_collision():
 
 
 # ---- the standalone config: copies the base + adds scene + self-referential bringup ----
-@pytest.mark.skipif(not os.path.isdir(BASE), reason='base fr30_eef_moveit_config not present')
+@pytest.mark.skipif(not os.path.isdir(BASE),
+                    reason='set TRAINIT_TEST_FR30_MOVEIT_CONFIG to an fr30_eef_moveit_config to run this')
 def test_bundle_trainit_config_is_standalone():
     ctrl, p = _project_with_base()
     with tempfile.TemporaryDirectory() as tmp:
         Orchestrator().generate(p, tmp)
-        cfg = os.path.join(tmp, 'big1500_trainit_config')
+        cfg = os.path.join(tmp, 'fr30_cell_trainit_config')
         # base config copied verbatim (SRDF + urdf + controllers)
         assert os.path.isfile(os.path.join(cfg, 'config', 'fr30_eef.srdf'))
         assert os.path.isfile(os.path.join(cfg, 'config', 'moveit_controllers.yaml'))
         # generated scene.yaml + self-referential bringup
         assert os.path.isfile(os.path.join(cfg, 'config', 'scene.yaml'))
         bringup = open(os.path.join(cfg, 'launch', 'bringup.launch.py')).read()
-        assert 'MOVEIT_CONFIG_PACKAGE = "big1500_trainit_config"' in bringup   # self
+        assert 'MOVEIT_CONFIG_PACKAGE = "fr30_cell_trainit_config"' in bringup   # self
         assert 'scene_manager_node' in bringup
         assert 'fr30_eef_moveit_config' not in bringup                          # independent
         # the copied URDF's only external $(find …) is a connector pkg, not a moveit_config
@@ -100,7 +104,8 @@ def test_bundle_trainit_config_is_standalone():
         assert 'fr30_eef_moveit_config' not in urdf
 
 
-@pytest.mark.skipif(not os.path.isdir(BASE), reason='base fr30_eef_moveit_config not present')
+@pytest.mark.skipif(not os.path.isdir(BASE),
+                    reason='set TRAINIT_TEST_FR30_MOVEIT_CONFIG to an fr30_eef_moveit_config to run this')
 def test_step3_intermediate_config():
     ctrl, p = _project_with_base()
     with tempfile.TemporaryDirectory() as tmp:
@@ -111,12 +116,12 @@ def test_step3_intermediate_config():
         assert os.path.isfile(os.path.join(cfg, 'package.xml'))
 
 
-BASELINE_SCENE = ('/home/fra/BIG1500_tending_nesting/src/big1500_digital_twin/'
-                  'fr30_eef_scene_loader_moveit_config/config/scene.yaml')
+BASELINE_SCENE = ws_paths.external('TRAINIT_TEST_FR30_SCENE_YAML')
 
 
 @pytest.mark.skipif(not (os.path.isdir(BASE) and os.path.isfile(BASELINE_SCENE)),
-                    reason='baseline scene_loader config not present')
+                    reason='set TRAINIT_TEST_FR30_MOVEIT_CONFIG and TRAINIT_TEST_FR30_SCENE_YAML '
+                           'to run this')
 def test_import_scene_yaml_reproduces_baseline():
     """The acceptance criterion: import the baseline scene.yaml -> generate the config ->
     its scene.yaml is functionally identical to the hand-made baseline."""

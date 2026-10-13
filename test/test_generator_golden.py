@@ -22,6 +22,7 @@ from trainit_setup_assistant.generator import Orchestrator
 from trainit_setup_assistant.model import BundleSpec, load_project
 from trainit_setup_assistant.verify import compare_bundle
 from trainit_setup_assistant.verify.equivalence import APP, DESCRIPTION, MOVEIT
+import ws_paths
 
 HERE = os.path.dirname(__file__)
 EXAMPLE = os.path.join(HERE, os.pardir, 'examples', 'fr3wml_project.yaml')
@@ -29,8 +30,7 @@ EXAMPLE = os.path.join(HERE, os.pardir, 'examples', 'fr3wml_project.yaml')
 # bundle the user generated end-to-end through the TSA v4.3.1 GUI and validated
 # live in Isaac (camera base config, Perception step, camera guidance,
 # step-relative post_pick, an explicit Detect point).
-GOLDEN_ROOT = ('/home/fra/fr5_ws/src/fr3wml_digital_twin/'
-               'fr3wml_suction_camera_tsa_4_1_bundle')
+GOLDEN_ROOT = str(ws_paths.GOLDEN_BUNDLE)
 GOLDEN_PROJECT = os.path.join(GOLDEN_ROOT, 'project.yaml')
 
 GOLDEN_PACKAGES = {

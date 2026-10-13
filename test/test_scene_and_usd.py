@@ -8,6 +8,7 @@ import pytest
 
 from trainit_setup_assistant.gui.controller import AssistantController
 from trainit_setup_assistant.importers import usd_available
+import ws_paths
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), os.pardir, 'examples', 'fr3wml_project.yaml')
 
@@ -78,27 +79,76 @@ def test_import_usd_scene():
             assert 'AddCollisionObject id="box_a"' in tree
 
 
-BIN_USD = ('/home/fra/fr5_ws/install/fr3wml_isaac/share/fr3wml_isaac/'
-           'usd/scenes/bin_picking_cell.usd')
+BIN_USD = str(ws_paths.installed_share('fr3wml_isaac', 'usd', 'scenes',
+                                      'bin_picking_cell.usd'))
+
+
+@pytest.mark.skipif(not usd_available(), reason='pxr/usd-core not available')
+def test_usd_import_aligns_to_robot_base():
+    """Cell-world USD coords must be expressed in the robot base frame.
+
+    vNext M0C #6. This used to read the reference cell's installed stage and assert that the
+    RAW import put the Cube "~1.07 m up (on the table)". That stage was re-authored with the
+    robot at the stage origin, so raw and aligned now agree and the premise could not hold
+    any more: the test failed on a correct importer. The behaviour is pinned here on a stage
+    authored in the test, with the robot root raised AND turned, so world and base differ
+    in both translation and rotation.
+    """
+    from pxr import Gf, Usd, UsdGeom
+    from trainit_setup_assistant.importers import import_usd
+    with tempfile.TemporaryDirectory() as tmp:
+        usd_path = os.path.join(tmp, 'cell.usda')
+        stage = Usd.Stage.CreateNew(usd_path)
+        robot = UsdGeom.Xform.Define(stage, '/fr3wml_suction')      # the robot root, on a table
+        UsdGeom.XformCommonAPI(robot).SetTranslate(Gf.Vec3d(0.2, -0.1, 1.0))
+        UsdGeom.XformCommonAPI(robot).SetRotate(Gf.Vec3f(0.0, 0.0, 90.0))
+        UsdGeom.Cube.Define(stage, '/fr3wml_suction/flange_visual')   # part of the robot
+        cube = UsdGeom.Cube.Define(stage, '/World/Cube')
+        cube.GetSizeAttr().Set(0.05)
+        UsdGeom.XformCommonAPI(cube).SetTranslate(Gf.Vec3d(0.7, -0.1, 1.07))
+        stage.GetRootLayer().Save()
+
+        # raw (no base prim found) -> the stage world frame
+        raw = {o.id: o for o in import_usd(usd_path)}
+        assert raw['Cube'].position == pytest.approx([0.7, -0.1, 1.07], abs=1e-6)
+
+        # aligned to the robot root: R^-1 (p - t), with the root turned +90 deg about Z
+        aligned = {o.id: o for o in import_usd(usd_path, base_prim='/fr3wml_suction')}
+        assert aligned['Cube'].position == pytest.approx([0.0, -0.5, 0.07], abs=1e-6)
+        assert 'flange_visual' not in aligned               # the robot's own prims are skipped
+
+        # auto-detected from the robot name hint: the same alignment
+        auto = {o.id: o for o in import_usd(usd_path, robot_hint='fr3wml')}
+        assert auto['Cube'].position == pytest.approx(aligned['Cube'].position, abs=1e-9)
+
+
+@pytest.mark.skipif(not usd_available(), reason='pxr/usd-core not available')
+def test_an_explicit_base_prim_that_is_not_on_the_stage_is_refused():
+    """vNext M0C #6. An explicit base prim missing from the stage silently fell back to the
+    WORLD frame: on the reference cell, whose robot moved from /fr3wml_suction to
+    /World/fr3wml_suction, every object came back 1,06 m off and nothing said so. A path the
+    caller named is a mistake when it is not there, not a choice -- refused, naming it."""
+    from pxr import Usd, UsdGeom
+    from trainit_setup_assistant.importers import import_usd
+    with tempfile.TemporaryDirectory() as tmp:
+        usd_path = os.path.join(tmp, 'cell.usda')
+        stage = Usd.Stage.CreateNew(usd_path)
+        UsdGeom.Cube.Define(stage, '/World/Cube')
+        stage.GetRootLayer().Save()
+        with pytest.raises(ValueError, match='/robot_that_moved'):
+            import_usd(usd_path, base_prim='/robot_that_moved')
+        assert import_usd(usd_path)                  # no base prim at all: the world frame
 
 
 @pytest.mark.skipif(not (usd_available() and os.path.isfile(BIN_USD)),
                     reason='bin_picking_cell.usd not present')
-def test_usd_import_aligns_to_robot_base():
-    """Cell-world USD coords must be expressed in the robot base frame."""
+def test_the_reference_cell_stage_aligns_the_part_at_the_flange():
+    """What holds on the reference cell's own stage: aligned to the robot, by its base link's
+    path or by name hint, the Cube sits at the flange (~0.014 m), and the two paths agree."""
     from trainit_setup_assistant.importers import import_usd
-    # raw (no base prim) -> stage world frame: the Cube sits ~1.07 m up (on the table)
-    raw = import_usd(BIN_USD)
-    cube_raw = next((o for o in raw if o.id.lower().startswith('cube')), None)
-    assert cube_raw is not None
-    assert cube_raw.position[2] > 1.0          # world frame, far above base
-
-    # aligned to the robot prim -> the Cube lands near the flange (~0.01 m), not 1.07
-    aligned = import_usd(BIN_USD, base_prim='/fr3wml_suction')
+    aligned = import_usd(BIN_USD, base_prim='/World/fr3wml_suction/base_link')
     cube = next(o for o in aligned if o.id.lower().startswith('cube'))
     assert abs(cube.position[2] - 0.014) < 0.05
-
-    # auto-detect via the robot name hint gives the same alignment
     auto = import_usd(BIN_USD, robot_hint='fr3wml')
     cube_auto = next(o for o in auto if o.id.lower().startswith('cube'))
     assert abs(cube_auto.position[2] - cube.position[2]) < 1e-6
@@ -186,7 +236,7 @@ def test_mesh_object_and_dynamic_attributes_roundtrip():
     assert crate.is_dynamic() and not crate.is_grasp_target()
 
     # a static mesh (machine) is a CHECKED collision object
-    machine = SceneObject(id='big1500', shape='mesh',
+    machine = SceneObject(id='machine', shape='mesh',
                           mesh_resource='package://p/machine.stl', category='static')
     assert machine.is_planning_collision() and not machine.is_dynamic()
 

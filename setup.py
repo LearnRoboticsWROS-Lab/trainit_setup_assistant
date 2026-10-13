@@ -7,7 +7,7 @@ package_name = 'trainit_setup_assistant'
 
 setup(
     name=package_name,
-    version='4.3.1',
+    version='7.8.0',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -26,6 +26,7 @@ setup(
             'generator/templates/moveit_config/*.j2',
             'generator/templates/app/*.j2',
             'config/*.yaml',
+            'catalog/*.yaml',
             'resources/isaac/*.py',
             'resources/isaac_cell_kit/*',
             'resources/isaac_cell_kit/scripts/*',

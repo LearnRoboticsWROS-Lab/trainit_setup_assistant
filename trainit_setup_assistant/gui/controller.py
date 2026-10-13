@@ -35,7 +35,9 @@ from ..model.enums import DetectionMethod
 from ..model.enums import (
     AppType,
     Backend,
+    CandidateRule,
     EndEffectorActuation,
+    ExecutionMode,
     GripperJointTarget,
     GripperKind,
     IsaacGraspMethod,
@@ -51,6 +53,35 @@ from ..model.enums import (
     WaypointType,
 )
 from ..robotmodel import bootstrap_project, load_robot_spec
+
+
+def _resolve_mesh_path(resource: str) -> str:
+    """A ``package://pkg/rel`` mesh resource as a local path, or ``''``.
+
+    Best-effort and silent on failure: it only pre-fills a file field in the face picker,
+    and a wrong guess there would be worse than an empty one. ``ament_index`` is used when
+    it is importable (the assistant normally runs inside a ROS environment) and the
+    workspace's own ``src`` tree is the fallback, which is where an uninstalled package
+    lives while a cell is still being built.
+    """
+    resource = (resource or '').strip()
+    if not resource:
+        return ''
+    if not resource.startswith('package://'):
+        return resource if os.path.isfile(os.path.expanduser(resource)) else ''
+    pkg, _, rel = resource[len('package://'):].partition('/')
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        candidate = os.path.join(get_package_share_directory(pkg), rel)
+        if os.path.isfile(candidate):
+            return candidate
+    except Exception:                      # noqa: BLE001 - no ROS, or not built yet
+        pass
+    for root in (os.environ.get('COLCON_PREFIX_PATH', '').split(':') or []):
+        candidate = os.path.join(root, '..', 'src', pkg, rel)
+        if os.path.isfile(candidate):
+            return os.path.normpath(candidate)
+    return ''
 
 
 class AssistantController:
@@ -117,6 +148,22 @@ class AssistantController:
         r.planning_group.base_link = base_frame
         r.planning_group.tip_link = tip_link
 
+    def set_cell_namespace(self, namespace: str) -> None:
+        """Set THE ROBOT SLOT (ADR-0016 Decision 3).
+
+        Empty puts every generated node at the root, which is what a one-robot
+        application wants and byte-for-byte what TSA generated before this field existed.
+        Non-empty namespaces this robot's whole motion stack. The value is canonicalised
+        by the model (``r3`` -> ``/r3``), so the GUI may pass either form; an illegal ROS
+        name raises, because a bad namespace produces a bring-up whose nodes silently
+        never find each other.
+        """
+        self._require().robot.cell_namespace = namespace or ''
+
+    def cell_namespace(self) -> str:
+        """The canonical robot slot (``''`` = the root, one robot)."""
+        return self._require().robot.namespace()
+
     def set_group(self, name: str, joints: List[str]) -> None:
         r = self._require().robot
         r.planning_group.name = name
@@ -144,13 +191,18 @@ class AssistantController:
     def set_gripper_controller(self, *, controller_name=None, controller_type=None,
                                action_ns=None, command_joint=None,
                                grasp_action=None, release_action=None) -> None:
-        """Edit the gripper controller (drives moveit_controllers.yaml + bt gripper_action)."""
+        """Edit the gripper controller (drives moveit_controllers.yaml + bt gripper_action).
+
+        A CANONICAL gripper (``gripper.contract`` present, ADR-0022 D6) keeps its controller
+        fields: they derive the contract's jaw action, and the contract is edited in its own
+        block -- the GUI offers no contract editor in M2.6, so it must not rewrite one."""
         grip = self._require().robot.gripper
-        if controller_name is not None:
+        canonical = grip.contract is not None
+        if controller_name is not None and not canonical:
             grip.controller_name = controller_name or None
-        if controller_type:
+        if controller_type and not canonical:
             grip.controller_type = controller_type
-        if action_ns:
+        if action_ns and not canonical:
             grip.action_ns = action_ns
         if command_joint is not None:
             grip.command_joint = command_joint or None
@@ -170,7 +222,9 @@ class AssistantController:
         an explicit ``None``/``''`` clears, any other value sets — so a caller can leave the
         angle branch untouched while writing the SRDF branch (and vice-versa)."""
         grip = self._require().robot.gripper
-        if actuation is not None:
+        # ADR-0022 D6: a canonical gripper's token is the contract's guard -- the GUI's two
+        # choices (trigger, joint_position) must never overwrite it.
+        if actuation is not None and grip.contract is None:
             grip.actuation = EndEffectorActuation(actuation)
         if joint_target is not None:
             grip.joint_target = GripperJointTarget(joint_target)
@@ -311,7 +365,7 @@ class AssistantController:
             ee = info.end_effectors[0]
             g = p.robot.gripper
             g.eef_group_name, g.eef_name, g.eef_parent_link = ee.group, ee.name, ee.parent_link
-            if g.kind is GripperKind.NONE:
+            if g.kind is GripperKind.NONE and g.contract is None:
                 g.kind = GripperKind.SUCTION
             ee_grp = info.group(ee.group)
             if ee_grp and ee_grp.joints:
@@ -332,7 +386,10 @@ class AssistantController:
         # user can still override this at Step 7. Byte-safe: the golden loads kind from
         # project.yaml and never re-ingests.
         grip = p.robot.gripper
-        if (grip.kind is GripperKind.SUCTION and grip.controller_name and grip.command_joint):
+        # ADR-0022 D6: a CANONICAL gripper's kind is authoritative and its token is the guard --
+        # the ingest never reclassifies one (kind, actuation, controller_* and contract stay).
+        if (grip.contract is None and grip.kind is GripperKind.SUCTION and grip.controller_name
+                and grip.command_joint):
             grip.kind = GripperKind.PARALLEL
             grip.actuation = EndEffectorActuation.JOINT_POSITION
         self._load_deployment_from_base(base)
@@ -446,7 +503,8 @@ class AssistantController:
             if ctype == 'FollowJointTrajectory':
                 p.robot.arm_controller.name = n
                 p.robot.arm_controller.action_ns = c.get('action_ns', 'follow_joint_trajectory')
-            elif ctype == 'GripperCommand':
+            elif ctype == 'GripperCommand' and p.robot.gripper.contract is None:
+                # a canonical gripper keeps its controller fields (ADR-0022 D6)
                 p.robot.gripper.controller_name = n
                 p.robot.gripper.action_ns = c.get('action_ns', 'gripper_command')
 
@@ -497,9 +555,30 @@ class AssistantController:
         app.type = AppType(app_type)
         app.global_planner_mode = PlannerId(global_planner_mode)
 
+    def set_bin_picking(self, *, tries=None, holding_check=None,
+                        attached_topic=None, holding_timeout_ms=None,
+                        recovery_channel=None, recovery_dwell_ms=None) -> None:
+        """Edit the emptying loop (ADR-0016 Decision 4). Every argument is keep-or-set
+        (``None`` keeps), so a caller writes only what the user changed. Read ONLY by the
+        bin_picking template, so setting it on another application changes nothing."""
+        cfg = self._require().application.bin_picking
+        if tries is not None:
+            cfg.tries = int(tries)
+        if holding_check is not None:
+            cfg.holding_check = bool(holding_check)
+        if attached_topic is not None:
+            cfg.attached_topic = attached_topic.strip()
+        if holding_timeout_ms is not None:
+            cfg.holding_timeout_ms = int(holding_timeout_ms)
+        if recovery_channel is not None:
+            cfg.recovery_channel = recovery_channel.strip()
+        if recovery_dwell_ms is not None:
+            cfg.recovery_dwell_ms = int(recovery_dwell_ms)
+
     def add_move(self, name: str, *, position=None, orientation=None,
                  named: Optional[str] = None, joints=None,
                  motion: str = 'free', planner: Optional[str] = None,
+                 execution: str = 'plan',
                  speed: int = 50, role: str = 'generic',
                  aux=None, aux_is_center: bool = False,
                  allowed_start_tolerance: float = 0.1,
@@ -517,6 +596,9 @@ class AssistantController:
         ``attached_collision_check`` (per-move): when the gripper holds objects,
         True => the planner routes the held payload around the static meshes; False =>
         transparent; None => inherit the current runtime state.
+        ``execution`` (per-move, ADR-0015): ``'plan'`` plans the trajectory and executes
+        it (``<MoveWaypoint>``); ``'servo'`` streams it with MoveIt Servo
+        (``<ServoTrack>``). Its own axis — orthogonal to ``motion`` and ``planner``.
         """
         app = self._require().application
         # ``tcp`` forces the type: a camera-guided or step-relative move may carry
@@ -537,7 +619,9 @@ class AssistantController:
         app.waypoints = [w for w in app.waypoints if w.name != name] + [wp]
         seg = MotionSegment(
             to_waypoint=name, motion=MotionType(motion),
-            planner=PlannerId(planner) if planner else None, speed=speed,
+            planner=PlannerId(planner) if planner else None,
+            # non-optional with a PLAN default: absolute semantics, no global to inherit
+            execution=ExecutionMode(execution or 'plan'), speed=speed,
             aux=list(aux) if aux is not None else None, aux_is_center=aux_is_center,
             attached_collision_check=attached_collision_check,
             wait_after_ms=max(0, int(wait_after_ms)))
@@ -545,10 +629,16 @@ class AssistantController:
         app.sequence.append(name)
 
     def add_tool_action(self, at_waypoint: str, kind: str,
-                        payload_ref: Optional[str] = None) -> None:
+                        payload_ref: Optional[str] = None, *, actuator: Optional[str] = None,
+                        target: Optional[str] = None, site: Optional[str] = None) -> None:
+        """Append a tool action. ``actuator``/``target`` (kind ``actuate``) and ``site`` (a grasp
+        or release of a multi-site device) are the end-effector contract's (ADR-0022): None, the
+        default, is a legacy action exactly as before (the field is not even set)."""
+        contract = {k: v for k, v in (('actuator', actuator), ('target', target), ('site', site))
+                    if v is not None}
         self._require().application.tool_actions.append(
             ToolAction(at_waypoint=at_waypoint, kind=ToolActionKind(kind),
-                       payload_ref=payload_ref))
+                       payload_ref=payload_ref, **contract))
 
     def set_wait_after(self, waypoint: str, ms: int) -> None:
         """Process-layer Wait block: pause (ms) after the waypoint + its tool actions."""
@@ -639,8 +729,17 @@ class AssistantController:
 
     def upsert_detector(self, name: str, *, method: str = 'color_mask',
                         params: Optional[dict] = None, continuous: bool = True,
-                        rate_hz: float = 10.0) -> None:
-        """Add or update a named detector (the Perception step's list entries)."""
+                        rate_hz: float = 10.0, candidate_rule=None) -> None:
+        """Add or update a named detector (the Perception step's list entries).
+
+        ``candidate_rule`` is the CANDIDATE RANKING (ADR-0017 Decision 1): a detector
+        parameter whose only effect is the order the detections are published in. It is
+        enum-validated here, the way ``method`` is — a typo is not a worse ranking, it is
+        no ranking — while whether its TERMS are computable is a question about the whole
+        project and is answered at generation time (``candidate_rule_problem`` previews
+        the same answer for the GUI). Falsy (``None``/``''``) leaves the rule unset, which
+        writes no key at all.
+        """
         import re
         if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', name.strip()):
             raise ValueError(
@@ -649,15 +748,127 @@ class AssistantController:
                 f'use [A-Za-z][A-Za-z0-9_]*')
         per = self._perception()
         old = per.detector_by_name(name.strip())
-        spec = DetectorSpec(name=name.strip(), method=DetectionMethod(method),
-                            params=dict(params or {}), continuous=continuous,
-                            rate_hz=float(rate_hz),
-                            # per-detector topic overrides are hand-edited data the
-                            # GUI cannot set — an upsert must not strip them
-                            rgb_topic=old.rgb_topic if old else None,
-                            depth_topic=old.depth_topic if old else None,
-                            camera_info_topic=old.camera_info_topic if old else None)
+        edited = dict(name=name.strip(), method=DetectionMethod(method),
+                      params=dict(params or {}), continuous=continuous,
+                      rate_hz=float(rate_hz),
+                      candidate_rule=(CandidateRule(candidate_rule)
+                                      if candidate_rule else None))
+        # Everything else is hand-edited project data the GUI cannot set -- the per-detector
+        # topic overrides, the external-node launch block, any field added later -- and an
+        # upsert must not strip it. The Perception page re-applies EVERY detector it loaded
+        # when the user leaves it, so stripping here lost the data just by crossing the page
+        # (vNext M0C #8: the external_node block went, and the bundle launched nothing).
+        kept = old.dict() if old else {}
+        if old is not None and old.method is not edited['method']:
+            # the block launches the node that IMPLEMENTS the old method: a deliberate method
+            # change on the page leaves it behind (kept, generation would only refuse it)
+            kept.pop('external_node', None)
+        spec = DetectorSpec(**{**kept, **edited})
         per.detectors = [d for d in per.detectors if d.name != spec.name] + [spec]
+
+    def candidate_rule_problem(self, candidate_rule, *, method: str = 'color_mask',
+                               params: Optional[dict] = None):
+        """The refusal generating with this candidate rule WOULD raise, or None.
+
+        Same pure check the generator runs (ADR-0017 Decision 3), on the same derived
+        parameters — the grasp target's face radius and the tool's two numbers — so the
+        Perception step can warn while the user is still choosing instead of letting the
+        refusal arrive at generation. A preview only: it never edits the project, and the
+        hard stop stays where the ADR put it, at generation time.
+        """
+        if not candidate_rule:
+            return None
+        from ..generator.perception_yaml import detector_params
+        from ..model.perception import candidate_rule_refusal, missing_candidate_terms
+        rule = CandidateRule(candidate_rule)
+        probe = DetectorSpec(name='probe', method=DetectionMethod(method),
+                             candidate_rule=rule, params=dict(params or {}))
+        resolved = detector_params(self._require(), probe)
+        missing = missing_candidate_terms(rule, probe.method, resolved)
+        if not missing:
+            return None
+        return candidate_rule_refusal('<this detector>', rule, probe.method, missing,
+                                      resolved)
+
+    def candidate_rules_for(self, *, method: str = 'color_mask',
+                            params: Optional[dict] = None):
+        """(offered rules, the pre-selected one) for a detector of this method, configured
+        this way — so the GUI renders the rules this detector can actually run and
+        pre-selects the measured best among them (ADR-0017 Decision 4), instead of offering
+        four rules that would stop the node."""
+        from ..generator.perception_yaml import detector_params
+        from ..model.perception import computable_rules, preferred_candidate_rule
+        probe = DetectorSpec(name='probe', method=DetectionMethod(method),
+                             candidate_rule=CandidateRule.AUTO, params=dict(params or {}))
+        resolved = detector_params(self._require(), probe)
+        resolved.pop('candidate_rule', None)
+        return (computable_rules(probe.method, resolved),
+                preferred_candidate_rule(probe.method, resolved))
+
+    def grasp_face_target(self) -> Optional[dict]:
+        """What the face picker should open on: the grasp target's mesh, unit and face.
+
+        ``None`` when the cell has no grasp target — there is then nothing to measure, and
+        saying so is better than opening an empty dialog. ``mesh`` is a filesystem path
+        when the object's ``package://`` resource can be resolved here, and empty when it
+        cannot (the user browses); ``scale`` comes from ``SceneObject.scale``, which is the
+        precedent for the explicit unit ADR-0018 Decision 4 requires.
+        """
+        obj = self._require().scene.first_grasp_target()
+        if obj is None:
+            return None
+        return {'id': obj.id, 'mesh': _resolve_mesh_path(obj.mesh_resource or ''),
+                'scale': float((obj.scale or [1.0])[0] or 1.0),
+                'face': obj.face_name(), 'params': dict(obj.grasp_face_params),
+                'source': obj.grasp_face_source,
+                'derived_radius_m': obj.face_radius_m()}
+
+    def set_grasp_face(self, face: str, params: dict, source: str = '') -> None:
+        """Write a MEASURED grasp face onto the grasp target (ADR-0018 Decision 1).
+
+        It lands on the OBJECT, where ``shape`` and ``dims`` already live, because that is
+        what was measured — the generator then turns it into the detector's parameters the
+        same way it always turned the bounding box into them. Empty ``params`` CLEARS the
+        measurement and the bounding-box approximation takes over again, which is the only
+        honest way back.
+        """
+        obj = self._require().scene.first_grasp_target()
+        if obj is None:
+            raise RuntimeError(
+                'no grasp target in the scene: mark the picked object as a dynamic grasp '
+                'target in the Scene step first — the grasp face is a property of the '
+                'object that is picked.')
+        clean = {str(k): float(v) for k, v in (params or {}).items() if float(v) > 0}
+        obj.grasp_face = (str(face or '').strip() if clean else '')
+        obj.grasp_face_params = clean
+        obj.grasp_face_source = (str(source or '').strip() if clean else '')
+
+    def grasp_face_summary(self) -> str:
+        """One line for the Perception step: what the ranking's denominator currently is."""
+        info = self.grasp_face_target()
+        if info is None:
+            return ('no grasp target in the scene — visible_fraction has no face area, '
+                    'so a rule that needs it is refused')
+        if info['params']:
+            numbers = ', '.join(f'{k}={v:.5f} m' for k, v in sorted(info['params'].items()))
+            return (f'"{info["id"]}": MEASURED {info["face"]} face — {numbers}'
+                    + (f'  [{info["source"]}]' if info['source'] else ''))
+        return (f'"{info["id"]}": face APPROXIMATED from the bounding box — '
+                f'expected_radius_m={info["derived_radius_m"]:.5f} m. Measure it to '
+                f'replace the approximation (on the reference capsule the box says '
+                f'28,10 mm where the truth is 20,95 mm).')
+
+    def set_tool_geometry(self, *, tool_radius_m=None, tool_reach_mm=None) -> None:
+        """The TOOL's own geometry (ADR-0017): the footprint radius the approach needs
+        free, and the grip window the tool can bridge. Properties of the end-effector, so
+        they live on ``GripperSpec``; the generator copies them into each detector's
+        params, where perception turns them into the clearance terms. ``None`` keeps a
+        value, 0 clears it (the terms are then simply not published)."""
+        grip = self._require().robot.gripper
+        if tool_radius_m is not None:
+            grip.tool_radius_m = max(float(tool_radius_m), 0.0)
+        if tool_reach_mm is not None:
+            grip.tool_reach_mm = max(float(tool_reach_mm), 0.0)
 
     def remove_detector(self, name: str) -> None:
         per = self._perception()

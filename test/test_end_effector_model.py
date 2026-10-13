@@ -14,7 +14,9 @@ from trainit_setup_assistant.model.robot import GripperSpec
 
 
 def test_enum_tokens_frozen():
-    assert [e.value for e in EndEffectorActuation] == ['trigger', 'joint_position']
+    # 'contract' (ADR-0022 D6) is ADDED, never chosen: the gripper's pre-validator sets it
+    # whenever a contract is present -- the guard that makes an older TSA refuse the file.
+    assert [e.value for e in EndEffectorActuation] == ['trigger', 'joint_position', 'contract']
     assert [e.value for e in GripperJointTarget] == ['srdf_state', 'angle']
     assert [e.value for e in SimGraspAdapter] == ['surface_gripper', 'link_attacher', 'none']
 

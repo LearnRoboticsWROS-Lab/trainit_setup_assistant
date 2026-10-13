@@ -44,10 +44,12 @@ class DescriptionEmitter(Emitter):
                 ctx.copy_tree(meshes_dir, f'{pkg}/meshes')
                 has_meshes = True
             else:
-                ctx.manifest.warn(f'meshes_dir not found, skipped: {meshes_dir}')
+                ctx.warn_path(lambda shown: f'meshes_dir not found, skipped: {shown}', meshes_dir,
+                              directory=True)
 
         if n_urdf == 0:
-            ctx.manifest.warn(f'no urdf files copied from {urdf_dir}')
+            ctx.warn_path(lambda shown: f'no urdf files copied from {shown}', urdf_dir,
+                          directory=True)
 
         install_dirs = 'urdf meshes' if has_meshes else 'urdf'
 
@@ -71,8 +73,9 @@ class DescriptionEmitter(Emitter):
             )
             install_dirs += ' launch rviz'
         else:
-            ctx.manifest.warn(f'no .urdf.xacro/.xacro/.urdf in {urdf_dir}: '
-                              f'view_robot.launch.py not generated')
+            ctx.warn_path(lambda shown: f'no .urdf.xacro/.xacro/.urdf in {shown}: '
+                                        f'view_robot.launch.py not generated',
+                          urdf_dir, directory=True)
 
         # TEMPLATE package.xml + CMakeLists.txt
         ctx.render_to(

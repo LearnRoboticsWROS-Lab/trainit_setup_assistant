@@ -1,0 +1,1422 @@
+# External candidate providers (vNext M1). Curated from the vNext review research; see
+# provenance. Edit by hand, never by assumption: every licence claim keeps its source.
+candidates_version: 1
+provenance:
+  what: External candidate providers -- METADATA ONLY. Nothing here is installed, configured or benchmarked
+    by TrainIt (vNext approval, 2026-10-06).
+  researched: 'vNext architecture review, 2026-10-06: 20 technologies read at tag-pinned repositories,
+    package.xml files, LICENSE files and NGC model cards; 92 claims re-checked (69 confirmed, 18 corrected,
+    5 unverifiable). The texts below are the corrected findings, verbatim.'
+  status_rule: VERIFIED = read at the exact source; REQUIRES_REVIEW = sources conflict or a legal reading
+    is needed; UNKNOWN = not found or not stated. Never upgraded by assumption.
+  cross_cutting:
+  - 'Every Apache-2.0 Isaac ROS wrapper depends on isaac_ros_common / NITROS, under the NVIDIA Isaac ROS
+    Software License (NVIDIA GPUs only, distribution conditions): no NVIDIA provider can be a Community
+    dependency (ADR-0003).'
+  - 'Isaac ROS Software License section 4g: not tested or certified for safety-critical systems.'
+  - Isaac ROS 3.2 (update 15, tag v3.2-15, 2025-12-10) is the LAST Humble release; 4.x targets Jazzy /
+    Ubuntu 24.04, 5.0 Lyrical. ROS 2 Humble reaches end of life in May 2027.
+candidates:
+- id: nvidia.cumotion_isaac_ros_3_2
+  family: motion_planning
+  kind: candidate
+  integration: moveit_pipeline
+  packages: [isaac_ros_cumotion, isaac_ros_cumotion_moveit, curobo_core]
+  name: 'cuMotion: Isaac ROS 3.2 Humble line (isaac_ros_cumotion, isaac_ros_cumotion_moveit, curobo_core
+    on cuRobo v1); same backend in Jazzy 4.0-4.3'
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - NVIDIA Isaac ROS Software License (2021-11-17)
+  - 'cuRobo v1 NVIDIA License section 3.3: research or evaluation only'
+  dependency: 'cuRobo v1 (curobo_core submodule): NVIDIA License section 3.3'
+  evaluation_use: allowed
+  commercial_use: not_allowed
+  humble_available: true
+  code_license: 'The repo LICENSE (v3.2-15) and the isaac_ros_cumotion and curobo_core package.xml files
+    use the NVIDIA Isaac ROS Software License (v. 2021-11-17). It is proprietary: it permits install/use,
+    modification of sample or reference source, and distribution either inside an application or as an
+    unmodified binary, only for applications on NVIDIA-GPU systems, and never in a copyleft combination.
+    isaac_ros_cumotion_moveit is Apache-2.0. The vendored cuRobo (branches isaac-3.2 and isaac-4.0) is
+    under the NVIDIA License, whose section 3.3 says it ''only may be used or intended for use non-commercially
+    ... research or evaluation purposes only''.'
+  weights_license: 'N/A: an optimisation-based planner with no learned weights.'
+  redistribution: cuRobo may only be redistributed under the same NVIDIA License with a full copy of it
+    and the original notices; derivative works must keep the section 3.3 limit. The Isaac ROS-licensed
+    parts may only be distributed inside an application with material additional functionality, or as
+    an unmodified binary, under terms at least as protective. Neither may go into a Community bundle (ADR-0003).
+  evaluation_vs_commercial: 'VERIFIED: ADR-0015''s premise still holds for every Humble release (3.2 through
+    3.2-15) and for 4.0-4.3, because the backend is cuRobo v1 with the section 3.3 limit. The terms EXPLICITLY
+    ALLOW research or evaluation use, so benchmarking cuMotion against OMPL/Pilz in the lab is allowed.
+    Commercial deployment (a paying customer or a production cell) is NOT allowed. The Isaac ROS licence
+    on the wrapper does not lift the cuRobo restriction.'
+  os_ros_support: 'Isaac ROS 3.0, 3.1 and 3.2 target ROS 2 Humble on Ubuntu 22.04 / JetPack 6. The LAST
+    Humble release is Isaac ROS 3.2 Update 15 (tag v3.2-15, 2025-12-10); no 3.2 update is listed after
+    it. Humble debs are still served from release-3 jammy, component release-3.0: ros-humble-isaac-ros-cumotion
+    3.2.7, ros-humble-curobo-core 3.2.5, ros-humble-isaac-ros-cumotion-moveit 3.2.5 (rebuilt against MoveIt
+    2.5.8 in 3.2 Update 5). Isaac ROS 4.0-4.3 (2025-10 to 2026-03) target Jazzy on Ubuntu 24.04 and keep
+    the cuRobo isaac-4.0 backend. Neither release-4 nor release-4.6 has a jammy apt repo (HTTP 404).'
+  requirements:
+    text: 'Isaac ROS 3.2 platform: x86_64 with an Ampere-or-newer GPU and at least 8 GB, Ubuntu 22.04+,
+      CUDA 12.6+; or Jetson Orin on JetPack 6.1/6.2 (Orin Nano Super from 3.2 Update 1; Orin Nano 4GB
+      not recommended). The RTX 4060 Laptop (Ada, 8 GB) meets the minimum exactly but shares VRAM with
+      Isaac Sim [inferred]. cuMotion''s own VRAM use is not documented: UNKNOWN.'
+  maturity_notes: 'Product package since Isaac ROS 3.0 (2024-05-30). The 3.2 line has had no update since
+    2025-12-10. Known issues: a dlopen error that required rebuilding against MoveIt 2.5.8 (3.2 Update
+    5), and an April 2026 NVIDIA forum thread where a user could not find ros-humble-isaac-ros-cumotion
+    in apt.'
+  recommendation: avoid
+  license_source:
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion/blob/v3.2-15/LICENSE
+    tag: v3.2-15
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion/blob/v3.2-15/.gitmodules
+    tag: v3.2-15
+    file: .gitmodules
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion/blob/v3.2-15/isaac_ros_cumotion_moveit/package.xml
+    tag: v3.2-15
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion/blob/v3.2-15/curobo_core/package.xml
+    tag: v3.2-15
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion/blob/v4.3-0/.gitmodules
+    tag: v4.3-0
+    file: .gitmodules
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/curobo/blob/isaac-3.2/LICENSE
+    tag: isaac-3.2
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/curobo/blob/isaac-4.0/LICENSE
+    tag: isaac-4.0
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/v/release-3.2/repositories_and_packages/isaac_ros_cumotion/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/v/release-3.2/getting_started/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/releases/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://isaac.download.nvidia.com/isaac-ros/release-3/dists/jammy/release-3.0/binary-amd64/Packages.gz
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion_moveit/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://forums.developer.nvidia.com/t/isaac-ros-cumotion-ros2-humble-support/359017
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.cumotion_isaac_ros_4_4
+  family: motion_planning
+  kind: candidate
+  integration: moveit_pipeline
+  packages: [isaac_ros_cumotion, isaac_ros_cumotion_moveit, cumotion_vendor]
+  name: 'cuMotion: Isaac ROS 4.4 and later (C++ cuMotion library backend v1.1.0; cumotion_vendor in 5.0)'
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: REQUIRES_REVIEW
+  licence_clauses:
+  - NVIDIA Isaac ROS Software License sections 1c, 2, 4a, 12
+  dependency: cuMotion C++ library v1.1.0 (cumotion_vendor); whether it still uses cuRobo internally is
+    CONFLICTING between the concept page and the release notes
+  evaluation_use: allowed
+  commercial_use: allowed_by_licence_text
+  humble_available: false
+  code_license: The cuMotion library LICENSE says it is 'licensed under the NVIDIA Isaac ROS Software
+    License ... except as otherwise noted in individual file headers' (v. 2021-11-17). Its NOTICE lists
+    pybind11, yaml-cpp, urdfdom and TinyXML; no cuRobo and no non-commercial component. cumotion_vendor
+    and isaac_ros_cumotion (4.4/5.0 package.xml) use the NVIDIA Isaac ROS Software License; isaac_ros_cumotion_moveit
+    is Apache-2.0.
+  weights_license: 'N/A: no learned weights.'
+  redistribution: 'Isaac ROS Software License sections 1c/2: distribution only inside an application with
+    material additional functionality, or as an unmodified binary; downstream terms must be at least as
+    protective; source derivatives must carry the notice ''This software contains source code provided
+    by NVIDIA Corporation''; no copyleft combination.'
+  evaluation_vs_commercial: 'The licence text has no non-commercial clause, so both evaluation and commercial
+    deployment are allowed. Limits: applications for NVIDIA-GPU systems only (section 4a), no reverse
+    engineering, and NVIDIA may terminate if it stops offering the software (section 12). The Isaac ROS
+    EA2.1 notes call this a ''new software license with commercial use grant''. Because it is proprietary,
+    it can only be a Pro/optional provider, never a Community dependency (ADR-0003). CONFLICT: the current
+    cuMotion concept page still says cuMotion ''leverages the cuRobo library internally'', while the 4.6
+    release notes say the backend switched away from cuRobo and the cuMotion NOTICE lists no cuRobo. REQUIRES_REVIEW
+    before relying on this.'
+  os_ros_support: Isaac ROS 4.4, 4.5 and 4.6 (2026-08-18, latest Jazzy) target ROS 2 Jazzy on Ubuntu 24.04.
+    Isaac ROS 5.0.0 (2026-09-21) targets ROS 2 Lyrical on Ubuntu 24.04 through its own buildfarm; for
+    Lyrical, Ubuntu 26.04 is Tier 1 and Noble only Tier 3. There is no Humble build; the last Humble release
+    remains 3.2-15. The standalone cuMotion v1.1.0 does ship an x86_64 CUDA 12.6 Ubuntu 22.04 tarball
+    and Python 3.10-3.14 wheels, but NVIDIA provides no Humble or MoveIt 2.5 integration for it.
+  requirements:
+    text: 'Isaac ROS 4.6/5.0: x86_64 Ampere+ with at least 8 GB, Ubuntu 24.04, CUDA 13.2+, driver 595+.
+      Our driver is 580.178.04, so an upgrade would be needed; CUDA forward compatibility does not work
+      on GeForce. Jetson Thor and Orin on JetPack 7.2; DGX Spark. Isaac ROS 4.0: Thor only, CUDA 13.0,
+      driver 580+. The standalone cuMotion library needs Turing or newer on x86 and also supports Jetson
+      Orin (JetPack 6.2.1) and Thor.'
+  maturity_notes: 'The C++ backend has existed for 5 months. Known limitations: with a UR10e and nvblox
+    enabled, cumotion_moveit may fail to plan (4.5); the robot segmenter''s standalone launch can hang
+    (4.5); cumotion_moveit examples may fail with vendor packages not yet certified for Lyrical (5.0).'
+  recommendation: later
+  license_source:
+  - url: https://nvidia-isaac-ros.github.io/v/release-4.6/reference_workflows/isaac_for_manipulation/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/releases/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/nvidia-isaac/cumotion
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/nvidia-isaac/cumotion/blob/main/LICENSE
+    tag: main
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/nvidia-isaac/cumotion/blob/main/NOTICE
+    tag: main
+    file: NOTICE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion/blob/v4.4-0/isaac_ros_cumotion/package.xml
+    tag: v4.4-0
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion/blob/v5.0-0/isaac_ros_cumotion/package.xml
+    tag: v5.0-0
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nitros/blob/v5.0-0/cumotion_vendor/package.xml
+    tag: v5.0-0
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nitros/tree/v4.6-0/isaac_ros_nitros/lib/cumotion
+    tag: v4.6-0
+    file: cumotion
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion_moveit/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/concepts/manipulation/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/getting_started/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/v/release-4.6/getting_started/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://isaac.download.nvidia.com/isaac-ros/release-4/dists/noble/main/binary-amd64/Packages.gz
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://docs.ros.org/en/rolling/Releases/lyrical/supported-platforms.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.curobo_v1
+  family: motion_planning
+  kind: candidate
+  integration: library
+  name: cuRobo v1 (NVlabs/curobo v0.6.0-v0.7.8; branches isaac-3.0, isaac-3.2, isaac-4.0)
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - 'NVIDIA License section 3.3: non-commercially means research or evaluation only'
+  dependency: null
+  evaluation_use: allowed
+  commercial_use: not_allowed
+  humble_available: true
+  code_license: NVIDIA License with the section 3.3 limit 'non-commercially means for research or evaluation
+    purposes only'. Verified at tags v0.7.7 and v0.7.8 and on branches isaac-3.2 and isaac-4.0.
+  weights_license: N/A.
+  redistribution: Only under the same licence, with a full copy and notices; derivative works keep section
+    3.3. Isaac Lab bundles cuRobo under a separate 'NVIDIA Isaac Lab Additional Software and Materials
+    License' (v. 2025-08-15) that bans distribution and limits use to running it together with Isaac Lab.
+  evaluation_vs_commercial: Research and evaluation are ALLOWED; commercial use is NOT (NVIDIA excepted).
+    The Isaac Lab add-on licence says 'This license ends by July 31, 2026', and that text is unchanged
+    today on Isaac Lab main, develop, release/3.0.0 and v2.3.2. Using SkillGen/cuRobo under that grant
+    after 2026-07-31 is REQUIRES_REVIEW.
+  os_ros_support: 'No ROS distro of its own. Humble integration: Isaac ROS 3.2 (last Humble release 3.2-15)
+    via curobo_core; Jazzy: Isaac ROS 4.0-4.3.'
+  requirements:
+    text: NVIDIA GPU with CUDA (v1 details not re-verified).
+  maturity_notes: 'Superseded: the README tells v1-API users to pin v0.7.8; the last v1 GitHub release
+    with notes is v0.7.7 (2025-04-25).'
+  recommendation: avoid
+  license_source:
+  - url: https://github.com/NVlabs/curobo/blob/v0.7.8/LICENSE
+    tag: v0.7.8
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/curobo/blob/isaac-3.2/LICENSE
+    tag: isaac-3.2
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/curobo/blob/isaac-4.0/LICENSE
+    tag: isaac-4.0
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/curobo/releases
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/isaac-sim/IsaacLab/blob/main/docs/licenses/dependencies/cuRobo-license.txt
+    tag: main
+    file: cuRobo-license.txt
+    checked_on: '2026-10-06'
+  - url: https://github.com/isaac-sim/IsaacLab/blob/release/3.0.0/docs/licenses/dependencies/cuRobo-license.txt
+    tag: release
+    file: cuRobo-license.txt
+    checked_on: '2026-10-06'
+  - url: https://github.com/isaac-sim/IsaacLab/releases/tag/v2.3.0
+    tag: v2.3.0
+    file: release page
+    checked_on: '2026-10-06'
+- id: nvidia.curobo_v2
+  family: motion_planning
+  kind: candidate
+  integration: library
+  name: cuRoboV2 (NVlabs/curobo v0.8.0 and later, Apache-2.0)
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - Apache-2.0
+  dependency: needs a TrainIt MoveIt planner plugin to be a pipeline (none exists)
+  evaluation_use: allowed
+  commercial_use: allowed
+  humble_available: true
+  code_license: Apache-2.0 (LICENSE on main and v0.8.0; SPDX header in README). Example robot assets are
+    under their own licences (LICENSE_ASSETS).
+  weights_license: 'N/A: no weights; bundled assets are licensed per asset.'
+  redistribution: 'Apache-2.0: keep the licence and notices. Assets follow LICENSE_ASSETS. Third-party
+    packages it downloads keep their own terms.'
+  evaluation_vs_commercial: Both evaluation and commercial use are allowed (Apache-2.0). Licence-wise
+    it fits ADR-0003, but it runs only on NVIDIA GPUs, so it must stay optional.
+  os_ros_support: 'Not a ROS package. Install guide: Ubuntu >= 20.04 (tutorial on 22.04). Usable from
+    Humble''s Python 3.10 [inferred from the >= 3.10 requirement; not executed].'
+  requirements:
+    text: NVIDIA GPU newer than Turing with at least 4 GB VRAM; driver >= 580.65.06 (ours 580.178.04 satisfies
+      it); Python >= 3.10 (3.13+ not validated); cu12 or cu13 PyTorch extras. The docs landing page demonstrates
+      Jetson Orin.
+  maturity_notes: v0.8.0 is a research-grade major refactor ('breaks most existing API'); five months
+    old; no ROS integration.
+  recommendation: experimental
+  license_source:
+  - url: https://github.com/NVlabs/curobo/releases/tag/v0.8.0
+    tag: v0.8.0
+    file: release page
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/curobo/blob/main/LICENSE
+    tag: main
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/curobo/blob/main/README.md
+    tag: main
+    file: README.md
+    checked_on: '2026-10-06'
+  - url: https://nvlabs.github.io/curobo/latest/getting-started/installation.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://arxiv.org/abs/2603.05493
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/nvidia-isaac/cumotion
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.foundationpose_isaac_ros
+  family: perception_pose
+  kind: candidate
+  integration: external_node
+  name: 'FoundationPose: isaac_ros_foundationpose (Isaac ROS) with NGC weights nvidia/isaac/foundationpose'
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - Apache-2.0 wrapper
+  - NVIDIA DL Models License Agreement (TAO 21-08)
+  dependency: isaac_ros_nitros, isaac_ros_gxf (NVIDIA Isaac ROS Software License); TensorRT (not reviewed);
+    weights NGC nvidia/isaac/foundationpose under the NVIDIA Deep Learning Models EULA
+  evaluation_use: allowed
+  commercial_use: allowed
+  humble_available: true
+  code_license: isaac_ros_foundationpose and gxf_isaac_foundationpose are Apache-2.0 (package.xml at v3.2-15
+    and v5.0-0). Runtime dependencies isaac_ros_nitros, isaac_ros_gxf and managed NITROS are under the
+    NVIDIA Isaac ROS Software License. TensorRT is under NVIDIA's own licence (not reviewed).
+  weights_license: NGC model nvidia/isaac/foundationpose (latest 1.0.1_onnx, updated 2025-10-13) is 'covered
+    by the Model EULA', i.e. the NVIDIA Deep Learning Models License Agreement (TAO 21-08, v. 2021-08-10).
+    The card says the model 'does not require additional training for commercial applications'.
+  redistribution: Weights may only be distributed compiled into an application with material additional
+    functionality, accessed only by that application, never as a stand-alone product, and only for NVIDIA-GPU
+    systems; 'deployable' models may be distributed as provided. NITROS follows Isaac ROS licence sections
+    1c/2. The Apache-2.0 wrapper can be redistributed freely.
+  evaluation_vs_commercial: 'Both evaluation and commercial deployment are allowed: neither the DL Models
+    EULA nor the Isaac ROS licence has a non-commercial clause. Use is limited to NVIDIA-GPU systems.
+    Because it is proprietary, it can only be a Pro/optional provider (ADR-0003). By contrast, NVlabs''
+    research release of the same model is non-commercial.'
+  os_ros_support: 'Isaac ROS 3.0-3.2: Humble on Ubuntu 22.04 (last release 3.2-15, 2025-12-10). 4.0-4.6:
+    Jazzy on Ubuntu 24.04. 5.0: Lyrical. The NGC card says it is intended for Ubuntu 22.04 with CUDA 11.6+
+    or JetPack 6.0 DP+, and ''can only be used with TensorRT''.'
+  requirements:
+    text: 'Current docs: peak GPU memory is about 7 GB for the FP32 pipeline; ''we recommend using a GPU
+      with at least 8 GB''. 3.2 docs: ''At least 7.5 GB of free GPU memory'' to convert ONNX to a TensorRT
+      engine; TensorRT 10.3+ runs it in FP32 because of FP16 precision loss. NGC card: 8.7 QPS estimation
+      and 1599 QPS tracking on an RTX 4060 Ti; 4.6 and 746 on Jetson Orin. On our 8 GB RTX 4060 Laptop
+      it is borderline on its own and will NOT fit alongside Isaac Sim. On Orin Nano Super (8 GB shared)
+      it is implausible [inferred; must be measured].'
+  maturity_notes: 'Shipping since Isaac ROS 3.0 (2024-05-30) and improved through 3.2 and 4.0. Known issues:
+    high latency with Hawk cameras (3.0); segfaults on Thor when combined with nvblox and GXF nodes (4.4);
+    wrong poses when fed ESS/FoundationStereo depth (4.5 limitation).'
+  recommendation: experimental
+  license_source:
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_pose_estimation/blob/v3.2-15/isaac_ros_foundationpose/package.xml
+    tag: v3.2-15
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_pose_estimation/blob/v3.2-15/isaac_ros_gxf_extensions/gxf_isaac_foundationpose/package.xml
+    tag: v3.2-15
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nitros/blob/v3.2-15/LICENSE
+    tag: v3.2-15
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://catalog.ngc.nvidia.com/orgs/nvidia/teams/isaac/models/foundationpose
+    tag: null
+    file: NGC model card
+    checked_on: '2026-10-06'
+  - url: https://developer.download.nvidia.com/licenses/tao_toolkit_21-08_models_eula.pdf
+    tag: null
+    file: licence text
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/v/release-3.2/repositories_and_packages/isaac_ros_pose_estimation/isaac_ros_foundationpose/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_pose_estimation/isaac_ros_foundationpose/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/releases/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://isaac.download.nvidia.com/isaac-ros/release-3/dists/jammy/release-3.0/binary-amd64/Packages.gz
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.foundationpose_nvlabs
+  family: perception_pose
+  kind: candidate
+  integration: library
+  name: 'FoundationPose: NVlabs research release (github.com/NVlabs/FoundationPose)'
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: REQUIRES_REVIEW
+  licence_clauses:
+  - NVIDIA Source Code License section 3.3
+  dependency: whether the README's "data" covers the released weights is not stated
+  evaluation_use: allowed
+  commercial_use: not_allowed
+  humble_available: false
+  code_license: 'NVIDIA Source Code License, section 3.3: ''only may be used or intended for use non-commercially
+    ... research or evaluation purposes only''.'
+  weights_license: 'Not licensed separately. The README says ''The code and data are released under the
+    NVIDIA Source Code License''; whether ''data'' covers the Google Drive weights is not stated: REQUIRES_REVIEW
+    (treat as non-commercial). The README also says the diffusion-augmented weights were not released
+    because of Stable-Diffusion/LAION legal restrictions.'
+  redistribution: Only under the same licence with a full copy; derivative works keep section 3.3.
+  evaluation_vs_commercial: Research and evaluation are ALLOWED; commercial use is NOT (NVIDIA excepted).
+    For commercial use, the Isaac ROS/NGC packaging of the same model comes under different terms that
+    do allow it.
+  os_ros_support: No ROS; Linux/Docker; not tied to any ROS distro.
+  requirements:
+    text: 'README mentions recent GPUs such as the 4090 (issue 27) and CUDA 12.x PyTorch builds. VRAM
+      is not stated: UNKNOWN.'
+  maturity_notes: Research code, still active (last push 2026-04-29).
+  recommendation: avoid
+  license_source:
+  - url: https://github.com/NVlabs/FoundationPose/blob/main/LICENSE
+    tag: main
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/FoundationPose
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.foundationstereo
+  family: perception_depth
+  kind: candidate
+  integration: external_node
+  name: 'FoundationStereo family: NVlabs FoundationStereo and Fast-FoundationStereo, NGC TAO FoundationStereo,
+    C-Fast-FoundationStereo, isaac_ros_foundationstereo'
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: REQUIRES_REVIEW
+  licence_clauses:
+  - NVIDIA Source Code License section 3.3 (research only)
+  - NVIDIA Open Model License (2025-10-24)
+  dependency: research checkpoints research-only; NGC TAO model under the NVIDIA Open Model License; not
+    available on Humble
+  evaluation_use: allowed_for_ngc_model
+  commercial_use: allowed_for_ngc_model
+  humble_available: false
+  code_license: 'NVlabs FoundationStereo and Fast-FoundationStereo: NVIDIA Source Code License, section
+    3.3 ''non-commercially means for research purposes only'' (note: no ''evaluation''). isaac_ros_foundationstereo
+    and isaac_ros_dnn_stereo_decoder: Apache-2.0.'
+  weights_license: '- NVlabs research checkpoints: research only.
+
+    - NGC TAO FoundationStereo: NVIDIA Open Model License (v. 2025-10-24), ''This model is ready for commercial
+    use''. This is what the Isaac ROS installer downloads (deployable_foundationstereo_small_*_v2.0.onnx).
+
+    - C-Fast-FoundationStereo (HF): NVIDIA Open Model Agreement (''Works are commercially usable'').
+
+    - Isaac ROS 4.5 limitation: ''Fast-FoundationStereo is a research model and is not intended for commercial
+    use. For commercial applications, use FoundationStereo.'''
+  redistribution: 'Open Model License: redistribution is allowed with a copy of the agreement and a Notice
+    file reading ''Licensed by NVIDIA Corporation under the NVIDIA Open Model License''. Rights terminate
+    if guardrails are bypassed, and NVIDIA may update the agreement. Research licence: same licence only,
+    non-commercial.'
+  evaluation_vs_commercial: 'Research code and weights: research only. Whether internal product evaluation
+    counts as research is REQUIRES_REVIEW; commercial use is NOT allowed. The NGC TAO model (Open Model
+    License) and C-Fast (Open Model Agreement) allow commercial use.'
+  os_ros_support: 'Isaac ROS 3.2 (Humble): NOT available; there is no isaac_ros_foundationstereo in the
+    v3.2-15 tree or the jammy apt index. Isaac ROS 4.0-4.6: Jazzy. 5.0: Lyrical.'
+  requirements:
+    text: 'NGC card: tested on H100, A100, RTX 5090, L40, Thor and AGX Orin with FP16 TensorRT, fixed
+      320x736 and 576x960 inputs. Isaac ROS 4.0: model conversion can take more than 30 min; 4.1: FP16
+      conversion can run out of memory. Fit on the 8 GB laptop: UNKNOWN, probably tight.'
+  maturity_notes: 'NGC v2.0 (2025-11). Isaac ROS 4.5 limitations: the DNN stereo decoder has sync issues,
+    and FoundationStereo depth produces wrong poses in the manipulation workflows.'
+  recommendation: later
+  license_source:
+  - url: https://github.com/NVlabs/FoundationStereo/blob/master/LICENSE
+    tag: master
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/FoundationStereo
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://catalog.ngc.nvidia.com/orgs/nvidia/teams/tao/models/foundationstereo
+    tag: null
+    file: NGC model card
+    checked_on: '2026-10-06'
+  - url: https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/
+    tag: null
+    file: licence text
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/Fast-FoundationStereo/blob/master/LICENSE.txt
+    tag: master
+    file: LICENSE.txt
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/Fast-FoundationStereo
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://huggingface.co/nvidia/c-fast-foundationstereo
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-agreement/
+    tag: null
+    file: licence text
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_dnn_stereo_depth/blob/v5.0-0/isaac_ros_foundationstereo/package.xml
+    tag: v5.0-0
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/releases/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.ess_stereo
+  family: perception_depth
+  kind: candidate
+  integration: external_node
+  name: 'ESS DNN stereo depth: isaac_ros_ess with NGC nvidia/isaac/dnn_stereo_disparity'
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: UNKNOWN
+  licence_clauses:
+  - Apache-2.0 (isaac_ros_ess, v5.0-0)
+  - NVIDIA DL Models License (weights)
+  dependency: the Humble build uses gxf_isaac_ess, whose licence was not checked
+  evaluation_use: allowed
+  commercial_use: allowed
+  humble_available: true
+  code_license: 'isaac_ros_ess is Apache-2.0 (package.xml v5.0-0). The 3.2 build uses gxf_isaac_ess (licence
+    not checked: UNKNOWN) and NITROS (NVIDIA Isaac ROS Software License).'
+  weights_license: 'NGC dnn_stereo_disparity (latest 4.1.0_onnx_trt10.16, 2026-06-24): NVIDIA Deep Learning
+    Models License (TAO 21-08); ''This model is ready for commercial use.'''
+  redistribution: 'DL Models EULA sections 1.1-1.2: only compiled into an application, never stand-alone,
+    NVIDIA GPUs only.'
+  evaluation_vs_commercial: Both allowed, on NVIDIA-GPU systems.
+  os_ros_support: 'Humble: Isaac ROS 3.2 (ros-humble-isaac-ros-ess 3.2.10 in the jammy repo; last Humble
+    release 3.2-15). Jazzy: 4.x (moved onto isaac_ros_dnn_stereo_decoder in 4.5). Lyrical: 5.0.'
+  requirements:
+    text: 'Isaac ROS minimum (Ampere+, 8 GB). ESS-specific VRAM is not stated: UNKNOWN.'
+  maturity_notes: Mature (in Isaac ROS since 2022; ESS 4.x).
+  recommendation: later
+  license_source:
+  - url: https://catalog.ngc.nvidia.com/orgs/nvidia/teams/isaac/models/dnn_stereo_disparity
+    tag: null
+    file: NGC model card
+    checked_on: '2026-10-06'
+  - url: https://developer.download.nvidia.com/licenses/tao_toolkit_21-08_models_eula.pdf
+    tag: null
+    file: licence text
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/v/release-3.2/repositories_and_packages/isaac_ros_dnn_stereo_depth/isaac_ros_ess/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_dnn_stereo_depth/blob/v5.0-0/isaac_ros_ess/package.xml
+    tag: v5.0-0
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://isaac.download.nvidia.com/isaac-ros/release-3/dists/jammy/release-3.0/binary-amd64/Packages.gz
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/releases/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.nvblox_core
+  family: scene
+  kind: candidate
+  integration: library
+  name: nvblox core library (github.com/nvidia-isaac/nvblox)
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - Apache-2.0
+  dependency: null
+  evaluation_use: allowed
+  commercial_use: allowed
+  humble_available: true
+  code_license: Apache-2.0 (LICENSE.md on branch public and at tags v0.0.7 and v0.0.8).
+  weights_license: N/A for the core. The people-segmentation models used by the ROS examples are separate
+    NGC models (not reviewed).
+  redistribution: Apache-2.0.
+  evaluation_vs_commercial: Both allowed.
+  os_ros_support: 'A library, not tied to a ROS distro. isaac_ros_nvblox pulls it in as a git submodule:
+    branch v0.0.7 at tag v3.2-15 (Humble, last Humble release) and branch ''public'' at v5.0-0.'
+  requirements:
+    text: 'Standalone: UNKNOWN. Isaac ROS tables: Ampere+, 8 GB.'
+  maturity_notes: Actively developed (last push 2026-07-03); pre-1.0 versioning; used in production inside
+    Isaac Perceptor and Isaac Manipulator.
+  recommendation: later
+  license_source:
+  - url: https://github.com/nvidia-isaac/nvblox/blob/public/LICENSE.md
+    tag: public
+    file: LICENSE.md
+    checked_on: '2026-10-06'
+  - url: https://github.com/nvidia-isaac/nvblox
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox/blob/v3.2-15/.gitmodules
+    tag: v3.2-15
+    file: .gitmodules
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox/blob/v5.0-0/.gitmodules
+    tag: v5.0-0
+    file: .gitmodules
+    checked_on: '2026-10-06'
+- id: nvidia.nvblox_isaac_ros
+  family: scene
+  kind: candidate
+  integration: external_node
+  name: isaac_ros_nvblox (Isaac ROS Nvblox)
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - Apache-2.0
+  - NVIDIA Isaac ROS Software License (NITROS)
+  dependency: isaac_ros_managed_nitros, isaac_ros_gxf (NVIDIA Isaac ROS Software License)
+  evaluation_use: allowed
+  commercial_use: allowed_nvidia_gpu_only
+  humble_available: true
+  code_license: Apache-2.0 (repo LICENSE and nvblox_ros package.xml). However, nvblox_ros 3.2 depends
+    on isaac_ros_managed_nitros and isaac_ros_gxf, which are under the NVIDIA Isaac ROS Software License.
+  weights_license: N/A (the optional people-segmentation models were not reviewed).
+  redistribution: The Apache-2.0 parts are free to redistribute; the NITROS dependencies follow the Isaac
+    ROS licence (sections 1c/2).
+  evaluation_vs_commercial: Both allowed; the NITROS parts are restricted to NVIDIA GPUs.
+  os_ros_support: 'Humble: Isaac ROS 3.2 (ros-humble-isaac-ros-nvblox and ros-humble-nvblox-ros 3.2.5;
+    last Humble release 3.2-15). Jazzy: 4.x (4.1 added LiDAR dynamics). Lyrical: 5.0, with a known limitation:
+    the RealSense D455 example integrates nothing and produces an empty mesh (nvbugs/6786950).'
+  requirements:
+    text: 'Isaac ROS minimum: Ampere+ with at least 8 GB (Jetson Orin on 3.2). Memory for a 1 cm workcell
+      grid: UNKNOWN.'
+  maturity_notes: Mature product (since 2022). In 4.5, cumotion_moveit with nvblox enabled may fail to
+    plan on a UR10e.
+  recommendation: later
+  license_source:
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nvblox/blob/v3.2-15/nvblox_ros/package.xml
+    tag: v3.2-15
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_nvblox/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_nvblox/isaac_ros_nvblox/api/topics_and_services.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/releases/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://isaac.download.nvidia.com/isaac-ros/release-3/dists/jammy/release-3.0/binary-amd64/Packages.gz
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.isaac_lab
+  family: policy_training
+  kind: candidate
+  integration: training_tool
+  name: Isaac Lab (isaac-sim/IsaacLab)
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - BSD-3-Clause
+  - 'isaaclab_mimic: Apache-2.0'
+  dependency: 'the bundled cuRobo is under the Isaac Lab Additional Software and Materials License, ended
+    2026-07-31: SkillGen/cuRobo use REQUIRES_REVIEW'
+  evaluation_use: allowed
+  commercial_use: allowed
+  humble_available: false
+  code_license: BSD-3-Clause (SPDX header in LICENSE; verified locally and on main, develop, release/3.0.0
+    and v2.3.2). The isaaclab_mimic module is Apache-2.0 (LICENSE-mimic).
+  weights_license: 'N/A; weights TrainIt trains belong to TrainIt. The bundled cuRobo comes under the
+    ''NVIDIA Isaac Lab Additional Software and Materials License'' (v. 2025-08-15): use only together
+    with Isaac Lab on NVIDIA GPUs, no distribution, and ''This license ends by July 31, 2026''. That text
+    is unchanged on all branches as of 2026-10-06.'
+  redistribution: The BSD-3 code can be redistributed freely. Isaac Sim/Kit components cannot (see the
+    Isaac Sim entry). The cuRobo add-on cannot be distributed.
+  evaluation_vs_commercial: 'Isaac Lab code: commercial use allowed (BSD-3). Policies trained with it
+    are TrainIt''s own artefacts. SkillGen with cuRobo: use is restricted to running it with Isaac Lab,
+    and the licence term ended 2026-07-31, so do not use it without new terms (REQUIRES_REVIEW). The simulator
+    itself is governed by the Isaac Sim terms (internal R&D is free).'
+  os_ros_support: 'Not a ROS package. 2.3.x: Isaac Sim 5.1 with Python 3.11, on Ubuntu 22.04 or 24.04.
+    3.0: Isaac Sim 6.0/6.1 with Python 3.12; it can also run without Kit (Newton or OVPhysX backends).'
+  requirements:
+    text: Runs on our RTX 4060 Laptop with 8 GB [verified by the trainit_lab runs], although the Isaac
+      Sim 5.1 minimum spec is an RTX 4080 with 16 GB and the docs warn that 'Isaac Lab usage will require
+      additional RAM and VRAM'.
+  maturity_notes: '2.3.x is the stable line and the final 2.x. 3.0 is Early Access: NVIDIA says the architecture
+    is ready to build on and only bug fixes will land until GA.'
+  recommendation: use_now
+  license_source:
+  - url: https://github.com/isaac-sim/IsaacLab/blob/main/LICENSE
+    tag: main
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/isaac-sim/IsaacLab/blob/main/LICENSE-mimic
+    tag: main
+    file: LICENSE-mimic
+    checked_on: '2026-10-06'
+  - url: https://github.com/isaac-sim/IsaacLab/releases/tag/v2.3.0
+    tag: v2.3.0
+    file: release page
+    checked_on: '2026-10-06'
+  - url: https://github.com/isaac-sim/IsaacLab/releases/tag/v2.3.2
+    tag: v2.3.2
+    file: release page
+    checked_on: '2026-10-06'
+  - url: https://github.com/isaac-sim/IsaacLab/releases/tag/v3.0.0-EA
+    tag: v3.0.0-EA
+    file: release page
+    checked_on: '2026-10-06'
+  - url: https://github.com/isaac-sim/IsaacLab/blob/main/docs/licenses/dependencies/cuRobo-license.txt
+    tag: main
+    file: cuRobo-license.txt
+    checked_on: '2026-10-06'
+  - url: https://api.github.com/repos/isaac-sim/IsaacLab/compare/v2.3.2...3d42bff37a8ba3d0f5d6a7d687b5668e3a397ed8
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.isaac_sim_5_1
+  family: simulation
+  kind: candidate
+  integration: simulator
+  name: Isaac Sim 5.1 (simulation backend and Isaac Lab host)
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - Apache-2.0 (GitHub source)
+  - Isaac Sim Additional Software and Materials License
+  dependency: 'Omniverse Kit SDK + assets under the Isaac Sim Additional Software and Materials License;
+    shipping to a customer needs NVIDIA AI Enterprise. Behind the isaac ADAPTER: not a provider'
+  evaluation_use: allowed
+  commercial_use: internal_rnd_only
+  humble_available: true
+  code_license: 'The GitHub source is Apache-2.0. Building or running it requires the Omniverse Kit SDK
+    and assets, which are under the NVIDIA Isaac Sim Additional Software and Materials License: use only
+    with Isaac Sim or Isaac Lab on NVIDIA GPUs, no distribution.'
+  weights_license: N/A
+  redistribution: 'Per the Isaac Sim License FAQ (6.0 docs; the 5.1 FAQ URL returns 404): redistributing
+    Isaac Sim with Kit to third parties, or delivering it as a service or turn-key install, requires an
+    NVIDIA AI Enterprise licence. Selling only TrainIt code and USD assets that the client runs on their
+    own Isaac Sim, or selling simulation outputs, needs no licence.'
+  evaluation_vs_commercial: Free for internal commercial R&D; shipping Isaac Sim to a customer requires
+    an NVIDIA AI Enterprise licence.
+  os_ros_support: '5.1: Ubuntu 22.04/24.04 with a Humble or Jazzy bridge. 6.0: Ubuntu 22.04/24.04 with
+    Humble or Jazzy (Jazzy on 24.04 recommended).'
+  requirements:
+    text: '5.1 minimum spec: GeForce RTX 4080, 16 GB VRAM, 32 GB RAM; tested with driver 580.65.06. Our
+      8 GB GPU is below the minimum but works for TrainIt''s scenes per the baseline.'
+  maturity_notes: 5.1 is a GA line, now superseded by 6.x.
+  recommendation: use_now
+  license_source:
+  - url: https://docs.isaacsim.omniverse.nvidia.com/6.0.0/common/license-faq.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://docs.isaacsim.omniverse.nvidia.com/5.1.0/common/license-isaac-sim-additional.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/isaac-sim/IsaacSim/blob/main/LICENSE
+    tag: main
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/install_ros.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://docs.isaacsim.omniverse.nvidia.com/6.0.0/installation/install_ros.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/releases/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.gr00t_n1_to_n1_6
+  family: policy_model
+  kind: candidate
+  integration: model
+  name: Isaac GR00T N1, N1.5, N1.6 (vision-language-action foundation models)
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: REQUIRES_REVIEW
+  licence_clauses:
+  - 'NVIDIA License section 3.3 (weights: research or evaluation)'
+  - n1/n1.5 code Apache-2.0
+  dependency: N1.6 code is non-commercial research only; whether internal product evaluation is covered
+    needs review
+  evaluation_use: allowed_weights
+  commercial_use: not_allowed
+  humble_available: false
+  code_license: 'n1-release and n1.5-release: Apache-2.0. n1.6-release and n1.6.1-release: NVIDIA License,
+    section 3.3 ''non-commercial research purposes only'', which also excludes military, surveillance,
+    nuclear and biometric uses and has no ''evaluation'' wording.'
+  weights_license: 'All three HF repos ship the NVIDIA License (the card links the OneWay Noncommercial
+    licence, 22-Mar-2022): ''non-commercially means for research or evaluation purposes only''. The N1.5
+    card says ''This model is ready for non-commercial use.'''
+  redistribution: Only under the same licence; derivatives keep section 3.3.
+  evaluation_vs_commercial: 'Weights: research and evaluation allowed, commercial use NOT allowed. N1.6
+    code: non-commercial research only; whether internal product evaluation is covered is REQUIRES_REVIEW.'
+  os_ros_support: 'No ROS dependency; runs in its own Python environment (Python version for the older
+    generations: UNKNOWN). Not tied to any Isaac ROS release; the ROS examples need Jazzy or later.'
+  requirements:
+    text: The current README requires at least 16 GB VRAM for inference and at least 40 GB for fine-tuning.
+      Figures for N1-N1.6 specifically were not re-verified. It does NOT fit the 8 GB RTX 4060 Laptop
+      or the Orin Nano Super.
+  maturity_notes: Research and early-access generations, superseded by N1.7 GA.
+  recommendation: avoid
+  license_source:
+  - url: https://github.com/NVIDIA/Isaac-GR00T/blob/n1-release/LICENSE
+    tag: n1-release
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA/Isaac-GR00T/blob/n1.5-release/LICENSE
+    tag: n1.5-release
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA/Isaac-GR00T/blob/n1.6-release/LICENSE
+    tag: n1.6-release
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA/Isaac-GR00T/releases
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://huggingface.co/nvidia/GR00T-N1-2B
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://huggingface.co/nvidia/GR00T-N1.5-3B
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://huggingface.co/nvidia/GR00T-N1.6-3B
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://huggingface.co/nvidia/GR00T-H
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://developer.download.nvidia.com/licenses/NVIDIA-OneWay-Noncommercial-License-22Mar2022.pdf
+    tag: null
+    file: licence text
+    checked_on: '2026-10-06'
+- id: nvidia.gr00t_n1_7
+  family: policy_model
+  kind: candidate
+  integration: model
+  name: Isaac GR00T N1.7 (current GA), including the Cosmos-Reason2-2B backbone
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: REQUIRES_REVIEW
+  licence_clauses:
+  - Apache-2.0 (code)
+  dependency: 'weights: the HF LICENSE file (research or evaluation) conflicts with the model card (commercial
+    use)'
+  evaluation_use: allowed
+  commercial_use: conflicting_sources
+  humble_available: false
+  code_license: Apache-2.0 (LICENSE at n1.7-release and main).
+  weights_license: 'CONFLICTING, so REQUIRES_REVIEW:
+
+    (a) The LICENSE file in the GR00T-N1.7-3B HF repo (uploaded Feb/Mar 2026) is the NVIDIA License: research
+    or evaluation only.
+
+    (b) The HF model card (April 2026) says ''This model is ready for commercial/non-commercial use''
+    and ''released under the NVIDIA Open Model License Agreement''.
+
+    (c) The GitHub README''s License section says ''Model weights: NVIDIA Open Model License'', but elsewhere
+    it says ''fully commercially licensable under Apache 2.0''.
+
+    GR00T-H-N1.7 has the same split between card and LICENSE file. The required backbone nvidia/Cosmos-Reason2-2B
+    is gated and under the NVIDIA Open Model License (base: Qwen3-VL-2B-Instruct). As a Cosmos model it
+    also requires ''Built on NVIDIA Cosmos'' attribution in products.'
+  redistribution: 'If the Open Model License applies: redistribution is allowed with a copy of the agreement
+    and a Notice file; rights terminate if guardrails are bypassed; NVIDIA may update the terms. If the
+    LICENSE file applies: non-commercial redistribution only.'
+  evaluation_vs_commercial: Evaluation is allowed under every reading. Commercial deployment is allowed
+    only under the Open Model License reading; do not rely on it until NVIDIA makes the LICENSE file consistent
+    or legal review confirms.
+  os_ros_support: No ROS dependency; Python 3.12 (uv). Separately, the Isaac ROS GR00T workflows exist
+    only in Isaac ROS 4.5 and later (Jazzy) and 5.0 (Lyrical); no Humble.
+  requirements:
+    text: 'README: inference on one GPU with at least 16 GB VRAM (RTX 4090, L40, H100, Jetson AGX Thor/Orin,
+      DGX Spark); fine-tuning recommends at least 40 GB; dGPU on CUDA 12.8 with Python 3.12; Jetson on
+      JetPack 7.2 / CUDA 13.2. It does NOT fit the RTX 4060 Laptop (8 GB) or the Orin Nano Super (8 GB).'
+  maturity_notes: GA (April 2026) with stability guarantees according to NVIDIA; tooling still moving
+    (pinned torch/triton workarounds for CUDA 13).
+  recommendation: later
+  license_source:
+  - url: https://github.com/NVIDIA/Isaac-GR00T
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA/Isaac-GR00T/blob/main/LICENSE
+    tag: main
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA/Isaac-GR00T/releases/tag/n1.7-release
+    tag: n1.7-release
+    file: release page
+    checked_on: '2026-10-06'
+  - url: https://huggingface.co/nvidia/GR00T-N1.7-3B
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://huggingface.co/nvidia/GR00T-N1.7-3B/blob/main/LICENSE
+    tag: main
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://huggingface.co/nvidia/GR00T-H-N1.7
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://huggingface.co/nvidia/Cosmos-Reason2-2B
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/
+    tag: null
+    file: licence text
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_deploy/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.isaac_for_manipulation
+  family: reference_workflow
+  kind: candidate
+  integration: reference_workflow
+  name: Isaac for Manipulation reference workflows (isaac_manipulator in 3.2, isaac_ros_manipulation from
+    4.4)
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - Apache-2.0
+  dependency: uses NGC models (SyntheticaDETR, FoundationPose, ESS, FoundationStereo) under their own
+    licences; cuMotion up to 4.3 non-commercial
+  evaluation_use: allowed
+  commercial_use: per_component
+  humble_available: true
+  code_license: Apache-2.0 (repo LICENSE at v3.2-15 and v4.6-0).
+  weights_license: It uses NGC models (SyntheticaDETR, FoundationPose, ESS, FoundationStereo) under their
+    own licences; the 4.x DNN policy assets were not reviewed.
+  redistribution: Apache-2.0 for the workflow code; components carry their own terms.
+  evaluation_vs_commercial: The workflow code allows both. The components follow their own licences; cuMotion
+    up to 4.3 is non-commercial.
+  os_ros_support: '3.2 (Humble, last Humble release 3.2-15): isaac_manipulator_* packages (initial release
+    2024-12-10). 4.0-4.3 (Jazzy): renamed ''Isaac for Manipulation'', with behaviour-tree multi-object
+    pick-and-place. 4.4: renamed again to isaac_ros_manipulation. 4.6 is the latest Jazzy release. The
+    5.0 (Lyrical) docs list no manipulation workflow in either the reference-workflows index or the repositories
+    index [verified].'
+  requirements:
+    text: The 4.6 workflows were tested on Jetson AGX Thor with one or two RealSense D455 cameras (multi-camera
+      power and USB caveats).
+  maturity_notes: 'Reference workflows with several open limitations in 4.6: unstable RT-DETR detections,
+    cancellation stalls, TRAJECTORY_OPTIMIZATION_FAILURE.'
+  recommendation: avoid
+  license_source:
+  - url: https://nvidia-isaac-ros.github.io/v/release-4.6/reference_workflows/isaac_for_manipulation/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/v/release-4.6/reference_workflows/isaac_for_manipulation/packages/isaac_ros_manipulation_orchestration/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/v/release-3.2/reference_workflows/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_manipulation
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/concepts/manipulation/isaac_grasp.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/releases/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.rtdetr_syntheticadetr
+  family: perception_detection
+  kind: candidate
+  integration: external_node
+  name: 'Object detection: isaac_ros_rtdetr with SyntheticaDETR (also Grounding DINO, the YOLOv8 decoder,
+    DetectNet)'
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: UNKNOWN
+  licence_clauses:
+  - Apache-2.0 (isaac_ros_rtdetr)
+  - NVIDIA Isaac ROS Software License (NITROS)
+  dependency: 'SyntheticaDETR NGC weights: no licence stated on the model card'
+  evaluation_use: allowed_code
+  commercial_use: unknown_weights
+  humble_available: true
+  code_license: isaac_ros_rtdetr, isaac_ros_yolov8, isaac_ros_grounding_dino and isaac_ros_detectnet are
+    Apache-2.0 (package.xml v5.0-0); their NITROS dependencies are under the NVIDIA Isaac ROS Software
+    License. The RT-DETR reference implementation (lyuwenyu/RT-DETR) is Apache-2.0. Ultralytics (YOLOv8/YOLO11)
+    is AGPL-3.0.
+  weights_license: '- SyntheticaDETR (NGC nvidia/isaac/synthetica_detr 1.0.0 / 1.0.0_onnx): the model-card
+    text available through the NGC API states no licence, and the installer''s EULA prompt points to that
+    NGC page, so UNKNOWN / REQUIRES_REVIEW.
+
+    - TAO Grounding DINO: ''TAO Pretrained Grounding DINO with Commercial License'' (terms not read).
+
+    - User-supplied YOLO weights: Ultralytics AGPL-3.0. Ultralytics'' licensing page says an Enterprise
+    licence is needed when ''Using custom-trained or fine-tuned YOLO models in a proprietary or commercial
+    setting''.'
+  redistribution: Apache-2.0 parts are free; NGC/TAO models follow their EULA; Ultralytics-derived models
+    carry AGPL obligations unless an Enterprise licence is bought.
+  evaluation_vs_commercial: 'Isaac ROS code: both allowed. SyntheticaDETR: UNKNOWN. An RT-DETR trained
+    by TrainIt (Apache-2.0 architecture, TrainIt''s own synthetic data) would give TrainIt-owned weights,
+    making it the licence-clean replacement for the Ultralytics-derived YOLO11-seg [inferred; it must
+    match the measured recall and mask quality, and RT-DETR outputs boxes only, so masks need SAM or another
+    segmentation stage].'
+  os_ros_support: 'Humble: Isaac ROS 3.2 (ros-humble-isaac-ros-rtdetr 3.2.5; last Humble release 3.2-15).
+    Grounding DINO is not in 3.2 (added in 4.0, Jazzy). Lyrical: 5.0.'
+  requirements:
+    text: 'Isaac ROS minimum (Ampere+, 8 GB); model-specific VRAM: UNKNOWN.'
+  maturity_notes: 'NITROS RT-DETR since 3.0 (2024-05-30). 4.6 limitation: unstable RT-DETR detections
+    in the object-following workflow.'
+  recommendation: experimental
+  license_source:
+  - url: https://nvidia-isaac-ros.github.io/v/release-3.2/repositories_and_packages/isaac_ros_object_detection/isaac_ros_rtdetr/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_object_detection/isaac_ros_rtdetr/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://catalog.ngc.nvidia.com/orgs/nvidia/teams/isaac/models/synthetica_detr
+    tag: null
+    file: NGC model card
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_object_detection/blob/v5.0-0/isaac_ros_rtdetr_models_install/asset_scripts/install_rtdetr_models.sh
+    tag: v5.0-0
+    file: install_rtdetr_models.sh
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_object_detection
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://catalog.ngc.nvidia.com/orgs/nvidia/teams/tao/models/grounding_dino
+    tag: null
+    file: NGC model card
+    checked_on: '2026-10-06'
+  - url: https://github.com/lyuwenyu/RT-DETR
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/ultralytics/ultralytics
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://www.ultralytics.com/license
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/releases/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.segment_anything
+  family: perception_segmentation
+  kind: candidate
+  integration: external_node
+  name: 'Segmentation: isaac_ros_segment_anything (SAM, MobileSAM) and isaac_ros_segment_anything2 (SAM
+    2)'
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - Apache-2.0 (code and weights)
+  dependency: SAM 2 only on Isaac ROS 4.0+ (Jazzy); NITROS under the Isaac ROS Software License
+  evaluation_use: allowed
+  commercial_use: allowed
+  humble_available: true
+  code_license: isaac_ros_segment_anything (v3.2-15 and v5.0-0) and isaac_ros_segment_anything2 (v5.0-0)
+    are Apache-2.0, with NITROS under the NVIDIA Isaac ROS Software License. Meta segment-anything, facebookresearch/sam2
+    and MobileSAM are Apache-2.0.
+  weights_license: 'SAM: ''The model is licensed under the Apache 2.0 license.'' SAM 2: ''model checkpoints
+    ... are licensed under Apache 2.0'' (the demo fonts are OFL-1.1). MobileSAM: weights live in its Apache-2.0
+    repo.'
+  redistribution: Apache-2.0 for models and code; NITROS follows the Isaac ROS licence.
+  evaluation_vs_commercial: Both allowed.
+  os_ros_support: 'Humble: Isaac ROS 3.2 has SAM and MobileSAM (ros-humble-isaac-ros-segment-anything
+    3.2.10; last Humble release 3.2-15). SAM 2 exists only in Isaac ROS 4.0+ (Jazzy) and 5.0 (Lyrical);
+    it is not in the jammy apt index or the v3.2-15 tree.'
+  requirements:
+    text: '3.2 docs: SAM ''can consume over 8GB of GPU memory'' and it is ''recommended to run SAM with
+      at least 12GB+ GPU memory''; MobileSAM has a smaller footprint. Only MobileSAM is plausible on the
+      8 GB laptop [inferred].'
+  maturity_notes: SAM decoder since Isaac ROS 3.0. SAM2 had GPU-leak and numpy issues in 4.1/4.6, fixed
+    in 5.0.
+  recommendation: later
+  license_source:
+  - url: https://nvidia-isaac-ros.github.io/v/release-3.2/repositories_and_packages/isaac_ros_image_segmentation/isaac_ros_segment_anything/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_image_segmentation
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/facebookresearch/segment-anything
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/facebookresearch/sam2
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/ChaoningZhang/MobileSAM
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/releases/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://isaac.download.nvidia.com/isaac-ros/release-3/dists/jammy/release-3.0/binary-amd64/Packages.gz
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.graspgen
+  family: grasp_generation
+  kind: candidate
+  integration: library
+  name: 'Grasp generation: NVlabs GraspGen (with Isaac ROS isaac_grasp files)'
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - NVIDIA License section 3.3 (code and weights)
+  dependency: dataset nvidia/PhysicalAI-Robotics-GraspGen is CC BY 4.0
+  evaluation_use: allowed
+  commercial_use: not_allowed
+  humble_available: false
+  code_license: 'NVIDIA License, section 3.3: research or evaluation only (LICENSE). The README directs
+    ''business inquiries'' to NVIDIA Research Licensing.'
+  weights_license: 'The HF adithyamurali/GraspGenModels LICENSE is the NVIDIA License: research or evaluation
+    only. The dataset nvidia/PhysicalAI-Robotics-GraspGen is CC BY 4.0.'
+  redistribution: Code and weights only under the same licence; the dataset under CC BY 4.0 with attribution.
+  evaluation_vs_commercial: Evaluation allowed; commercial use not. The dataset allows commercial use
+    with attribution (CC BY 4.0), so it could be used to train a TrainIt-owned suction model [inferred].
+  os_ros_support: No ROS packaging; Docker workflow; not tied to a ROS distro or Isaac ROS release.
+  requirements:
+    text: 'Training uses multiple GPUs; the PTv3 backbone has an issue on CUDA 12.8 / Blackwell. Inference
+      VRAM is not stated: UNKNOWN.'
+  maturity_notes: Research code (2025), with an active extension ecosystem.
+  recommendation: avoid
+  license_source:
+  - url: https://github.com/NVlabs/GraspGen/blob/main/LICENSE
+    tag: main
+    file: LICENSE
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVlabs/GraspGen
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://huggingface.co/adithyamurali/GraspGenModels
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://huggingface.co/datasets/nvidia/PhysicalAI-Robotics-GraspGen
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/concepts/manipulation/isaac_grasp.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.apriltag_isaac_ros
+  family: perception_fiducials
+  kind: candidate
+  integration: external_node
+  name: isaac_ros_apriltag (cuAprilTags)
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - Apache-2.0 (wrapper)
+  dependency: cuAprilTags binary under the NVIDIA Isaac ROS Software License
+  evaluation_use: allowed
+  commercial_use: allowed_nvidia_gpu_only
+  humble_available: true
+  code_license: isaac_ros_apriltag is Apache-2.0. cuAprilTags (precompiled; through NITROS/GXF in 3.2
+    and cuapriltags_vendor in 5.0) is under the NVIDIA Isaac ROS Software License.
+  weights_license: N/A
+  redistribution: The Apache-2.0 wrapper is free; the cuAprilTags binary follows Isaac ROS licence sections
+    1c/2.
+  evaluation_vs_commercial: Both allowed on NVIDIA-GPU systems. Because the binary is proprietary it can
+    only be an optional provider; Community should use the BSD-2 CPU library.
+  os_ros_support: 'Humble: Isaac ROS 3.2 (ros-humble-isaac-ros-apriltag 3.2.5; last Humble release 3.2-15).
+    Jazzy: 4.x. Lyrical: 5.0. The package has existed since EA1 (2021).'
+  requirements:
+    text: Isaac ROS minimum; light workload.
+  maturity_notes: Mature (since 2021).
+  recommendation: experimental
+  license_source:
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_apriltag
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_apriltag/blob/v3.2-15/isaac_ros_apriltag/package.xml
+    tag: v3.2-15
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nitros/blob/v5.0-0/cuapriltags_vendor/package.xml
+    tag: v5.0-0
+    file: package.xml
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_apriltag/isaac_ros_apriltag/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/AprilRobotics/apriltag
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://isaac.download.nvidia.com/isaac-ros/release-3/dists/jammy/release-3.0/binary-amd64/Packages.gz
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+- id: nvidia.isaac_ros_deploy
+  family: policy_execution
+  kind: candidate
+  integration: external_node
+  name: isaac_ros_deploy (policy deployment) and isaac_ros_physical_ai
+  vendor: NVIDIA
+  distribution: external
+  trainit_class: pro_candidate
+  installed: false
+  configured: false
+  benchmarked: false
+  license_status: VERIFIED
+  licence_clauses:
+  - Apache-2.0
+  dependency: Jazzy 4.5/4.6 and Lyrical 5.0 only
+  evaluation_use: allowed
+  commercial_use: allowed
+  humble_available: false
+  code_license: Apache-2.0 (GitHub repo licences for isaac_ros_deploy and isaac_ros_physical_ai).
+  weights_license: N/A (the user's own policies; GR00T weights as in the GR00T entries).
+  redistribution: Apache-2.0; the Triton and TensorRT dependencies carry their own NVIDIA terms (not reviewed).
+  evaluation_vs_commercial: 'Code: both allowed.'
+  os_ros_support: Jazzy 4.5/4.6 (ros-jazzy-isaac-ros-deploy 4.6.0) and Lyrical 5.0; not available for
+    Humble (the last Humble release, 3.2-15, has no such package).
+  requirements:
+    text: Isaac ROS minimum; Triton.
+  maturity_notes: New (2026). Known issues include a missing CloudXR package on Orin and ros2_control
+    timeouts in the G1 workflows (4.5/5.0).
+  recommendation: later
+  license_source:
+  - url: https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_deploy/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_deploy
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_physical_ai
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://isaac.download.nvidia.com/isaac-ros/release-4/dists/noble/main/binary-amd64/Packages.gz
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'
+  - url: https://nvidia-isaac-ros.github.io/releases/index.html
+    tag: null
+    file: documentation page
+    checked_on: '2026-10-06'

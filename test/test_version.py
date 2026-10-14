@@ -19,6 +19,8 @@ import trainit_setup_assistant
 from trainit_setup_assistant.generator import Orchestrator
 from trainit_setup_assistant.model import load_project
 
+import identity_cases
+
 PKG = Path(__file__).resolve().parents[1]
 EXAMPLE = PKG / 'examples' / 'fr3wml_project.yaml'
 
@@ -35,6 +37,7 @@ def test_package_xml_setup_py_and_dunder_version_are_one_number():
 
 
 def test_a_generated_bundle_records_that_number():
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         Orchestrator().generate(load_project(str(EXAMPLE)), tmp)
         manifest = yaml.safe_load((Path(tmp) / 'generation_manifest.yaml').read_text())

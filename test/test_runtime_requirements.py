@@ -244,6 +244,7 @@ def test_an_undated_node_stops_generation():
 def test_an_undated_node_stops_a_real_generation(monkeypatch, tmp_path):
     """Through the Orchestrator: the generator dates every node it writes, or says which not."""
     monkeypatch.setattr(rr, 'TMR_BT_NODES', tuple(n for n in TMR_BT_NODES if n != 'Log'))
+    identity_cases.require('p2_example')
     with pytest.raises(RuntimeError, match="'Log'"):
         Orchestrator().generate(_example(), tmp_path / 'out')
 

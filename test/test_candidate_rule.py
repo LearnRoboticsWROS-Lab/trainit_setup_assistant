@@ -42,6 +42,7 @@ from trainit_setup_assistant.model import (BundleSpec, CandidateRule,  # noqa: E
                                            DetectorSpec, PerceptionSpec, SceneObject,
                                            load_project, project_to_dict)
 from trainit_setup_assistant.model.project import CanonicalProject  # noqa: E402
+import identity_cases  # noqa: E402
 import ws_paths  # noqa: E402
 
 HERE = os.path.dirname(__file__)
@@ -96,6 +97,7 @@ def _entry(project, name='capsules'):
 
 
 def _generate(project):
+    identity_cases.require('p2_example')          # every caller generates the example
     tmp = tempfile.TemporaryDirectory()
     Orchestrator().generate(project, tmp.name)
     return tmp, Path(tmp.name)

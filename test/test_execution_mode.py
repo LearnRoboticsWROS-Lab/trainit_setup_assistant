@@ -33,6 +33,7 @@ from trainit_setup_assistant.generator.servo_yaml import build_servo_context
 from trainit_setup_assistant.model import (
     AppType, BundleSpec, ExecutionMode, MotionType, VisionBinding, load_project)
 from trainit_setup_assistant.model.perception import RelativeBinding
+import identity_cases
 import ws_paths
 
 HERE = os.path.dirname(__file__)
@@ -85,6 +86,7 @@ def test_execution_defaults_to_plan():
 
 def test_all_plan_project_emits_no_servo_artefact():
     p = _fromscratch()
+    identity_cases.require('p2_example')
     tmp, out = _generate(p)
     with tmp:
         assert not list(out.rglob('servo.yaml')), 'servo.yaml emitted for an all-plan app'
@@ -111,6 +113,7 @@ def test_servo_segment_emits_servotrack_instead_of_movewaypoint():
 
 def test_servo_emits_servo_yaml_with_values_from_the_cell_model():
     p = _fromscratch(servo_on=('pre_pick',))
+    identity_cases.require('p2_example')
     tmp, out = _generate(p)
     with tmp:
         f = out / 'cell_trainit_config' / 'config' / 'servo.yaml'
@@ -150,6 +153,7 @@ def test_servo_yaml_follows_a_renamed_group_controller_and_frames():
 def test_servo_emits_the_launch_entry_with_all_four_descriptions():
     """From-scratch flow: that bring-up IS the cell bring-up, so the node lives there."""
     p = _fromscratch(servo_on=('pre_pick',))
+    identity_cases.require('p2_example')
     tmp, out = _generate(p)
     with tmp:
         text = (out / 'cell_app' / 'launch' / 'bringup.launch.py').read_text()
@@ -200,6 +204,7 @@ def test_bundle_flow_puts_servo_in_the_cell_bringup():
 def test_bt_params_has_no_execution_key():
     """Decision (iii): the NODE carries the choice. A duplicate key in bt_params would be
     redundant and would put the byte-stable golden at risk."""
+    identity_cases.require('p2_example')
     for project in (_fromscratch(), _fromscratch(servo_on=('pre_pick',))):
         tmp, out = _generate(project)
         with tmp:
@@ -236,6 +241,7 @@ def test_servo_with_lin_REFUSES_generation_before_a_file_exists(tmp_path):
 def test_servo_on_a_static_taught_pose_is_only_a_warning(tmp_path):
     p = load_project(EXAMPLE)
     p.application.segment_for('pre_pick').execution = ExecutionMode.SERVO
+    identity_cases.require('p2_example')
     Orchestrator().generate(p, str(tmp_path / 'bundle'))      # warned, not refused
 
 

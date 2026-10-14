@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import identity_cases
 import m2_2_cases
 from trainit_setup_assistant.catalog import REGISTRY_FILE
 from trainit_setup_assistant.catalog import refresh as refresh_tool
@@ -155,6 +156,11 @@ def _without_tp(paths):
 
 
 def _generate(mode, case):
+    # A case that generates needs the example's private description; a refused_* case stops at
+    # the refusals, before the first emitter (each verdict is pinned in
+    # data/perception_vocabulary_m2_2.txt), so it runs on any checkout.
+    if not case.startswith('refused_'):
+        identity_cases.require('p2_example')
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1',
                PYTHONPATH=os.pathsep.join([str(PKG), os.environ.get('PYTHONPATH', '')]))
     if mode == 'absent':            # uninstalled: off the interpreter's path AND the ament index

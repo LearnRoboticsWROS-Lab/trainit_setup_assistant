@@ -11,7 +11,9 @@ colour-mask detector ``red_object``, faces measured on its grasp target, every c
 offers, the noise filters, the gripper's tool numbers, extra detectors and external nodes), the
 example project (2) and the owner's policy project (1, untracked: the case skips without it).
 Projects are loaded through ``model.load_project`` AFTER ``conftest`` rebased it, so a checkout
-elsewhere runs the same cases. Not collected by pytest (the name is not test_*.py).
+elsewhere runs the same cases. ``missing(case)`` says why a case cannot run on this checkout, and
+``require(case)`` is how a test that needs the case stops there (vNext G0 P1). Not collected by
+pytest (the name is not test_*.py).
 """
 from pathlib import Path
 
@@ -247,3 +249,16 @@ def missing(case: str) -> str:
         if not Path(path).exists():
             return f'{path} (recorded by {project_file.name}) is not here'
     return ''
+
+
+def require(case: str) -> None:
+    """Stop the running test when ``case`` cannot run on this checkout: the way a test says that a
+    reference project, or an input it records, is not here (vNext G0 P1; the older
+    ``pytest.skip(missing(case))`` sites only skip). It SKIPS naming the first absent input
+    (``missing()``'s message, the one the suite's other skips print); with
+    TRAINIT_REQUIRE_GOLDEN=1 it FAILS instead (``eef_fixture.skip_or_fail``), so a job that must
+    run the test cannot report it green unrun. A no-op where everything is present."""
+    why = missing(case)
+    if why:
+        import eef_fixture        # pytest and TSA's model: imported only by a test that stops
+        eef_fixture.skip_or_fail(why)

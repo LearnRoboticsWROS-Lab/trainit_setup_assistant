@@ -35,6 +35,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+import catalog_identity
+import identity_cases
 from trainit_setup_assistant import catalog
 from trainit_setup_assistant.catalog import (REFRESH, TP_REGISTRY_FILE, TP_TIERS,
                                              TSA_COLOR_MASK_FORM, TSA_OWN_METHODS,
@@ -485,6 +487,7 @@ def test_an_external_node_ranking_by_edge_on_generates_a_whole_bundle(tmp_path):
     p.perception.detectors[0] = P.DetectorSpec(
         name=m2_2_cases.DETECTOR, method='custom', candidate_rule='candidate_x_visible_x_square',
         params={'tool_max_tilt_deg': m2_2_cases.TILT})
+    identity_cases.require('p2_example')
     Orchestrator().generate(p, str(tmp_path))
     det = yaml.safe_load((tmp_path / 'cell_app' / 'config' / 'perception.yaml').read_text())[
         'detectors'][m2_2_cases.DETECTOR]
@@ -953,10 +956,16 @@ def test_a_changed_classification_is_named_by_the_catalog_drift(monkeypatch):
         derived = D.derive(tp_vocabulary=tp_registry())
     except Exception as exc:                               # noqa: BLE001
         pytest.skip(f'needs the installed workspace (TMR, MoveIt): {exc}')
-    assert D.catalog_drift(catalog.snapshot(), derived) == []
+    # the baseline without what this checkout cannot derive (catalog_identity): the claim below
+    # runs in full on any checkout, and the test then says what the baseline did not compare
+    absent = catalog_identity.absent_packages()
+    committed, derived = (catalog_identity.without_packages(r, absent)
+                          for r in (catalog.snapshot(), derived))
+    assert D.catalog_drift(committed, derived) == []
     tiers = copy.deepcopy(TP_TIERS)
     tiers['rule']['score'] = 'pro_candidate'
     monkeypatch.setattr(D, 'TP_TIERS', tiers)
     drift = D.catalog_drift(catalog.snapshot(), D.derive(tp_vocabulary=tp_registry()))
     assert ("catalog drift: tp.rule.score distribution is 'community_candidate' in snapshot.yaml "
             "but 'pro_candidate' from derive()") in drift, drift
+    catalog_identity.require_installed(absent)

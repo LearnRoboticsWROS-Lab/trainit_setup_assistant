@@ -25,6 +25,8 @@ import pytest
 from trainit_setup_assistant import catalog
 from trainit_setup_assistant.catalog.derive import derive
 
+import catalog_identity
+import identity_cases
 import ws_paths
 
 PKG = Path(__file__).resolve().parents[1]
@@ -47,11 +49,18 @@ def test_the_catalog_is_valid():
                     reason='needs the workspace installed (trainit_perception, TMR, MoveIt)')
 def test_the_snapshot_is_what_the_registries_say():
     derived, committed = derive(), catalog.snapshot()
+    # A package snapshot.yaml records facts of may not be installed here (the private policy
+    # runtime; MoveIt Servo, outside the Community dependency closure): everything else is
+    # compared, and the test then says what was not.
+    absent = catalog_identity.absent_packages()
+    derived, committed = (catalog_identity.without_packages(r, absent)
+                          for r in (derived, committed))
     if derived['derived_with'] != committed['derived_with']:
         pytest.fail(f'the workspace moved: {derived["derived_with"]} vs the snapshot\'s '
                     f'{committed["derived_with"]} -- regenerate snapshot.yaml from derive()')
     from trainit_setup_assistant.catalog.derive import catalog_drift
     assert derived == committed, '\n'.join(catalog_drift(committed, derived))
+    catalog_identity.require_installed(absent)
 
 
 def test_adapters_are_not_providers():
@@ -106,6 +115,8 @@ def test_generation_reads_only_the_committed_catalog(tmp_path, project):
     fresh interpreter is recorded: under catalog/ it opens exactly the three committed snapshot
     files (an allow-list, M2.3), it imports neither the derive tool nor the refresh, and it opens no
     file of TMR's config/ (the source or an installed copy) and not the candidate catalog."""
+    if project == identity_cases.EXAMPLE:          # the child generates it: a private description
+        identity_cases.require('p2_example')
     code = (
         'import sys\n'
         'opened = []\n'

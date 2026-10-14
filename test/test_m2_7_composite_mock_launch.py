@@ -21,12 +21,15 @@ The phases, the checks and the report are those of ``composite_launch.py`` (the 
 collected); this module runs it once per session and gives each check its own test.
 
 OPT-IN: it builds and launches for minutes, so it runs only with ``TRAINIT_LAUNCH_TEST=1`` and a
-sourced workspace (ROS 2 Humble + this workspace's install). Every launch runs on ROS domain 83
-(sequential, never together with domain 84), ROS_LOCALHOST_ONLY=1, with TMPDIR and ROS_LOG_DIR
-inside the temp workspace. Everything lives in a pytest temp dir; nothing is written into the
-workspace. This is test-time generation -- not a bundle for anyone to ship (MANUAL TSA GENERATION
-CHECKPOINT stands). With ``TRAINIT_M27_LAUNCH_EVIDENCE=<dir>`` the report, the bundle identities
-and every launch log are copied to ``<dir>/composite_mock/`` before the temp dir goes.
+sourced workspace (ROS 2 Humble + this workspace's install). On a machine that lacks what the
+generated cells declare, or a module the harness imports, it SKIPS before the build, naming each
+and the fix (``launch_prereqs``; with TRAINIT_REQUIRE_GOLDEN=1 it FAILS instead). Every launch
+runs on ROS domain 83 (sequential, never together with domain 84), ROS_LOCALHOST_ONLY=1, with
+TMPDIR and ROS_LOG_DIR inside the temp workspace. Everything lives in a pytest temp dir; nothing
+is written into the workspace. This is test-time generation -- not a bundle for anyone to ship
+(MANUAL TSA GENERATION CHECKPOINT stands). With ``TRAINIT_M27_LAUNCH_EVIDENCE=<dir>`` the report,
+the bundle identities and every launch log are copied to ``<dir>/composite_mock/`` before the
+temp dir goes.
 """
 import os
 from pathlib import Path
@@ -42,8 +45,12 @@ EVIDENCE = 'TRAINIT_M27_LAUNCH_EVIDENCE'
 @pytest.fixture(scope='module')
 def composite_run(tmp_path_factory):
     import composite_launch as CL
+    import launch_prereqs
     ws = tmp_path_factory.mktemp('t13_ws')
     bundles = CL.generate(ws)
+    # what the cells declare, or the harness imports, and this machine lacks:
+    # named here, in seconds, instead of failing after minutes of building
+    launch_prereqs.require(ws / 'src', modules=CL.PHASE_A_MODULES)
     summary = CL.build(ws)
     run = CL.CompositeLaunch(ws)
     try:

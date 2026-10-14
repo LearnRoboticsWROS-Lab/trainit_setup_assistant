@@ -34,7 +34,9 @@ tf2 append to their internal nodes.
 OPT-IN: it builds and launches for minutes, so it runs only with ``TRAINIT_LAUNCH_TEST=1`` and a
 sourced workspace (ROS 2 Humble + this workspace's install). It needs a runner that resolves
 MoveIt inside its namespace (trainit_motion_runtime >= 2.1.0): below that every test SKIPS, never
-passes. Every launch runs in its own session on ROS domain 84 (sequential: never together with
+passes. On a machine that lacks what the generated bundles declare, it SKIPS before the build,
+naming each package and the fix (``launch_prereqs``; with TRAINIT_REQUIRE_GOLDEN=1 it FAILS
+instead). Every launch runs in its own session on ROS domain 84 (sequential: never together with
 domain 83), ROS_LOCALHOST_ONLY=1, with TMPDIR (launch_ros writes a launch_params_* file per
 parameter dict there) and ROS_LOG_DIR inside the temp workspace, which may not lie inside a
 sourced workspace (composite_launch). Test-time generation, not a bundle for anyone to ship
@@ -458,6 +460,10 @@ def built(tmp_path_factory):
                     f'installed {CL._v(have)}')
     ws = CL._outside_the_underlay(tmp_path_factory.mktemp('t17_ws'))
     bundles = generate(ws)
+    # what the bundles declare, or the probe imports, and this machine lacks:
+    # named here, in seconds, instead of failing after minutes of building
+    import launch_prereqs
+    launch_prereqs.require(ws / 'src', modules=CL.PROBE_MODULES)
     return dict(ws=ws, bundles=bundles, summary=build(ws))
 
 

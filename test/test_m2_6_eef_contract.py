@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 import eef_fixture as F
 import ws_paths
@@ -325,14 +325,30 @@ def _gripper(**kw) -> GripperSpec:
                        **kw)
 
 
-def test_the_token_is_set_whenever_a_contract_is_present_and_overrides_a_legacy_one():
+class _ExcludeProbe(BaseModel):
+    hidden: int = Field(default=0, exclude=True)
+
+
+# Whether this pydantic honours Field(exclude=True) in a model's own JSON, asked of pydantic itself:
+# Ubuntu 22.04's python3-pydantic 1.8.2 does not, and keeps the field there. What TSA SAVES never
+# carries it on any pydantic: model/io.py drops it.
+FIELD_EXCLUDE = 'hidden' not in json.loads(_ExcludeProbe().json())
+
+
+def test_the_token_is_set_whenever_a_contract_is_present_and_overrides_a_legacy_one(tmp_path):
+    project = F.suction_simple(tmp_path)
     for given in (None, 'trigger', 'joint_position', 'contract'):
         kw = {} if given is None else {'actuation': given}
         g = _gripper(contract=F.suction_contract(), **kw)
         assert g.actuation is EndEffectorActuation.CONTRACT, given
         assert g.actuation_overridden == (given if given in ('trigger', 'joint_position')
                                           else None)
-        assert 'actuation_overridden' not in json.loads(g.json())
+        project.robot.gripper = g                       # never SAVED, on every pydantic
+        path = save_project(project, tmp_path / f'{given or "none"}.yaml')
+        saved = _gripper_block(path.read_text())
+        assert 'actuation_overridden' not in saved, given
+        if FIELD_EXCLUDE:                               # nor in the model's own JSON
+            assert 'actuation_overridden' not in json.loads(g.json())
     # a canonical PARALLEL short form: never joint_position, whatever validator order would do
     jaw = GripperSpec(kind='parallel', contract=F.jaw_contract())
     assert jaw.actuation is EndEffectorActuation.CONTRACT

@@ -1,0 +1,125 @@
+# TrainIt public sample cell: a Universal Robots UR5e with a simple suction cup, running a
+# deterministic pick-and-place on mode:=mock. No robot of your own is needed.
+#
+# - The arm comes from ur_description (ROS 2 Humble: sudo apt install ros-humble-ur-description);
+#   urdf/ holds only the TrainIt wrapper and the tool. See README.md.
+# - Every path below is RELATIVE to this file's directory: run trainit_generate FROM HERE (TSA
+#   resolves a relative path against the current directory).
+# - The end-effector is the end-effector contract's short form (ADR-0022): three lines for a
+#   simple suction cup, served on mock by trainit_hardware_layer's mock_eef_adapter.
+schema_version: 3
+project_name: ur5e_suction_sample
+
+bundle:
+  description_package: ur5e_suction_description
+  moveit_config_package: ur5e_suction_trainit_config
+  app_package: ur5e_suction_app
+
+meta:                          # written into the three generated package.xml files: put yours
+  maintainer_name: TrainIt sample user
+  maintainer_email: user@example.com
+  license: Apache-2.0
+  version: 0.1.0
+
+robot:
+  robot_name: ur5e_suction
+  description:
+    urdf_dir: urdf             # relative to this directory
+    top_xacro: ur5e_suction.urdf.xacro
+  base_frame: base_link
+  tip_link: tcp
+  planning_group:
+    name: ur_manipulator
+    base_link: base_link
+    tip_link: tcp              # the cup lip: every TCP waypoint below is a pose of this link
+    joints: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint,
+             wrist_3_joint]
+  gripper:
+    kind: suction
+    eef_parent_link: tcp       # the grasp site's TCP: the short form derives it from this link
+    contract:
+      actuator: {command_interface: set_bool}
+      verification: {require_grasp_confirmation: false, require_release_confirmation: false}
+      adapters: {mock: trainit_mock}
+  named_states:
+    - name: home               # tool down, TCP at about (0.49, 0.13, 0.39) m
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                     wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+    - name: above_pick         # TCP at (0.45, 0.25, 0.205), tool down: 15 cm above the pick
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.2452, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -1.3256}
+    - name: above_place        # TCP at (0.45, -0.25, 0.205), tool down: 15 cm above the place
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: -0.769, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -2.3398}
+  joint_limits:
+    per_joint:                 # velocity under the URDF's pi rad/s (Pilz refuses more than the
+                               # URDF); acceleration: ur_moveit_config's 5.0
+      shoulder_pan_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      shoulder_lift_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      elbow_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_1_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_2_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_3_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+  ompl:
+    projection_evaluator: joints(shoulder_pan_joint,shoulder_lift_joint)
+  initial_positions: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                      wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+  # The self-collision matrix: the 11 pairs of ur_moveit_config's srdf/ur_macro.srdf.xacro
+  # (Apache-2.0), transcribed, plus the tool's one: the cup body touches the flange face.
+  disable_collisions:
+    - {link1: base_link, link2: base_link_inertia, reason: Adjacent}
+    - {link1: base_link_inertia, link2: shoulder_link, reason: Adjacent}
+    - {link1: tool0, link2: wrist_1_link, reason: Never}
+    - {link1: tool0, link2: wrist_2_link, reason: Never}
+    - {link1: tool0, link2: wrist_3_link, reason: Adjacent}
+    - {link1: forearm_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: forearm_link, link2: wrist_1_link, reason: Adjacent}
+    - {link1: shoulder_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_2_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_3_link, reason: Never}
+    - {link1: wrist_2_link, link2: wrist_3_link, reason: Adjacent}
+    - {link1: suction_body, link2: wrist_3_link, reason: Adjacent}
+
+scene:
+  objects:                     # the table top is 5 mm under the robot base (its mesh starts at 0)
+    - {id: table, shape: box, dims: [1.2, 1.2, 0.05], frame: base_link,
+       position: [0.3, 0.0, -0.03]}
+  payload:                     # the 5 cm box, held 2 mm under the cup lip (the TCP)
+    {id: box, dims: [0.05, 0.05, 0.05], attach_link: tcp, attach_offset: [0.0, 0.0, 0.027]}
+
+deployment:
+  modes: [mock]
+  default_mode: mock
+
+application:
+  type: pick_and_place
+  global_planner_mode: pilz
+  waypoints:                   # TCP poses in base_frame; orientation [qx, qy, qz, qw]: tool down
+    - {name: home, type: joint, named: home, role: home}
+    - {name: pre_pick, type: joint, named: above_pick, role: pre_pick}
+    - {name: pick, type: tcp, role: pick,
+       position: [0.45, 0.25, 0.055], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: post_pick, type: tcp, role: post_pick,
+       position: [0.45, 0.25, 0.205], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: pre_place, type: joint, named: above_place, role: pre_place}
+    - {name: place, type: tcp, role: place,
+       position: [0.45, -0.25, 0.055], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: post_place, type: tcp, role: post_place,
+       position: [0.45, -0.25, 0.205], orientation: [1.0, 0.0, 0.0, 0.0]}
+  segments:                    # how each waypoint is reached; speed in % of the joint limits
+    - {to_waypoint: home, motion: ptp, speed: 50}
+    - {to_waypoint: pre_pick, motion: ptp, speed: 50}
+    - {to_waypoint: pick, motion: lin, speed: 20}
+    - {to_waypoint: post_pick, motion: lin, speed: 30}
+    - {to_waypoint: pre_place, motion: ptp, speed: 50}
+    - {to_waypoint: place, motion: lin, speed: 20}
+    - {to_waypoint: post_place, motion: lin, speed: 30}
+  tool_actions:
+    - {at_waypoint: pick, kind: grasp}
+    - {at_waypoint: pick, kind: attach, payload_ref: box}
+    - {at_waypoint: place, kind: release}
+    - {at_waypoint: place, kind: detach, payload_ref: box}
+  sequence: [home, pre_pick, pick, post_pick, pre_place, place, post_place, home]

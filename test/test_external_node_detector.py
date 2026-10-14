@@ -42,6 +42,7 @@ Fast and ROS-free: generation is pure.
 
 import ast
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -57,6 +58,7 @@ from trainit_setup_assistant.model import (BundleSpec, CameraSpec, DetectorSpec,
                                            ExternalNodeSpec, PerceptionSpec,
                                            load_project, project_to_dict)
 from trainit_setup_assistant.model.project import CanonicalProject
+import identity_cases
 import pending_rebless
 import ws_paths
 
@@ -159,8 +161,26 @@ def _seg_project(**overrides):
     return _project([det])
 
 
-def _generate(project):
+# Every directory a test of this module generates into; each one goes with its test (owner rule
+# 2026-10-06: generate into a temp dir, then delete it). They used to stay in TMPDIR.
+_OUT_DIRS = []
+
+
+@pytest.fixture(autouse=True)
+def _no_bundle_outlives_its_test():
+    yield
+    while _OUT_DIRS:
+        shutil.rmtree(_OUT_DIRS.pop(), ignore_errors=True)
+
+
+def _out_dir() -> str:
     out = tempfile.mkdtemp()
+    _OUT_DIRS.append(out)
+    return out
+
+
+def _generate(project):
+    out = _out_dir()
     manifest = Orchestrator().generate(project, out)
     return Path(out), manifest
 
@@ -198,6 +218,7 @@ def test_a_project_without_an_external_detector_is_byte_identical():
 def test_the_new_tokens_appear_nowhere_without_an_external_node_block():
     """The absence the two byte gates depend on, asserted directly and per token."""
     det = DetectorSpec(name='red_object', method='color_mask')
+    identity_cases.require('p2_example')
     root, manifest = _generate(_project([det]))
     launch = _app_launch(root)
     manifest_xml = (root / 'cell_app' / 'package.xml').read_text()
@@ -217,6 +238,7 @@ def test_one_bundle_launches_a_pure_python_and_an_external_detector():
     """The point of the feature: ``DetectObject`` cannot tell them apart, and neither can
     the launch — one ``Node`` each, side by side, both global, both on the same clock."""
     pure = DetectorSpec(name='red_object', method='color_mask')
+    identity_cases.require('p2_example')
     root, _ = _generate(_project([pure, _seg_project().perception.detectors[0]]))
     launch = _app_launch(root)
     ast.parse(launch)                                  # the bundle must still be valid
@@ -247,6 +269,7 @@ def test_the_parameter_file_is_resolved_against_the_package_share():
     every generated launch file and broken the byte gates for bundles that have no
     external detector at all.
     """
+    identity_cases.require('p2_example')
     root, _ = _generate(_seg_project())
     launch = _app_launch(root)
     ext = _node(_nodes(launch), 'seg_pose_node')
@@ -267,6 +290,7 @@ def test_inline_parameters_win_over_the_file_and_are_written_sorted():
     resolves a later value over an earlier one, and which is exactly what a real
     ``seg_pose.launch.py`` does with ``model`` and ``method_3d``.
     """
+    identity_cases.require('p2_example')
     root, _ = _generate(_seg_project())
     ext = _node(_nodes(_app_launch(root)), 'seg_pose_node')
     src = ext['parameters']
@@ -283,6 +307,7 @@ def test_inline_parameters_win_over_the_file_and_are_written_sorted():
 def test_remappings_are_emitted_only_when_asked_and_sorted():
     """For a node whose subscriptions are hardcoded — the node-agnostic way to point any
     node at a topic, needing no cooperation from its author."""
+    identity_cases.require('p2_example')
     plain = _node(_nodes(_app_launch(_generate(_seg_project())[0])), 'seg_pose_node')
     assert plain['remappings'] == '', 'no remappings asked for, none emitted'
 
@@ -308,7 +333,7 @@ def test_a_block_with_no_package_or_no_executable_is_refused(field):
     assert f'no {field}' in msg
     assert 'capsule' in msg and '/perception/capsule/detections' in msg
 
-    out = tempfile.mkdtemp()
+    out = _out_dir()
     with pytest.raises(ValueError):
         Orchestrator().generate(project, out)
     assert not list(Path(out).rglob('*.py')), (
@@ -353,6 +378,7 @@ def test_a_blank_parameter_file_is_refused():
     # removing the key entirely is fine: a node may take all its parameters inline
     ok = _seg_project(parameter_file=None)
     refuse_incomplete_external_nodes(ok)
+    identity_cases.require('p2_example')
     root, _ = _generate(ok)
     params = _node(_nodes(_app_launch(root)), 'seg_pose_node')['parameters']
     assert 'get_package_share_directory' not in params
@@ -398,6 +424,7 @@ def test_an_external_method_without_a_block_is_warned_about_not_refused():
     project = _project([det])
     refuse_incomplete_external_nodes(project)                # not a refusal
     assert external_node_problems(project) == []
+    identity_cases.require('p2_example')
     root, manifest = _generate(project)
     warnings = manifest.as_dict().get('warnings', [])
     hit = [w for w in warnings if 'EXTERNAL-NODE method with no external_node block' in w]
@@ -415,6 +442,7 @@ def test_an_external_method_without_a_block_is_warned_about_not_refused():
 def test_the_launch_and_perception_yaml_name_the_same_camera():
     """The one fault no log would ever show: the file TSA writes and the node TSA launches
     looking at different cameras. Both come from ``DetectorSpec.input_topics``."""
+    identity_cases.require('p2_example')
     root, _ = _generate(_seg_project())
     entry = yaml.safe_load(
         (root / 'cell_app' / 'config' / 'perception.yaml').read_text())
@@ -457,6 +485,7 @@ def test_the_external_package_is_not_an_exec_depend_but_is_recorded():
     who never run that cell. It fails where it is USED instead: ``ros2 launch`` names the
     missing package the moment you start the application.
     """
+    identity_cases.require('p2_example')
     root, manifest = _generate(_seg_project())
     pkg_xml = (root / 'cell_app' / 'package.xml').read_text()
     import xml.etree.ElementTree as ET
@@ -494,6 +523,7 @@ def test_a_real_shaped_detector_is_expressible_and_round_trips():
     assert back.perception.detectors[0].emits_node is False
 
     # the launch entry it produces, in full
+    identity_cases.require('p2_example')
     root, _ = _generate(back)
     ext_node = _node(_nodes(_app_launch(root)), 'seg_pose_node')
     assert ext_node == {
@@ -524,6 +554,7 @@ def test_pcl_cluster_is_no_longer_a_name_with_no_way_to_be_used():
                            remappings={'cloud_in': '/bin_camera/depth/color/points'}))
     project = _project([det])
     refuse_incomplete_external_nodes(project)
+    identity_cases.require('p2_example')
     root, _ = _generate(project)
     ext = _node(_nodes(_app_launch(root)), 'cluster_node')
     assert ext['package'] == 'trainit_perception_pcl'
@@ -535,6 +566,7 @@ def test_generation_is_reproducible_with_an_external_detector():
     """Same project + same generator => byte-identical output, the rule the whole
     generator is built on. Mappings came from YAML, so this is the test that catches a
     forgotten ``sorted()``."""
+    identity_cases.require('p2_example')
     a, _ = _generate(_seg_project(
         parameters={'b': 2, 'a': 1, 'c': 3},
         remappings={'z': '/z', 'a': '/a', 'm': '/m'}))

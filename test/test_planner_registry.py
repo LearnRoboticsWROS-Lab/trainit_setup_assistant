@@ -32,6 +32,8 @@ from trainit_setup_assistant.model import enums as E
 from trainit_setup_assistant.model.robot import OmplGroupSpec
 from trainit_setup_assistant.model.task import ApplicationSpec
 
+import catalog_identity
+import identity_cases
 import ws_paths
 
 PKG = Path(__file__).resolve().parents[1]
@@ -309,6 +311,7 @@ def test_every_moveit_pipeline_candidate_names_its_packages():
 
 def test_generation_reads_the_copy(tmp_path):
     """The positive half of test_catalog's isolation rule: the vocabulary IS read from the copy."""
+    identity_cases.require('p2_example')
     code = (
         'import sys\n'
         'opened = []\n'
@@ -337,12 +340,22 @@ def test_the_catalog_is_a_leaf_and_the_vocabulary_reads_no_environment():
         assert not re.search(r'\bos\.environ\b|\bgetenv\b', path.read_text()), path.name
 
 
-def test_one_refresh_is_a_fixed_point():
+def test_one_refresh_is_a_fixed_point(monkeypatch):
     if not _tmr_registry_files().get('installed'):
         pytest.skip('needs the installed workspace')
     pytest.importorskip('trainit_perception.ranking')
     from trainit_setup_assistant.catalog import refresh
+    # A package snapshot.yaml records facts of may not be installed here (the private policy
+    # runtime; MoveIt Servo, outside the Community closure). derive() runs in the refresh's CHILD
+    # interpreter, out of a monkeypatch's reach, so the record the child returns takes exactly
+    # those values as committed: every other byte of the three files is still compared.
+    absent = catalog_identity.absent_packages()
+    if absent:
+        derive_record, committed = refresh.derive_record, catalog.snapshot()
+        monkeypatch.setattr(refresh, 'derive_record', lambda **inputs: (
+            catalog_identity.as_recorded(derive_record(**inputs), committed, absent)))
     assert refresh.main(['--check']) == 0
+    catalog_identity.require_installed(absent)
 
 
 # --- one reader, one refusal: a registry of another schema --------------------------------------

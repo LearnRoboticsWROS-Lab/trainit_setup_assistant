@@ -47,6 +47,7 @@ from trainit_setup_assistant.model import (BundleSpec, CandidateRule,  # noqa: E
                                            load_project, project_to_dict)
 from trainit_setup_assistant.model import faces as registry  # noqa: E402
 from trainit_setup_assistant.model.project import CanonicalProject  # noqa: E402
+import identity_cases  # noqa: E402
 
 HERE = os.path.dirname(__file__)
 EXAMPLE = os.path.join(HERE, os.pardir, 'examples', 'fr3wml_project.yaml')
@@ -642,6 +643,7 @@ def test_a_measured_face_reaches_a_generated_bundle(tmp_path):
     ctrl = AssistantController(_project(CandidateRule.SCORE_X_VISIBLE))
     ctrl.set_grasp_face('disc', {'expected_radius_m': 0.02095}, 'capsule_visual.step face[6]')
     out = tmp_path / 'bundle'
+    identity_cases.require('p2_example')
     Orchestrator().generate(ctrl.project, str(out))
     written = yaml.safe_load((out / 'cell_app' / 'config' / 'perception.yaml').read_text())
     params = written['detectors']['capsules']['params']

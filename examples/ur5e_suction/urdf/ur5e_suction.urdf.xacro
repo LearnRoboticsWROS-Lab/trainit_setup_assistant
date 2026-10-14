@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<!-- TrainIt public sample cell: a Universal Robots UR5e with a simple suction tool.
+
+     The arm is ur_description's public ur_robot macro (ROS 2 Humble apt package
+     ros-humble-ur-description), fed the UR5e files that package installs. Nothing of
+     ur_description is copied here: xacro resolves $(find ur_description) when the description is
+     compiled, and the arm's meshes stay package://ur_description/... URIs, so ur_description must
+     be installed wherever this description is compiled or displayed.
+
+     Two rules make this file a description TrainIt can generate a bundle from:
+     - generate_ros2_control_tag="false": the generated bundle writes the only ros2_control
+       block (mock_components/GenericSystem on mode:=mock). UR's default would add a second block,
+       for the real UR driver, on the same six joints.
+     - no xacro argument of its own: the bundle's wrapper declares initial_positions_file and
+       use_isaac, and xacro keeps the FIRST declaration of an argument. That is also why this file
+       calls ur_macro.xacro and not UR's top-level ur.urdf.xacro.
+
+     Frames: world (root) -> base_link (the UR base, REP-103) -> ... -> tool0 (Z+ out of the
+     flange) -> suction_body -> tcp (the cup lip, the same axes as tool0). -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="ur5e_suction">
+  <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <xacro:include filename="suction_tool.xacro"/>
+
+  <link name="world"/>
+
+  <!-- the arm: a UR5e at the world origin -->
+  <xacro:ur_robot
+    name="ur5e"
+    tf_prefix=""
+    parent="world"
+    joint_limits_parameters_file="$(find ur_description)/config/ur5e/joint_limits.yaml"
+    kinematics_parameters_file="$(find ur_description)/config/ur5e/default_kinematics.yaml"
+    physical_parameters_file="$(find ur_description)/config/ur5e/physical_parameters.yaml"
+    visual_parameters_file="$(find ur_description)/config/ur5e/visual_parameters.yaml"
+    ur_type="ur5e"
+    generate_ros2_control_tag="false">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:ur_robot>
+
+  <!-- the tool: on the flange's tool frame -->
+  <xacro:suction_tool parent="tool0"/>
+</robot>

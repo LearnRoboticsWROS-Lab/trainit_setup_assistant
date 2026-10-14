@@ -20,6 +20,8 @@ import pytest
 from trainit_setup_assistant.generator import Orchestrator
 from trainit_setup_assistant.model import AppType, load_project
 
+import identity_cases
+
 EXAMPLE = os.path.join(os.path.dirname(__file__), os.pardir, 'examples', 'fr3wml_project.yaml')
 
 
@@ -36,4 +38,5 @@ def test_an_application_with_no_template_is_refused_before_a_file_exists(tmp_pat
 
 def test_the_golden_project_is_not_refused(tmp_path):
     """The refusal stage adds nothing to a valid project: the reference app generates."""
+    identity_cases.require('p2_example')
     Orchestrator().generate(load_project(EXAMPLE), str(tmp_path / 'bundle'))

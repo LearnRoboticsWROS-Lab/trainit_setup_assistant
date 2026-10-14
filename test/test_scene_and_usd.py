@@ -8,6 +8,7 @@ import pytest
 
 from trainit_setup_assistant.gui.controller import AssistantController
 from trainit_setup_assistant.importers import usd_available
+import identity_cases
 import ws_paths
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), os.pardir, 'examples', 'fr3wml_project.yaml')
@@ -20,6 +21,7 @@ def test_scene_box_becomes_collision_object():
     ctrl.project.scene.objects = []
     ctrl.add_scene_object('table', [2.0, 2.0, 0.10], [0.0, 0.0, -0.08])
     ctrl.add_scene_object('part', [0.02, 0.02, 0.02], [0.5, 0.0, 0.05], dynamic=True)
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('scene_test')
         ctrl.generate(tmp)
@@ -34,6 +36,7 @@ def test_non_box_shape_emits_aabb_with_warning():
     ctrl.open_project(EXAMPLE)
     ctrl.project.scene.objects = []
     ctrl.add_scene_object('ball', [0.1], [0.3, 0.0, 0.2], shape='sphere')  # r=0.1
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('aabb_test')
         manifest = ctrl.generate(tmp)
@@ -72,6 +75,7 @@ def test_import_usd_scene():
         assert abs(box_a.dims[0] - 0.4) < 1e-6
         assert abs(box_a.position[0] - 1.0) < 1e-6
         # generates a collision object
+        identity_cases.require('p2_example')
         with tempfile.TemporaryDirectory() as out:
             ctrl.set_project_name('usd_test')
             ctrl.generate(out)
@@ -184,6 +188,7 @@ def test_actuated_checked_dynamic_allowed_in_tree():
     ctrl.add_scene_object('belt', [1.0, 0.4, 0.3], [0.5, 0.0, 0.0], category='actuated')
     ctrl.add_scene_object('crate', [0.3, 0.2, 0.3], [0.4, 0.0, 0.1], category='dynamic')
     ctrl.set_object_category('belt', 'actuated')      # re-classify path
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('cat_test')
         ctrl.generate(tmp)

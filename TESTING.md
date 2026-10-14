@@ -61,12 +61,61 @@ Optional unit tests:
 ```bash
 cd ~/fr5_ws/src/trainit_setup_assistant
 QT_QPA_PLATFORM=offscreen PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=$PWD:$PYTHONPATH \
-  python3 -m pytest test/ -q          # expect: 295 passed (plus 1 pre-existing network-USD failure)
+  python3 -m pytest test/ -q          # vNext G0: 1406 passed, 49 skipped, 5 xfailed
 ```
 
 The golden-dependent vNext M2.6 gates (`test_m2_6_eef_*.py`) skip on a checkout without
 `fr3wml_digital_twin`, naming the missing file; with `TRAINIT_REQUIRE_GOLDEN=1` they FAIL
-instead, so a CI job that must run them cannot report them green unrun.
+instead, so a CI job that must run them cannot report them green unrun. Since vNext G0 the same
+holds for the tests that stop through `identity_cases.require` (a test that generates the example
+project needs its robot description, in the private `fr3wml_digital_twin/fr5_app`) and for those
+that compare what the catalog records from an installed package with this machine
+(`catalog_identity.require_installed`): despite its name, the variable covers them too. The older
+plain skips still only skip: `golden bundle not present` and its like, and the
+`pytest.skip(identity_cases.missing(...))` cases of the identity, environment, provenance and
+runtime-requirements modules, some of which generate the example too.
+
+**On a public checkout.** In a workspace built from `trainit_community.repos` (README.md,
+"Install"), which has none of the private repositories, run the suite the same way, from the TSA
+source directory:
+
+```bash
+cd ~/trainit_ws && source install/setup.bash
+cd src/trainit_setup_assistant
+QT_QPA_PLATFORM=offscreen PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=$PWD:$PYTHONPATH \
+  python3 -m pytest test/ -q
+```
+
+A test that needs what such a checkout lacks SKIPS and names it: the private reference cell
+(`fr3wml_digital_twin`: the example's robot description, the golden bundles and projects), the
+private policy runtime (`trainit_policy_runtime`), a package outside the Community dependency
+closure that the catalog records facts of (`moveit_servo`, for one), or the one the public sample
+needs (`ur_description`, Test A2f). With `TRAINIT_REQUIRE_GOLDEN=1` the guarded ones above FAIL
+instead. The opt-in tiers (`TRAINIT_LAUNCH_TEST=1`, `TRAINIT_IDENTITY_TEST=1`) are outside this
+paragraph.
+
+Measured at vNext G0 (TSA 7.8.0, 1460 tests). On a fresh `osrf/ros:humble-desktop` container set
+up by README.md "Install" (no `moveit_servo`, no `ur_description`): 1003 passed and 457 skipped
+(with `TRAINIT_REQUIRE_GOLDEN=1`: 142 failed and 8 errors); once the public sample's two apt
+packages are installed (Test A2f): 1015 passed and 445 skipped (138 failed with the variable),
+as on a public checkout with a full ROS install. On the reference machine, which has the
+private repositories: 1406 passed, 49 skipped and 5 xfailed, with or without the variable.
+
+The launch tiers (`TRAINIT_LAUNCH_TEST=1`: Tests A2d, A2e and A2f) need more than the Community
+workspace: what their generated bundles declare (ros2_control's controller manager and
+controllers, the topic-based hardware interface, the joint sliders), move_group's controller
+manager `moveit_simple_controller_manager`, which no generated package declares yet, and, for
+A2d, the Python modules its harness imports (`controller_manager_msgs`, for one). Each tier
+generates its bundles first and then asks `test/launch_prereqs.py` what this machine lacks: before
+it builds anything, it SKIPS naming every missing package and the apt line that installs them
+(with `TRAINIT_REQUIRE_GOLDEN=1` it FAILS instead); where everything is installed it does nothing.
+`test_launch_prereqs.py` checks that behaviour on synthetic cells in the default suite, and that
+the harness's module lists follow its imports.
+`rosdep install --from-paths <a generated bundle> --ignore-src -r -y` (README.md, "Running a
+generated bundle") and `sudo apt install ros-humble-moveit-simple-controller-manager` install all
+of it. The public sample's own tests (Test A2f) also need `ur_description`: without it, the ones
+that compile its description and the launched ones skip, naming the apt package (with
+`TRAINIT_REQUIRE_GOLDEN=1` they FAIL instead).
 
 The two gates that must never go red without a deliberate re-blessing:
 `test_generator_golden.py` (the published bundle regenerates) and
@@ -112,6 +161,10 @@ per option:
 | `test_m2_6_eef_bin_picking.py` | vNext M2.6 (ADR-0022 D5) — F4: the canonical bin-picking gate walked statically (the reset Script first, `fault` inside the retry and `reason` after it, DetectObject's `fault`, `holding` set and cleared, `_failureIf` on the retried child and the stall branch, VerifyGrasp in place of CheckRobotState), the skeleton equal to the legacy loop's, and the legacy loop byte-identical to TSA 7.6.0 (pinned hashes) |
 | `test_m2_6_eef_gui_guard.py` | vNext M2.6 (ADR-0022 D6) — the GUI guard: the Step-7 setters and the Step-2 re-ingest leave a canonical gripper (kind, actuation, controller_*, contract) unchanged through save and reload; a legacy gripper is edited and reclassified as before; Step 7's block editor (offscreen, on synthetic canonical projects) keeps every `actuate` action and every grasp/release `site` through page entry, an untouched Apply and save, and offers no legacy attached topic to a canonical policy block |
 | `test_m2_2_regressions.py` | vNext M2.2 — the behaviours it delivers, written as strict-xfail on 7.3.0: the `edge_on` rules accepted where computable and refused for the true reason on the colour mask; the same project generating the same bundle (or refusal) with trainit_perception importable, made unimportable, and uninstalled (off `PYTHONPATH` and the ament index), in fresh interpreters; generation importing no TP module, opening no TP data or release-metadata file (pydantic's plugin scan of every distribution's `entry_points.txt` excepted) and asking the ament index nothing about it; a refresh whose derive step fails writing nothing |
+| `test_example_ur5e_suction.py` | the public sample cell `examples/ur5e_suction` (vNext G0 follow-up, owner P2; Test A2f) — the committed sample is exactly its four files, names no machine path and is no ROS package, and TSA depends on no part of it (its `package.xml` names no `ur_*` package, no file under `trainit_setup_assistant/` names the sample or `ur_description`, and `setup.py` installs none of it); the project is the end-effector contract's three-line suction form on mock, at the root, with no pseudo-joint; the held box clears the table and the cup (arithmetic on the project); the named states put the TCP straight above the targets with the tool down (FK of the compiled description); TSA refuses nothing and warns nothing; generated the README's way -- FROM its directory, its paths relative -- it writes the README's 26 files, names no machine path and records its copies as `package://trainit_setup_assistant/examples/ur5e_suction/...`; the tree, `bt_params`, SRDF and controllers are the ones the project describes; the bring-up's `robot_description` (the generated wrapper, compiled as the mock bring-up compiles it) holds exactly one `ros2_control` block, `mock_components/GenericSystem` on the six arm joints at the project's initial positions; `trainit_generate` prints the README's lines; the commands the wizard prints for the bundle name its launch files, with only arguments those files declare (`use_sim_time:=false`: the tree's launch defaults it to true). A test that compiles the description SKIPS without `ur_description` (or xacro and a sourced environment), naming the apt package (FAILS with `TRAINIT_REQUIRE_GOLDEN=1`); the four that read only the committed files run anywhere |
+| `test_example_ur5e_suction_launch.py` | the same sample LAUNCHED (opt-in `TRAINIT_LAUNCH_TEST=1`, ROS domain 79, Test A2f): generated the README's way into a temp workspace (renamed `tsample_*`), built, brought up on mock and its tree run -- `BT finished: SUCCESS` and exit 0 within 180 s; the 8 moves in the sequence's order, each validated with collision checking; the cup engaged after pick and released after place, the box attached and detached around them; one MoveGroup and one ExecuteTrajectory goal per move, every execution SUCCEEDED; no log naming a missing joint state, a failed plan or validation, a contact or a robot without geometry; every launch ending on its SIGINT and the domain empty before and after. It SKIPS below the TMR or hardware-layer floor the generated `package.xml` declares, and, naming the fix, without `ur_description` and on a machine without the launch tiers' prerequisites (Test A, "On a public checkout"): those two FAIL instead with `TRAINIT_REQUIRE_GOLDEN=1` |
+| `test_launch_prereqs.py` | the launch tiers' prerequisite check `launch_prereqs` (vNext G0 follow-up, owner P2), on synthetic generated cells with a simulated machine (no ROS): a no-op where everything is installed; a SKIP naming every package the cells declare and the ament index lacks, the controller manager a `moveit_controllers.yaml` names, and every harness module this interpreter cannot import, with the apt line, and a FAIL instead with `TRAINIT_REQUIRE_GOLDEN=1`; the cells' own packages, another cell's and system keys never reported; the named plugin reported as declared once a `package.xml` declares it; a missing Community package built in the workspace, a Pro or experimental one named as such, neither with an apt line; `composite_launch`'s module lists equal to the imports of `_Probe.__init__` and `_probe_cells`, and the two other tiers importing no ROS module beyond the probe's |
+| `test_wizard_run_commands.py` | the commands the wizard prints after generating (`wizard.build_and_run_lines`; vNext G0 follow-up, owner P2), for both kinds of bundle and every backend: the first run's `rosdep install` over the bundle and `moveit_simple_controller_manager` apt line before the build; built on a base config, the cell from the trainit_config's `bringup.launch.py`, the tree from the app's `trainit_bt.launch.py` and both at once from the app's `bringup.launch.py`; from scratch, the cell from the app's `bringup.launch.py` and the tree from its `trainit_bt.launch.py`; `use_sim_time` from the mode's profile, and `mode:=` only where gazebo is deployed. Pure: the sample's project loaded, nothing generated, no widget |
 
 ### Test A2 — the namespaced cell, and the loop (v7, ~2 min, headless)
 
@@ -208,7 +261,8 @@ distinguishable actuator states, each command moving only its own (K5). Phase B:
 generated tree -- nominal exit 0, a FAULT on the lock failing the FIRST VerifyGrasp at tool level
 (exit 1), site_b not held ending in a VERDICT (exit 1) (K6). Phase C (/r1 and /r2 trees at once)
 needs TMR >= 2.1.0 and is SKIPPED below it. Every launch must end on its SIGINT and leave the
-domain empty.
+domain empty. On a machine without the launch tiers' prerequisites it skips before building,
+naming each one (Test A, "On a public checkout").
 
 ```bash
 source /opt/ros/humble/setup.bash && source ~/fr5_ws/install/setup.bash
@@ -234,7 +288,8 @@ through clients only its own move_group serves, the two runners share only /tf, 
 /rosout and /parameter_events, and no MoveIt name of either lies outside its namespace. Every
 launch must end on its SIGINT (a runner launch by itself, when its tree ends) and leave the domain
 empty. It needs a runner that resolves MoveIt inside its namespace (TMR >= 2.1.0): below that it
-SKIPS, never passes.
+SKIPS, never passes. On a machine without the launch tiers' prerequisites it skips before
+building, naming each one (Test A, "On a public checkout").
 
 ```bash
 source /opt/ros/humble/setup.bash && source ~/fr5_ws/install/setup.bash
@@ -246,6 +301,48 @@ TRAINIT_LAUNCH_TEST=1 python3 -m pytest -q -s test/test_m2_7_bundle_runner_launc
 reports byte-identical. With `TRAINIT_M27_LAUNCH_EVIDENCE=<dir>` each case's normalised report, the
 bundle identities and every launch log are copied to `<dir>/bundle_runner/<case>/`. It never runs
 together with another user of domain 83 or 84.
+
+### Test A2f — the public UR5e suction sample (owner P2; seconds; launched: minutes, opt-in)
+
+`examples/ur5e_suction/` is the cell anyone can generate without a robot of their own, and its
+`README.md` has the user's commands. It is a UR5e from `ur_description` (apt:
+`ros-humble-ur-description`) with a simple suction tool in xacro, the end-effector contract's
+three-line short form on `trainit_hardware_layer`'s mock adapter, and a deterministic
+pick-and-place on `mode:=mock`. It is data, not a ROS package: colcon, rosdep and TSA's
+`setup.py` never see it. `test_example_ur5e_suction.py` generates it the README's way (from its
+directory, its paths relative) into a temp dir and checks the files, the description and the
+bring-up's `robot_description`. `test_example_ur5e_suction_launch.py` also builds it in a temp
+workspace, brings it up on ROS domain 79 and runs its tree: SUCCESS, the 8 moves in order and
+each validated with collision checking, the cup engaged after pick and released after place,
+every launch ending on its SIGINT and the domain empty before and after. Without
+`ur_description` every test that compiles the description SKIPS, naming it (the four that read
+only the committed files still run), and so does the launched module; with
+`TRAINIT_REQUIRE_GOLDEN=1` they FAIL instead. TSA itself never depends on it, not even as a
+`test_depend`. The launched one also needs the launch tiers' prerequisites (Test A, "On a public
+checkout"). Both generate only into temp dirs they delete: a bundle to keep is its user's own
+generation (the sample's README, step 1).
+
+```bash
+source /opt/ros/humble/setup.bash && source ~/trainit_ws/install/setup.bash
+cd ~/trainit_ws/src/trainit_setup_assistant      # the workspace of README.md "Install"
+PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=$PWD:$PYTHONPATH \
+  python3 -m pytest -q -p no:cacheprovider test/test_example_ur5e_suction.py
+TRAINIT_LAUNCH_TEST=1 PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+  PYTHONPATH=$PWD:$PYTHONPATH \
+  python3 -m pytest -q -s -p no:cacheprovider test/test_example_ur5e_suction_launch.py
+```
+
+**Verified 2026-10-14** (TSA 7.8.0, TMR 2.1.0, HW 0.2.1, ur_description 2.13.0): the static module
+16 passed and the launched one 8 passed, on the reference machine and on a fresh
+`osrf/ros:humble-desktop` container after README.md "Install", the sample README's "What you
+need" and its step 2 `rosdep install`; there the README's steps 1-3, run as written, logged its
+15 lines in order, ending `BT finished: SUCCESS`. Before those packages, every launch tier skips
+in under a second, naming what is missing.
+
+With `TRAINIT_SAMPLE_LAUNCH_EVIDENCE=<dir>` the launch report and every launch log are copied to
+`<dir>/ur5e_suction/`, and colcon's own logs to `<dir>/ur5e_suction/colcon_log/` when the build
+fails. It never runs together with another user of domain 79: it refuses to launch on a domain
+that is not empty.
 
 ### Test A3 — an EXTERNAL-NODE detector really launches (D-015, ~1 min, no GPU)
 

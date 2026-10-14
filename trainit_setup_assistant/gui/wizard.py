@@ -11,7 +11,7 @@ Scene (S3) and Waypoints (S4/S5) pages are added in M7/M8.
 from __future__ import annotations
 
 import os
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from python_qt_binding.QtCore import Qt, QTimer
 from python_qt_binding.QtGui import QBrush, QColor, QImage, QPixmap
@@ -43,7 +43,8 @@ from python_qt_binding.QtWidgets import (
     QWizardPage,
 )
 
-from ..model.enums import (CandidateRule, EndEffectorActuation, ExecutionMode,
+from ..model.backend import profile_for
+from ..model.enums import (Backend, CandidateRule, EndEffectorActuation, ExecutionMode,
                            GripperJointTarget, MotionType, PlannerId, SimGraspAdapter)
 from ..model.task import effective_planner
 from .controller import AssistantController
@@ -324,6 +325,43 @@ class NamedStatesPage(QWizardPage):
         return True  # named states are optional
 
 
+def build_and_run_lines(project, out_dir: str, ws: str) -> List[str]:
+    """The "Build & run" commands GeneratePage prints for ``project``'s bundle, generated into
+    ``out_dir`` inside the colcon workspace ``ws``, as the emitters wrote it (pure; tested by
+    test_wizard_run_commands.py). Built on a base config, the trainit_config holds the cell
+    bring-up, and the app's bringup.launch.py includes it and starts the tree; from scratch, the
+    app's bringup.launch.py IS the cell (the trainit_config has no launch file). Either way the
+    tree also runs on its own with trainit_bt.launch.py, which defaults use_sim_time to true: it
+    is given the mode profile's value (mock and real publish no /clock), and the mode where gazebo
+    is deployed (only then it declares one). The first run installs what the bundle declares, and
+    the controller manager a from-scratch bundle's moveit_controllers.yaml names, which no
+    generated package declares yet: drop that line once one does (it is harmless where a base
+    config brings its own)."""
+    b, dep = project.bundle, project.deployment
+    mode = dep.default_mode
+    base = bool(project.robot.base_moveit_config_path)
+    sim_time = 'true' if profile_for(mode).use_sim_time else 'false'
+    tree = (f'ros2 launch {b.app_package} trainit_bt.launch.py use_sim_time:={sim_time}'
+            + (f' mode:={mode}' if Backend.GAZEBO in dep.modes else ''))
+    lines = [
+        f'  cd {ws}',
+        "  # first time only: the bundle's dependencies, and move_group's controller manager",
+        f'  rosdep install --from-paths {os.path.abspath(out_dir)} --ignore-src -r -y',
+        '  sudo apt install ros-humble-moveit-simple-controller-manager',
+        f'  colcon build --packages-select {b.description_package} {b.moveit_config_package} '
+        f'{b.app_package}',
+        '  source install/setup.bash',
+        f'  # robot alone:   ros2 launch {b.description_package} view_robot.launch.py',
+        f'  # cell + RViz:   ros2 launch {b.moveit_config_package if base else b.app_package} '
+        f'bringup.launch.py mode:={mode}',
+        f'  # application:   {tree}',
+    ]
+    if base:
+        lines.append(f'  # or both:       ros2 launch {b.app_package} bringup.launch.py '
+                     f'mode:={mode}')
+    return lines
+
+
 class GeneratePage(QWizardPage):
     def __init__(self, ctrl: AssistantController):
         super().__init__()
@@ -385,22 +423,13 @@ class GeneratePage(QWizardPage):
             return
         info = manifest.as_dict()
         b = self.ctrl.project.bundle
-        pkgs = f'{b.description_package} {b.moveit_config_package} {b.app_package}'
         ws = self.ctrl._workspace_root(out_dir)
         lines = [
             f"Generated {info['file_count']} files into {out_dir}",
             f'Bundle: {b.description_package} + {b.moveit_config_package} + {b.app_package}',
             '',
             'Build & run:',
-            f'  cd {ws}',
-            f'  colcon build --packages-select {pkgs}',
-            '  source install/setup.bash',
-            f'  # robot alone:   ros2 launch {b.description_package} view_robot.launch.py',
-            f'  # cell + RViz:   ros2 launch {b.moveit_config_package} bringup.launch.py '
-            f'mode:={self.ctrl.project.deployment.default_mode}',
-            f'  # application:  ros2 launch {b.app_package} bringup.launch.py '
-            f'mode:={self.ctrl.project.deployment.default_mode}',
-        ]
+        ] + build_and_run_lines(self.ctrl.project, out_dir, ws)
         # also persist the project so you can REOPEN it (e.g. to capture poses with the
         # gizmo after building this bootstrap) — the two-pass workflow.
         try:

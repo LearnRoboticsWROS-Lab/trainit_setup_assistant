@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<!-- A simple suction tool for the TrainIt public sample cell (synthetic, generic dimensions): a
+     body cylinder and a cup cylinder along the parent frame's Z+, and the TCP at the cup lip.
+
+     Every joint is fixed. The cup is commanded through the end-effector contract (ADR-0022) as
+     ONE SetBool actuator: nothing in the description moves when it engages, so the arm's six
+     joints are the robot's only joint states.
+
+     The collision geometry ends exactly at the TCP plane: a part held at the TCP touches no link
+     of the tool. -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="suction_tool" params="parent">
+    <xacro:property name="suction_body_radius" value="0.025"/>
+    <xacro:property name="suction_body_length" value="0.08"/>
+    <xacro:property name="suction_cup_radius" value="0.015"/>
+    <xacro:property name="suction_cup_length" value="0.02"/>
+    <xacro:property name="suction_mass" value="0.2"/>
+
+    <link name="suction_body">
+      <visual>
+        <origin xyz="0 0 ${suction_body_length / 2}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="${suction_body_radius}" length="${suction_body_length}"/>
+        </geometry>
+        <material name="suction_body_grey">
+          <color rgba="0.6 0.6 0.6 1.0"/>
+        </material>
+      </visual>
+      <visual>
+        <origin xyz="0 0 ${suction_body_length + suction_cup_length / 2}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="${suction_cup_radius}" length="${suction_cup_length}"/>
+        </geometry>
+        <material name="suction_cup_black">
+          <color rgba="0.1 0.1 0.1 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${suction_body_length / 2}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="${suction_body_radius}" length="${suction_body_length}"/>
+        </geometry>
+      </collision>
+      <collision>
+        <origin xyz="0 0 ${suction_body_length + suction_cup_length / 2}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="${suction_cup_radius}" length="${suction_cup_length}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 ${suction_body_length / 2}" rpy="0 0 0"/>
+        <mass value="${suction_mass}"/>
+        <inertia
+          ixx="${suction_mass * (3 * suction_body_radius ** 2 + suction_body_length ** 2) / 12}"
+          ixy="0.0" ixz="0.0"
+          iyy="${suction_mass * (3 * suction_body_radius ** 2 + suction_body_length ** 2) / 12}"
+          iyz="0.0"
+          izz="${suction_mass * suction_body_radius ** 2 / 2}"/>
+      </inertial>
+    </link>
+    <joint name="suction_mount_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="suction_body"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <!-- the TCP: the cup lip, the same axes as the parent (Z+ points at the part) -->
+    <link name="tcp"/>
+    <joint name="tcp_joint" type="fixed">
+      <parent link="suction_body"/>
+      <child link="tcp"/>
+      <origin xyz="0 0 ${suction_body_length + suction_cup_length}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>

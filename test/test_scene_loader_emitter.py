@@ -16,6 +16,7 @@ from trainit_setup_assistant.generator.orchestrator import (
     Orchestrator, generate_scene_loader_config)
 from trainit_setup_assistant.generator.scene_yaml import build_scene_yaml
 from trainit_setup_assistant.model import SceneObject
+import identity_cases
 import ws_paths
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), os.pardir, 'examples', 'fr3wml_project.yaml')
@@ -72,6 +73,7 @@ def test_scene_yaml_has_meshes_and_attach_ids():
 # ---- app tree wires the new per-move nodes + no in-tree AddCollisionObject ----
 def test_app_tree_emits_flag_nodes_and_skips_add_collision():
     ctrl, p = _project_with_base()
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         Orchestrator().generate(p, tmp)
         tree = open(os.path.join(tmp, 'fr30_cell_app', 'bt_trees', 'pick_place.xml')).read()
@@ -165,6 +167,7 @@ def test_generated_programs_are_executable():
     on 2026-08-24.
     """
     ctrl, p = _project_with_base()
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         Orchestrator().generate(p, tmp)
         checked = []

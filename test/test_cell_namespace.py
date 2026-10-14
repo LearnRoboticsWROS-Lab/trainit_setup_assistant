@@ -37,6 +37,7 @@ from trainit_setup_assistant.model import (BundleSpec, CanonicalProject, Executi
                                            MotionType, VisionBinding, load_project,
                                            normalize_cell_namespace, project_to_dict)
 from trainit_setup_assistant.model.robot import RobotSpec
+import identity_cases
 import ws_paths
 
 HERE = os.path.dirname(__file__)
@@ -178,6 +179,8 @@ def test_under_namespace_is_idempotent():
 def test_empty_namespace_emits_no_namespace_token_anywhere(source):
     if not Path(source).is_file():
         pytest.skip('golden bundle not present')
+    if source == EXAMPLE:                         # the golden param keeps its own skip above
+        identity_cases.require('p2_example')
     tmp, out, _ = _generate(_project(source, '', servo=True))
     with tmp:
         touched = sorted(out.rglob('*.launch.py')) + sorted(out.rglob('*.rviz'))
@@ -207,6 +210,7 @@ def test_empty_namespace_produces_no_handoff_warning():
 # --- 3. set: it reaches the robot's motion stack --------------------------------
 
 def test_namespace_reaches_every_node_of_the_motion_stack():
+    identity_cases.require('p2_example')
     tmp, out, _ = _generate(_project(EXAMPLE, 'r3', servo=True))
     with tmp:
         text = (out / 'cell_app' / 'launch' / 'bringup.launch.py').read_text()
@@ -294,6 +298,7 @@ def test_a_cell_with_no_gripper_emits_an_empty_action_under_a_namespace():
 def test_tf_stays_global_on_every_namespaced_node():
     """tf2 declares /tf and /tf_static absolute, and a split TF tree is a cell that cannot
     see itself. Every namespaced node says so explicitly."""
+    identity_cases.require('p2_example')
     tmp, out, _ = _generate(_project(EXAMPLE, 'r3', servo=True))
     with tmp:
         text = (out / 'cell_app' / 'launch' / 'bringup.launch.py').read_text()
@@ -335,6 +340,7 @@ def test_rviz_runs_at_the_root_with_the_description_topics_remapped():
     """Measured, not stylistic: MoveIt's MotionPlanning plugin builds no end-effector
     interactive marker from inside a namespace, so the CELL is namespaced and the VIEWER
     is not — and what RViz needs is pointed at this robot by hand."""
+    identity_cases.require('p2_example')
     tmp, out, _ = _generate(_project(EXAMPLE, 'r3'))
     with tmp:
         text = (out / 'cell_app' / 'launch' / 'bringup.launch.py').read_text()
@@ -374,6 +380,7 @@ def test_captured_absolute_cell_data_is_reported_not_rewritten():
 
 
 def test_the_warnings_reach_the_generation_manifest():
+    identity_cases.require('p2_example')
     tmp, out, manifest = _generate(_project(EXAMPLE, 'r3'))
     with tmp:
         text = '\n'.join(manifest.as_dict().get('warnings', []))
@@ -426,6 +433,7 @@ def test_at_the_root_the_scene_yaml_key_is_the_bare_one_it_always_was():
 def test_the_generated_controller_file_binds_a_namespaced_controller_manager():
     """From scratch, TSA renders ros2_controllers.yaml itself: every node key it writes
     must reach the controller manager and the arm controller in the robot's slot."""
+    identity_cases.require('p2_example')
     tmp, out, _ = _generate(_project(EXAMPLE, 'r3'))
     with tmp:
         keys = _top_keys(out / 'cell_trainit_config' / 'config' / 'ros2_controllers.yaml')

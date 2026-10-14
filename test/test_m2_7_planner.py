@@ -57,6 +57,7 @@ def test_the_effective_planner(motion, planner, mode, want):
 
 def _example(mode, blank=True):
     """The LEGACY example project (no contract): ptp, free and lin moves."""
+    identity_cases.require('p2_example')          # every caller generates it
     p = load_project(EXAMPLE)
     p.bundle = BundleSpec.from_prefix('cell')
     p.application.global_planner_mode = mode

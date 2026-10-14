@@ -17,7 +17,10 @@ Two bundles, the two flows that exist:
                  had been), and the runtime half of vNext M0C #5 executed.
 
 OPT-IN: it builds and launches for minutes, so it runs only with ``TRAINIT_LAUNCH_TEST=1`` and a
-sourced workspace (ROS 2 Humble + this workspace's install). Everything lives in a temp dir that
+sourced workspace (ROS 2 Humble + this workspace's install). Both bundles also need the private
+reference cell (``fr3wml_digital_twin``: the golden's project for ``root``, the example's robot
+description for ``r3``): without it a case SKIPS naming what is absent, and FAILS instead with
+``TRAINIT_REQUIRE_GOLDEN=1`` (``identity_cases.require``). Everything lives in a temp dir that
 is deleted; nothing is written into the workspace. This is test-time generation, like every
 golden gate here -- not a bundle for anyone to ship (MANUAL TSA GENERATION CHECKPOINT stands).
 
@@ -36,6 +39,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import identity_cases
 import ws_paths
 
 pytestmark = pytest.mark.skipif(os.environ.get('TRAINIT_LAUNCH_TEST') != '1',
@@ -43,9 +47,11 @@ pytestmark = pytest.mark.skipif(os.environ.get('TRAINIT_LAUNCH_TEST') != '1',
 
 EXAMPLE = Path(__file__).resolve().parents[1] / 'examples' / 'fr3wml_project.yaml'
 DOMAIN = '87'
+# ``needs``: the identity case whose inputs the generation reads (identity_cases.require)
 CASES = {
-    'root': dict(source=ws_paths.GOLDEN_BUNDLE / 'project.yaml', prefix='t2root', ns=''),
-    'r3': dict(source=EXAMPLE, prefix='t2ns', ns='r3'),
+    'root': dict(source=ws_paths.GOLDEN_BUNDLE / 'project.yaml', prefix='t2root', ns='',
+                 needs='p1_golden'),
+    'r3': dict(source=EXAMPLE, prefix='t2ns', ns='r3', needs='p2_example'),
 }
 
 
@@ -89,6 +95,7 @@ def _named_state(srdf: Path, group: str) -> tuple:
 @pytest.fixture(params=sorted(CASES), scope='module')
 def brought_up(request):
     case = CASES[request.param]
+    identity_cases.require(case['needs'])
     with tempfile.TemporaryDirectory() as tmp:
         ws = Path(tmp)
         built = _generate_and_build(case, ws)

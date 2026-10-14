@@ -42,6 +42,7 @@ if __name__ == '__main__':                                       # pragma: no co
 import pytest  # noqa: E402
 import yaml  # noqa: E402
 
+import identity_cases  # noqa: E402
 import m2_2_cases  # noqa: E402
 from trainit_setup_assistant.generator import Orchestrator  # noqa: E402
 from trainit_setup_assistant.model import DetectorSpec  # noqa: E402
@@ -168,7 +169,10 @@ def _generated(case):
                 f'params={json.dumps(list(det[m2_2_cases.DETECTOR]["params"].items()))}')
 
 
-def table():
+def table(generated: bool = True):
+    """The pinned answers: [computable], then [generated] -- every case when ``generated``, else
+    only the refused_* ones. The others generate the example, whose robot description is private;
+    a refusal comes before the first file is written, so it needs none."""
     out = ['[computable]']
     for key, method, params in _grid():
         terms = P.computable_terms(method, params)
@@ -177,20 +181,28 @@ def table():
                    f'rules={",".join(rules)} | '
                    f'preferred={P.preferred_candidate_rule(method, params).value}')
     out.append('[generated]')
-    out += [f'{case} | {_generated(case)}' for case in m2_2_cases.CASES]
+    out += [f'{case} | {_generated(case)}' for case in m2_2_cases.CASES
+            if generated or case.startswith('refused_')]
     return out
 
 
 def test_tsa_answers_exactly_what_7_3_0_answered():
     with open(DATA) as fh:
         want = fh.read().splitlines()
-    got = table()
+    # without the example's description, [computable] and the refusals are compared in full and
+    # the test then says that the rest of [generated] was not
+    generated = not identity_cases.missing('p2_example')
+    if not generated:
+        i = want.index('[generated]') + 1
+        want = want[:i] + [w for w in want[i:] if w.startswith('refused_')]
+    got = table(generated)
     if got != want:
         changed = [f'  pinned: {w}\n  now:    {g}' for w, g in zip(want, got) if w != g][:20]
         extra = len(got) - len(want)
         raise AssertionError(
             'TSA\'s perception answers moved (vNext M2.2 may add vocabulary, not change it):\n'
             + '\n'.join(changed) + (f'\n  ... and {extra:+d} lines' if extra else ''))
+    identity_cases.require('p2_example')
 
 
 # --- the GUI (offscreen) -----------------------------------------------------------------------

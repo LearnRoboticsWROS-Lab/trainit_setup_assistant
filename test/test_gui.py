@@ -9,6 +9,7 @@ import pytest
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from trainit_setup_assistant.gui.controller import AssistantController  # noqa: E402
+import identity_cases  # noqa: E402
 import ws_paths  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -27,6 +28,7 @@ def test_controller_open_edit_generate():
     ctrl.add_named_state('park', {'j1': 0.0, 'j2': -1.0, 'j3': 0.0,
                                   'j4': -1.5, 'j5': 0.0, 'j6': 0.0})
     assert 'park' in ctrl.robot_summary()['named_states']
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('ctrl_gen_test')
         manifest = ctrl.generate(tmp)
@@ -46,6 +48,7 @@ def test_mock_gripper_server_generated_for_bootstrap():
     ctrl = AssistantController()
     ctrl.open_project(EXAMPLE)
     ctrl.project.deployment.bridges = []          # bootstrap: no cell bridges
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('mockgrip_test')
         ctrl.generate(tmp)
@@ -147,6 +150,7 @@ def test_wizard_open_project_keeps_matrix(qapp):
     assert ctrl.project.robot.disable_collisions, 'matrix should carry over from project'
     assert 'collision-matrix: yes' in wiz.load_page.summary.text()
     # regenerating yields a buildable bundle WITH the matrix
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('reopened_test')
         ctrl.generate(tmp)
@@ -192,6 +196,7 @@ def test_wizard_controllers_page(qapp):
     assert cp.validatePage()
     assert ctrl.project.robot.arm_controller.name == 'my_arm_ctrl'
     assert ctrl.project.robot.arm_controller.update_rate == 200
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('ctrl_page_test')
         ctrl.generate(tmp)
@@ -248,6 +253,7 @@ def test_wizard_app_pages_build_app(qapp):
     # neither move chose servo -> the whole app stays on the zero-byte path (ADR-0015)
     assert ctrl.project.application.uses_servo() is False
 
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         wiz.generate_page.initializePage()
         wiz.generate_page.project_name.setText('fr3wml_wiz')
@@ -516,6 +522,7 @@ def test_wizard_vision_flow_offscreen(qapp):
     assert bp.auto_detect.isVisible() or 'cube' in bp.auto_detect.text()
 
     # generate: the bundle carries perception.yaml + the vision tree lines
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         ctrl.set_project_name('vision_gui_test')
         ctrl.generate(tmp)
@@ -1125,6 +1132,7 @@ def test_execution_mode_in_both_editors(qapp):
     wp.add_move()
     assert ctrl2.project.application.segment_for('track').execution is ExecutionMode.SERVO
 
+    identity_cases.require('p2_example')
     with tempfile.TemporaryDirectory() as tmp:
         wiz2.generate_page.initializePage()
         wiz2.generate_page.project_name.setText('servo_wiz')

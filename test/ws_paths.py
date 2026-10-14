@@ -13,7 +13,12 @@ all of them by absolute path, which runs on exactly one machine. They resolve th
 * **a fixture outside the workspace** -- an environment variable. Unset, the path is empty and the
   test that needs it SKIPS, naming the variable.
 
-A test that needs a file that is not there skips; nothing here raises. A clean checkout of this
+A test that needs something that is not there SKIPS and names it; nothing in this module raises.
+The test says it: ``identity_cases.require(case)`` for a reference project or an input it records,
+``eef_fixture.needs`` / ``skip_or_fail`` for a fixed path, ``catalog_identity.require_installed``
+for a package that ``snapshot.yaml`` records facts of but that is not installed here. Those FAIL
+instead with TRAINIT_REQUIRE_GOLDEN=1 (TESTING.md); the older plain skips
+(``golden bundle not present`` and their like) only skip (vNext G0 P1). A clean checkout of this
 repository alone therefore runs every test that needs nothing else.
 """
 import os

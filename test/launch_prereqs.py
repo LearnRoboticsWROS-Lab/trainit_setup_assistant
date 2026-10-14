@@ -15,8 +15,8 @@ after generation and before the build, ``require`` stops it in seconds instead, 
     (joint_state_publisher_gui serves only view_robot.launch.py): a tier runs a bundle the way
     its user does after that first rosdep install, which installs everything declared;
   * the plugin package each generated ``moveit_controllers.yaml`` names as move_group's
-    controller manager (``moveit_simple_controller_manager``), which no generated package.xml
-    declares yet;
+    controller manager (``moveit_simple_controller_manager``) when no package.xml of the bundle
+    declares it (a bundle of TSA 7.8.0 or older; 7.8.1 declares it);
   * every Python module of the launch harness that this interpreter cannot import
     (``controller_manager_msgs``, for one: ``composite_launch.PHASE_A_MODULES``).
 
@@ -98,8 +98,9 @@ def reason(lacks: list) -> str:
         what.append(f'{", ".join(declared)} (the generated package.xml files exec_depend on '
                     f'{"it" if len(declared) == 1 else "them"}; not on the ament index)')
     if named:
-        what.append(f'{", ".join(named)} (move_group\'s controller manager: the generated '
-                    'moveit_controllers.yaml names it, and no generated package declares it yet)')
+        what.append(f'{", ".join(named)} (move_group\'s controller manager: a '
+                    'moveit_controllers.yaml of the bundle names it, and no package.xml of the '
+                    'bundle declares it -- a bundle of TSA 7.8.0 or older)')
     if imported:
         what.append(f'the Python module{"s" if len(imported) > 1 else ""} {", ".join(imported)} '
                     f'(the launch harness imports {"it" if len(imported) == 1 else "them"})')
@@ -123,8 +124,9 @@ def reason(lacks: list) -> str:
     return (f'this launch tier stops before the build, as this machine lacks '
             f'{"; ".join(what)} -- fix: {"; ".join(fix)}. For a bundle of your own, '
             '`rosdep install --from-paths <the bundle> --ignore-src -r -y` installs what it '
-            f'declares, and `sudo apt install ros-{distro}-moveit-simple-controller-manager` the '
-            'controller manager (README.md, "Running a generated bundle")')
+            'declares (a bundle of TSA 7.8.0 or older also needs `sudo apt install '
+            f'ros-{distro}-moveit-simple-controller-manager`: README.md, "Running a generated '
+            'bundle")')
 
 
 def require(*roots: Path, modules: tuple = ()) -> None:

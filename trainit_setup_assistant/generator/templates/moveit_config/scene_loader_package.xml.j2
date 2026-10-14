@@ -27,6 +27,11 @@
   <!-- MoveIt + planners -->
   <exec_depend>moveit_configs_utils</exec_depend>
   <exec_depend>moveit_ros_move_group</exec_depend>
+{% if controller_manager_dep %}
+  <!-- the controller manager config/moveit_controllers.yaml names: without it move_group
+       executes no trajectory -->
+  <exec_depend>{{ controller_manager_dep }}</exec_depend>
+{% endif %}
   <exec_depend>moveit_kinematics</exec_depend>
   <exec_depend>pilz_industrial_motion_planner</exec_depend>
   <exec_depend>moveit_planners_ompl</exec_depend>

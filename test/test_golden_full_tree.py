@@ -23,7 +23,7 @@ form) would be rebased into this workspace and named with the same rule -- the g
 same file was copied", on any machine.
 
 The golden itself is frozen: its canonical tree hash is pinned below. It was frozen in vNext M0A
-and re-blessed three times, each time owner-approved and with its exact diff shown first:
+and re-blessed four times, each time owner-approved and with its exact diff shown first:
 
   vNext M2.3 (2026-10-08)  only generation_manifest.yaml: generator_version 0.1.0 (TSA v4.3.1)
                            -> 7.5.0, the capability_snapshot block, its fifteen COPY sources
@@ -35,7 +35,12 @@ and re-blessed three times, each time owner-approved and with its exact diff sho
   vNext G0 (2026-10-13)    provenance only, for publication: three lines of
                            generation_manifest.yaml -- generator_version 7.6.0 -> 7.8.0, the
                            catalog_sha256 of TSA 7.8.0's snapshot, the recorded
-                           trainit_motion_runtime version 1.8.0 -> 2.1.0 (tree adfdb238...).
+                           trainit_motion_runtime version 1.8.0 -> 2.1.0 (tree adfdb238...);
+  vNext G0 (2026-10-14)    TSA 7.8.1: the trainit_config package.xml declares the controller
+                           manager its copied moveit_controllers.yaml names (an exec_depend and
+                           its two-line comment), and in generation_manifest.yaml that file's
+                           sha256, generator_version 7.8.0 -> 7.8.1 and the catalog_sha256 of
+                           7.8.1's snapshot (tree d69cb4f8...).
 
 The other 32 files are the M0A bytes. Re-blessing the golden is an explicit, explained change of
 that constant -- never a side effect of a generator change. Between a generator change and its
@@ -63,7 +68,7 @@ INPUT = 'project.yaml'
 # What compiled a bundle, not what it is: never compared with the golden (see the docstring).
 PROVENANCE = ('generator_version', 'capability_snapshot')
 # sha256 over "<sha256>  <posix relative path>\n", paths sorted as Python strings (locale-free)
-GOLDEN_TREE_SHA256 = 'adfdb238ca9486d9cdaa40d0af77950afda2181f8d2ed8448b62374b8d573469'
+GOLDEN_TREE_SHA256 = 'd69cb4f8675023c67b064136b2d8af02a0540c7f37fa400faf85a6d30202b40f'
 
 pytestmark = pytest.mark.skipif(not GOLDEN.is_dir(), reason='golden bundle not present')
 
@@ -136,7 +141,7 @@ def test_the_manifests_content_record_is_the_goldens():
     gold_files = _files(GOLDEN)
     gold = _pending_record(yaml.safe_load(gold_files[MANIFEST]), gold_files)
     assert gen['generator_version'] == trainit_setup_assistant.__version__
-    assert gold['generator_version'] == '7.8.0'   # the release of the G0 provenance update
+    assert gold['generator_version'] == '7.8.1'   # the release of the last re-bless (vNext G0)
     # both say what compiled them, in the same shape; the VALUES are provenance and move with
     # every release and refresh (test_bundle_provenance.py checks the generated one)
     assert list(gen)[:2] == list(gold)[:2] == ['generator_version', 'capability_snapshot']

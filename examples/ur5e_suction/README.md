@@ -23,21 +23,20 @@ read from the installed package (`$(find ur_description)` and `package://ur_desc
 - The TrainIt Community workspace, built as the
   [Install section](../../README.md#install-trainit-community-from-source) of the TSA README says:
   ROS 2 Humble, `trainit_interfaces`, `trainit_motion_runtime` 2.0.0 or newer,
-  `trainit_hardware_layer` 0.2.0 or newer and `trainit_setup_assistant`. The commands below call
+  `trainit_hardware_layer` 0.2.0 or newer and `trainit_setup_assistant` 7.8.1 or newer (an older
+  one: also `sudo apt install ros-humble-moveit-simple-controller-manager`). The commands below call
   that workspace `~/trainit_ws`, as Install's layout A does. In layout B, TrainIt inside your
   robot workspace, put that workspace's path wherever they say `~/trainit_ws`.
-- Two apt packages, once per machine:
+- One apt package, once per machine:
 
   ```bash
-  sudo apt install ros-humble-ur-description ros-humble-moveit-simple-controller-manager
+  sudo apt install ros-humble-ur-description
   ```
 
   `ur_description` is the arm: generation compiles the robot description, and the bring-up and
   RViz read the arm's meshes from it. It was tested with version 2.13.0, and 2.14.0 gives the same
-  description byte for byte. `moveit_simple_controller_manager` is the controller manager that
-  the bundle's `moveit_controllers.yaml` names: without it, move_group cannot execute a single
-  trajectory. No generated package declares either of them, so the `rosdep` of step 2 installs
-  neither.
+  description byte for byte. No generated package declares it (a description's own packages are
+  the user's), so the `rosdep` of step 2 does not install it.
 
 In every new terminal, first:
 
@@ -86,8 +85,10 @@ source install/setup.bash
 `rosdep` installs what the bundle's `package.xml` files declare: ros2_control's controller
 manager and controllers, the topic-based hardware interface, MoveIt's move_group and planners,
 RViz and the joint sliders. It finds the TrainIt packages in the sourced `~/trainit_ws`, so it
-leaves them alone. It does not install `ur_description` or `moveit_simple_controller_manager`:
-those are the apt packages above. colcon should end with `Summary: 3 packages finished`.
+leaves them alone. It also installs `moveit_simple_controller_manager`, the controller manager
+the bundle's `moveit_controllers.yaml` names (declared since TSA 7.8.1). It does not install
+`ur_description`: that is the apt package above. colcon should end with `Summary: 3 packages
+finished`.
 
 Then, in the same terminal, check that the machine now has what the cell runs on:
 

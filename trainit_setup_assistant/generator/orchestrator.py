@@ -31,7 +31,8 @@ def default_emitters(project: Optional[CanonicalProject] = None) -> List[Emitter
     The MoveIt-config emitter is chosen by whether the project references a hand-made
     BASE moveit_config (Step 2): when it does, the STANDALONE scene+planner emitter
     copies that base + adds planners + the scene loader (the MVP flow); otherwise the
-    template-from-model emitter runs (the from-scratch / fr3wml golden path).
+    template-from-model emitter runs (the from-scratch path: the public sample; the fr3wml
+    golden takes the base-config path above).
     """
     emitters: List[Emitter] = [DescriptionEmitter()]
     use_scene_loader = bool(project and project.robot.base_moveit_config_path)

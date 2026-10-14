@@ -33,6 +33,25 @@ from ..scene_yaml import build_scene_yaml
 from ..servo_yaml import build_servo_context
 from .base import Emitter, GenContext
 
+# The released MoveIt controller-manager plugin packages (rosdep keys, ADR-0003) a bundle may
+# declare.
+MOVEIT_CONTROLLER_MANAGERS = ('moveit_simple_controller_manager', 'moveit_ros_control_interface')
+
+
+def moveit_controller_manager_package(path: Path):
+    """The package of the controller manager a ``moveit_controllers.yaml`` names
+    (``moveit_controller_manager: <package>/<class>``) when it is a released MoveIt one, else None
+    (no file, no key, another plugin). move_group loads that plugin: the package that ships the
+    file must declare it, or ``rosdep`` over the bundle leaves move_group unable to execute."""
+    import yaml
+    try:
+        data = yaml.safe_load(Path(path).read_text())
+    except (OSError, yaml.YAMLError):
+        return None
+    plugin = data.get('moveit_controller_manager') if isinstance(data, dict) else None
+    package = str(plugin).split('/', 1)[0] if plugin else ''
+    return package if package in MOVEIT_CONTROLLER_MANAGERS else None
+
 
 class SceneLoaderMoveitConfigEmitter(Emitter):
     def __init__(self, package_name: str = None):
@@ -259,9 +278,14 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
                 ctx.written(f'{pkg}/config/scene.yaml').values())
             bridge_packages = [p for p in geometry
                                if p != pkg and p not in bridge_packages] + bridge_packages
+        # the controller manager the COPIED moveit_controllers.yaml names (vNext G0, TSA 7.8.1):
+        # the copy makes this package independent of the base, so it declares the plugin itself
+        controller_manager_dep = moveit_controller_manager_package(
+            base_config / 'moveit_controllers.yaml')
         ctx.render_to(f'{pkg}/package.xml', 'moveit_config/scene_loader_package.xml.j2',
                       package_name=pkg, meta=project.meta, robot_name=robot.robot_name,
                       bridge_packages=bridge_packages,
+                      controller_manager_dep=controller_manager_dep,
                       servo_dep=uses_servo,
                       camera_cloud_dep=bool(camera_cloud), tmr=tmr, hardware_layer=hardware)
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'moveit_config/scene_loader_CMakeLists.txt.j2',

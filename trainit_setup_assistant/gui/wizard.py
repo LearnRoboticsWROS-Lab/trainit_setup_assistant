@@ -333,10 +333,8 @@ def build_and_run_lines(project, out_dir: str, ws: str) -> List[str]:
     app's bringup.launch.py IS the cell (the trainit_config has no launch file). Either way the
     tree also runs on its own with trainit_bt.launch.py, which defaults use_sim_time to true: it
     is given the mode profile's value (mock and real publish no /clock), and the mode where gazebo
-    is deployed (only then it declares one). The first run installs what the bundle declares, and
-    the controller manager a from-scratch bundle's moveit_controllers.yaml names, which no
-    generated package declares yet: drop that line once one does (it is harmless where a base
-    config brings its own)."""
+    is deployed (only then it declares one). The first run installs what the bundle declares --
+    since TSA 7.8.1 also the controller manager its moveit_controllers.yaml names."""
     b, dep = project.bundle, project.deployment
     mode = dep.default_mode
     base = bool(project.robot.base_moveit_config_path)
@@ -345,9 +343,8 @@ def build_and_run_lines(project, out_dir: str, ws: str) -> List[str]:
             + (f' mode:={mode}' if Backend.GAZEBO in dep.modes else ''))
     lines = [
         f'  cd {ws}',
-        "  # first time only: the bundle's dependencies, and move_group's controller manager",
+        "  # first time only: the bundle's dependencies",
         f'  rosdep install --from-paths {os.path.abspath(out_dir)} --ignore-src -r -y',
-        '  sudo apt install ros-humble-moveit-simple-controller-manager',
         f'  colcon build --packages-select {b.description_package} {b.moveit_config_package} '
         f'{b.app_package}',
         '  source install/setup.bash',

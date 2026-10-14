@@ -20,6 +20,9 @@
 
   <exec_depend>moveit_configs_utils</exec_depend>
   <exec_depend>moveit_ros_move_group</exec_depend>
+  <!-- the controller manager config/moveit_controllers.yaml names: without it move_group
+       executes no trajectory, and nothing else in a Community install brings it -->
+  <exec_depend>moveit_simple_controller_manager</exec_depend>
   <exec_depend>moveit_kinematics</exec_depend>
   <exec_depend>pilz_industrial_motion_planner</exec_depend>
   <exec_depend>moveit_planners_ompl</exec_depend>

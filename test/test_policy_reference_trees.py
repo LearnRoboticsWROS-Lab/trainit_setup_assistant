@@ -28,6 +28,11 @@ lines put back hashed to its M2.3 constant (pure c308776d..., hybrid 6bc9462d...
 differed. That a policy step also changes the app's package.xml -- by the policy runtime's
 dependency and nothing else -- is the M2.4 contract and is asserted as such.
 
+Re-pinned again at the owner-approved vNext G0 re-bless (2026-10-14): TSA 7.8.1's trainit_config
+package.xml declares the controller manager its copied moveit_controllers.yaml names. With those
+three lines removed each tree hashes to its previous constant (pure 83ee32cd..., hybrid
+76d30cda...); no other file differed.
+
 Fast and ROS-free.
 """
 import hashlib
@@ -59,8 +64,8 @@ _CARD = textwrap.dedent("""
 
 # sha256 over "<sha256>  <posix relative path>\n" of every generated file but the manifest
 REFERENCE_TREE_SHA256 = {
-    PolicyMode.PURE: '83ee32cd29603f7888b723b39cb194011afd37c22e35f187a2282046d9f3dfd8',
-    PolicyMode.HYBRID: '76d30cda9533e59fc3c6e92f44955c70e0ef2288abe236cc4cf5df8cdd76db7d',
+    PolicyMode.PURE: 'a2a4397172f46cc04ecdd363fb1ae74020805b62cba2d47a76eadd0371b69f05',
+    PolicyMode.HYBRID: 'f4de26fdd7ac1ad676a111f43638eb3df64fe967298a766d9438e13bf48c4d70',
 }
 ADDED = {'cell_app/launch/policy_runtime.launch.py',
          'cell_app/policies/grasp2preplace/policy.onnx',

@@ -2,8 +2,8 @@
 ``wizard.build_and_run_lines``), for both kinds of bundle and every backend (vNext G0 community
 follow-up, owner P2): what the emitters write.
 
-    the first run installs what the bundle declares (rosdep over the bundle) and the controller
-      manager no generated package declares yet, before the build
+    the first run installs what the bundle declares (rosdep over the bundle; since TSA 7.8.1 that
+      includes move_group's controller manager, so no apt line), before the build
     built on a base config: the cell is the trainit_config's bringup.launch.py, the tree the app's
       trainit_bt.launch.py, and the app's bringup.launch.py brings up both at once
     from scratch: the cell is the app's bringup.launch.py (the trainit_config has no launch file)
@@ -55,9 +55,8 @@ def test_the_printed_commands_are_the_bundle_s(case, monkeypatch, tmp_path):
     out = ws / 'src' / 'ur5e_suction_bundle'
     assert build_and_run_lines(project, str(out), str(ws)) == [
         f'  cd {ws}',
-        "  # first time only: the bundle's dependencies, and move_group's controller manager",
+        "  # first time only: the bundle's dependencies",
         f'  rosdep install --from-paths {out} --ignore-src -r -y',
-        '  sudo apt install ros-humble-moveit-simple-controller-manager',
         f'  colcon build --packages-select {DESC} {CFG} {APP}',
         '  source install/setup.bash',
         f'  # robot alone:   ros2 launch {DESC} view_robot.launch.py',

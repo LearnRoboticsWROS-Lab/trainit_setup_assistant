@@ -9,7 +9,10 @@ from typing import Union
 import yaml
 from pydantic import BaseModel
 
-from .project import SCHEMA_VERSION_EEF_CONTRACT, CanonicalProject
+from .enums import DEPRECATED_APP_TYPES, AppType, deprecated_app_type_refusal
+from .program import describe_load_error
+from .project import (SCHEMA_VERSION_EEF_CONTRACT, SCHEMA_VERSION_TASK_PROGRAM,
+                      CanonicalProject)
 
 # The ToolAction fields of the end-effector contract (ADR-0022): written only when set.
 _EEF_TOOL_ACTION_KEYS = ('actuator', 'target', 'site')
@@ -23,9 +26,25 @@ def load_project(path: Union[str, Path]) -> CanonicalProject:
     data = yaml.safe_load(text)
     if data is None:
         raise ValueError(f'empty project file: {path}')
+    application = data.get('application') if isinstance(data, dict) else None
+    token = application.get('type') if isinstance(application, dict) else None
+    if isinstance(token, str) and token in DEPRECATED_APP_TYPES:      # M3 decision 7 (TSA 8.0)
+        raise ValueError(f'{path}: ' + deprecated_app_type_refusal(token))
     if _contract_of(data) is not None:
         refuse_duplicate_contract_keys(text, path)
-    return CanonicalProject.parse_obj(data)
+    if not _is_task_program(data):
+        return CanonicalProject.parse_obj(data)
+    # A Canonical Task Program (vNext M3.3): a refusal names the task, step, waypoint or path in the
+    # file's own terms ("task 'scan' step 3 (move)"), not pydantic's internal location.
+    try:
+        return CanonicalProject.parse_obj(data)
+    except ValueError as exc:
+        raise ValueError(describe_load_error(exc, data, path)) from None
+
+
+def _is_task_program(data) -> bool:
+    application = data.get('application') if isinstance(data, dict) else None
+    return isinstance(application, dict) and application.get('type') == AppType.TASK_PROGRAM.value
 
 
 def _contract_of(data):
@@ -165,14 +184,55 @@ def project_to_dict(project: CanonicalProject) -> dict:
         for key in _EEF_TOOL_ACTION_KEYS:
             if action.get(key) is None:
                 action.pop(key, None)
+    # vNext M3.5: an external node's detect_service is written only when declared, so a project
+    # saved before it existed saves byte-identical
+    for det in ((data.get('perception') or {}).get('detectors') or []):
+        node = det.get('external_node') if isinstance(det, dict) else None
+        if isinstance(node, dict) and node.get('detect_service') is False:
+            node.pop('detect_service')
+    application = data.get('application')
+    if isinstance(application, dict):
+        application.pop('program', None)        # a template application: no program, no key
+        if project.application.is_task_program():
+            # vNext M3.3: the program's sections directly under `application:`, as the user wrote
+            # them (every key that was set, none that was not), and schema_version 4
+            data['application'] = {'type': AppType.TASK_PROGRAM.value,
+                                   **program_as_written(project.application.program)}
+            data['schema_version'] = SCHEMA_VERSION_TASK_PROGRAM
+    return data
+
+
+def program_as_written(program) -> dict:
+    """A Canonical Task Program as its file states it: every key that was set (a default the user
+    wrote stays written), none that was not -- the same on pydantic 1.x and 2.x. A step, a path or a
+    segment writes its own keys (name, type, to, states, ...) before the limits it shares with a
+    motion profile, so a saved file reads like the one the user wrote."""
+    return _own_keys_first(program, json.loads(program.json(exclude_unset=True)))
+
+
+def _own_keys_first(model, data):
+    from .motion import MotionConstraints
+    if isinstance(model, BaseModel) and isinstance(data, dict):
+        names = list(_fields(model))
+        shared = set(_fields(MotionConstraints())) if isinstance(model, MotionConstraints) else set()
+        order = [n for n in names if n not in shared] + [n for n in names if n in shared]
+        return {n: _own_keys_first(getattr(model, n), data[n]) for n in order if n in data}
+    if isinstance(model, list) and isinstance(data, list):
+        return [_own_keys_first(m, d) for m, d in zip(model, data)]
+    if isinstance(model, dict) and isinstance(data, dict):
+        return {k: _own_keys_first(model.get(k), v) for k, v in data.items()}
     return data
 
 
 def save_project(project: CanonicalProject, path: Union[str, Path]) -> Path:
-    """Write a project.yaml. Keys keep model order (sort_keys=False)."""
+    """Write a project.yaml. Keys keep model order (sort_keys=False). A Canonical Task Program
+    writes its innermost lists and mappings inline (``position: [0.45, 0.25, 0.3]``, ``- move: {to:
+    w1, type: ptp}``), as it is written by hand; a template application's file is written exactly as
+    before."""
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    flow = None if project.application.is_task_program() else False
     out.write_text(
-        yaml.safe_dump(project_to_dict(project), sort_keys=False, default_flow_style=False)
+        yaml.safe_dump(project_to_dict(project), sort_keys=False, default_flow_style=flow)
     )
     return out

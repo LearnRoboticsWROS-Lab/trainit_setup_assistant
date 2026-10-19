@@ -75,7 +75,11 @@ MATURITY = ('verified', 'verified_manually', 'development', 'non_production_read
 
 
 REGISTRY_FILE = 'tmr_planner_registry.yaml'
-PLANNER_REGISTRY_SCHEMA = 1
+# The registry schemas this TSA reads (ADR-0025 Decision 7): 1 (the planner vocabulary) and 2
+# (schema 1 + ``capabilities``, ``providers``, ``provider_defaults``). Any other number is refused
+# by name -- a newer TMR schema needs TSA's readers first (ADR-0021's landing order).
+PLANNER_REGISTRY_SCHEMAS = (1, 2)
+PLANNER_REGISTRY_SCHEMA = max(PLANNER_REGISTRY_SCHEMAS)     # the newest, the committed copy's
 SNAPSHOT_FILE = 'snapshot.yaml'
 REFRESH = 'python3 -m trainit_setup_assistant.catalog.refresh'
 
@@ -83,6 +87,23 @@ REFRESH = 'python3 -m trainit_setup_assistant.catalog.refresh'
 # PlannerId.PILZ; the D-016 vision rule keys on PILZ and switches to OMPL). TMR's registry must keep
 # offering them, or TSA changes first: the refresh refuses, and the model says so at import.
 TSA_REQUIRED_PLANNER_MODES = ('pilz', 'ompl')
+
+# --- registry schema 2: motion provider capabilities (ADR-0025) ------------------------------
+#
+# TMR owns the capability vocabulary and the provider rows; TSA reads them from this copy and
+# names only what its capability resolution derives (``model.capabilities``). Like the planner
+# modes above, what TSA's code names must still be in the registry, or TSA changes first: the
+# refresh refuses, and the model says so at import.
+#   TSA_CAPABILITY_TOKENS  every token the required-capability derivation can produce
+#   TSA_MOTION_KINDS       every kind of motion request TSA resolves a default provider for --
+#                          the keys of the registry's ``provider_defaults``
+TSA_CAPABILITY_TOKENS = ('joint_ptp', 'collision_free_planning', 'cartesian_linear',
+                         'cartesian_circular', 'multi_segment_path', 'blending', 'continuous_path',
+                         'velocity_scaling', 'acceleration_scaling', 'tcp_limits', 'goal_tolerance',
+                         'jerk_constraints', 'orientation_constraints')
+TSA_MOTION_KINDS = ('ptp', 'free', 'lin', 'circ', 'path', 'dense_path')
+_SCHEMA_2_SECTIONS = ('capabilities', 'providers', 'provider_defaults')
+_POINTED = {'planner_mode': 'planner_modes', 'cartesian': 'cartesian'}  # pointer -> section
 
 
 def _load(name: str):
@@ -92,7 +113,9 @@ def _load(name: str):
 def parse_planner_registry(data: bytes, where: str) -> dict:
     """A planner registry from its bytes (UTF-8, one loader for every reader), schema-checked.
     Bytes that are not YAML, or not a registry at all, are a RuntimeError that says how to repair
-    the committed copy (vNext M2.2: the TP reader beside it does the same)."""
+    the committed copy (vNext M2.2: the TP reader beside it does the same). Schema 2's provider
+    sections are checked structurally here (:func:`provider_problems`), so no reader half-reads
+    them."""
     try:
         registry = yaml.safe_load(data) or {}
     except (yaml.YAMLError, ValueError) as exc:
@@ -101,17 +124,130 @@ def parse_planner_registry(data: bytes, where: str) -> dict:
     if not isinstance(registry, dict):
         raise RuntimeError(f'{where}: not a planner registry (a {type(registry).__name__}). A '
                            f'committed copy is generated: run {REFRESH}')
-    if registry.get('schema_version') != PLANNER_REGISTRY_SCHEMA:
+    schema = registry.get('schema_version')
+    if isinstance(schema, bool) or schema not in PLANNER_REGISTRY_SCHEMAS:
         raise RuntimeError(
-            f'{where}: planner registry schema_version {registry.get("schema_version")!r}, and '
-            f'this TSA reads schema {PLANNER_REGISTRY_SCHEMA}. A newer TMR schema needs TSA\'s '
-            'readers updated first (catalog/__init__.py, catalog/derive.py); a copy that is '
-            'merely stale is fixed by ' + REFRESH)
+            f'{where}: planner registry schema_version {schema!r}, and this TSA reads schemas '
+            f'{list(PLANNER_REGISTRY_SCHEMAS)}. A newer TMR schema needs TSA\'s readers updated '
+            'first (catalog/__init__.py, catalog/derive.py); a copy that is merely stale is fixed '
+            'by ' + REFRESH)
     if not (isinstance(registry.get('pipelines'), dict)
             and isinstance(registry.get('planner_modes'), dict)):
         raise RuntimeError(f'{where}: a planner registry without its pipelines and planner_modes '
                            f'mappings. A committed copy is generated: run {REFRESH}')
+    problems = provider_problems(registry)
+    if problems:
+        raise RuntimeError(f'{where}: ' + '; '.join(problems) + '. A committed copy is '
+                           f'generated: run {REFRESH}')
     return registry
+
+
+def provider_problems(registry: dict) -> List[str]:
+    """Why a registry's schema-2 sections cannot be read as ADR-0025 defines them. Empty = they
+    can. Schema 1 must not carry them (a half-upgraded file); schema 2 must carry all three:
+
+    * ``capabilities``: ``live`` and ``reserved``, disjoint lists of distinct tokens;
+    * ``providers``: each row a ``route``, at most one pointer (``planner_mode`` or ``cartesian``)
+      to an entry of the sections above (none: a route that runs no MoveIt pipeline, e.g.
+      ``cartesian_path``), a ``stability``, and ``provides`` -- distinct live
+      tokens, never a reserved one; every live token provided by at least one row;
+    * ``provider_defaults``: kind -> a declared row."""
+    present = [s for s in _SCHEMA_2_SECTIONS if s in registry]
+    if registry.get('schema_version') == 1:
+        return [f'schema 1 carries the schema-2 section {s!r}' for s in present]
+    out = [f'schema 2 without its {s!r} section' for s in _SCHEMA_2_SECTIONS if s not in present]
+    if out:
+        return out
+    caps, rows, defaults = (registry[s] for s in _SCHEMA_2_SECTIONS)
+    if not (isinstance(caps, dict) and set(caps) == {'live', 'reserved'}
+            and all(_tokens(caps[k]) and len(set(caps[k])) == len(caps[k]) for k in caps)):
+        return ['capabilities must be exactly live and reserved, each a list of distinct tokens']
+    live, reserved = caps['live'], caps['reserved']
+    out += [f'capability {t!r} is both live and reserved' for t in live if t in reserved]
+    if not (isinstance(rows, dict) and rows and all(isinstance(r, dict) for r in rows.values())):
+        return out + ['providers must be a mapping of rows']
+    provided = set()
+    for name, row in rows.items():
+        pointers = [k for k in ('planner_mode', 'cartesian') if k in row]
+        if not _TOKEN.match(str(name)):
+            out.append(f'provider {name!r} is not a token')
+        if not isinstance(row.get('route'), str) or not isinstance(row.get('stability'), str):
+            out.append(f'provider {name!r} has no route or stability')
+        if len(pointers) > 1:
+            out.append(f'provider {name!r} points at both a planner_mode and a cartesian entry')
+        elif pointers and (not isinstance(row[pointers[0]], str) or row[pointers[0]] not in
+                           (registry.get(_POINTED[pointers[0]]) or {})):
+            out.append(f'provider {name!r} points at {pointers[0]} {row[pointers[0]]!r}, which '
+                       'the registry does not declare')
+        tokens = row.get('provides')
+        if not (_tokens(tokens) and len(set(tokens)) == len(tokens)):
+            out.append(f'provider {name!r}: provides must be a list of distinct tokens')
+            continue
+        out += [f'provider {name!r} provides the reserved capability {t!r}' for t in tokens
+                if t in reserved]
+        out += [f'provider {name!r} provides {t!r}, which capabilities does not declare'
+                for t in tokens if t not in live and t not in reserved]
+        provided.update(tokens)
+    out += [f'live capability {t!r} is provided by no row' for t in live if t not in provided]
+    if not isinstance(defaults, dict):
+        return out + ['provider_defaults must be a mapping']
+    out += [f'provider_defaults.{kind} names {row!r}, which is not a provider row'
+            for kind, row in defaults.items() if not isinstance(row, str) or row not in rows]
+    return out
+
+
+def missing_capability_vocabulary(registry: dict) -> List[str]:
+    """What TSA's capability resolution names that a schema-2 registry no longer declares: a
+    token (``TSA_CAPABILITY_TOKENS``) or a motion kind's default (``TSA_MOTION_KINDS``). A
+    schema-1 registry declares no capabilities: nothing is missing, there is nothing to resolve."""
+    if registry.get('schema_version') == 1:
+        return []
+    caps = registry['capabilities']
+    declared = set(caps['live']) | set(caps['reserved'])
+    return ([f'capability {t!r}' for t in TSA_CAPABILITY_TOKENS if t not in declared]
+            + [f'provider_defaults.{k}' for k in TSA_MOTION_KINDS
+               if k not in registry['provider_defaults']])
+
+
+def capability_vocabulary(registry: dict) -> Dict[str, List[str]]:
+    """The registry's capability tokens, ``live`` and ``reserved``, in registry order; empty lists
+    for schema 1."""
+    caps = registry.get('capabilities') or {}
+    return {'live': list(caps.get('live') or []), 'reserved': list(caps.get('reserved') or [])}
+
+
+def declared_providers(registry: dict) -> Dict[str, dict]:
+    """Every provider row TMR declares, by id, in registry order (empty for schema 1)."""
+    return {name: dict(row) for name, row in (registry.get('providers') or {}).items()}
+
+
+def eligible_providers(registry: dict) -> List[str]:
+    """The provider rows a project may be resolved to, in registry order: STABLE and DELIVERABLE
+    (ADR-0021 Decision 5, as ADR-0025 extends it to rows) -- a row pointing at a planner mode needs
+    that mode offered (:func:`offered_planner_modes`), a row pointing at a Cartesian shape needs
+    the shape's pipeline loaded, a row with no pointer runs no planning pipeline (it is
+    deliverable). Any other declared row is refused by name (R-M3-11)."""
+    loaded = {name for name, spec in registry['pipelines'].items() if spec.get('loaded')}
+    offered = set(offered_planner_modes(registry))
+    shapes = registry.get('cartesian') or {}
+    out = []
+    for name, row in declared_providers(registry).items():
+        if row.get('stability') != 'stable':
+            continue
+        if 'planner_mode' in row:
+            deliverable = row['planner_mode'] in offered
+        elif 'cartesian' in row:
+            deliverable = (shapes.get(row['cartesian']) or {}).get('pipeline') in loaded
+        else:
+            deliverable = True
+        if deliverable:
+            out.append(name)
+    return out
+
+
+def provider_defaults(registry: dict) -> Dict[str, str]:
+    """The registry's default provider row per motion kind (empty for schema 1)."""
+    return dict(registry.get('provider_defaults') or {})
 
 
 def missing_required_modes(registry: dict) -> List[str]:
@@ -189,10 +325,11 @@ TMR_BT_NODES = ('MoveWaypoint', 'ServoTrack', 'OpenGripper', 'CloseGripper', 'En
                 'DisableProcess', 'AddCollisionObject', 'AttachObject', 'DetachObject',
                 'SetAttachedCollisionCheck', 'ResetScene', 'SetReleasePolicy', 'DetectObject',
                 'SetWaypointFromDetection', 'SetWaypointRelative', 'RunPolicy', 'CheckRobotState',
-                'Log', 'VerifyGrasp', 'CommandActuator')
+                'Log', 'VerifyGrasp', 'CommandActuator', 'FollowPath', 'ProcessEvent',
+                'DetectCandidates', 'SetWaypointFromCandidate')
 # BehaviorTree.CPP's own nodes TSA emits, and the tags of the tree file itself: no TMR floor
 BT_BUILTIN_NODES = ('root', 'BehaviorTree', 'Sequence', 'Fallback', 'Sleep', 'Script', 'Repeat',
-                    'RetryUntilSuccessful')
+                    'RetryUntilSuccessful', 'SubTree')
 # The one placeholder the floors table admits, for a row whose TMR commit does not exist yet
 # (test_runtime_requirements.py names every row that still carries it). vNext M2.6 used it until
 # the TMR 2.0.0 commit adf94b0; no row carries it since.
@@ -229,6 +366,28 @@ TMR_FLOORS = {
     # package relies on it too, yet keeps its floor (owner M2.7 sections 4 and 17; KNOWN_DEBT).
     'moveit_clients_namespace': (
         '2.1.0', 'c2c9f01', 'trainit_run_bt reaches MoveIt in the cell namespace (ADR-0023)'),
+    # vNext M3.1 (ADR-0024), used by a Canonical Task Program (vNext M3.3): FollowPath, the runner's
+    # paths_file, and MoveWaypoint's profile / frame / tcp keys arrived with TMR 2.2.0 (b399a33).
+    'FollowPath': ('2.2.0', 'b399a33', 'FollowPath (a path of config/paths.yaml)'),
+    'waypoint_canonical_keys': ('2.2.0', 'b399a33', "MoveWaypoint's profile, frame and tcp keys"),
+    # vNext M3.4 (ADR-0025 Decision 3, owner D3): a ptp / free / lin move whose motion profile
+    # carries a goal tolerance relies on TMR honouring it on the MoveGroupInterface routes, which
+    # 8ed8a36 made true (TMR 2.3.0); before it the tolerance was dropped. A circ move or a path
+    # never needed it (the sequence route always sent it).
+    'move_goal_tolerance': ('2.3.0', '8ed8a36', "a move's goal tolerance on a MoveGroupInterface route"),
+    # vNext M3.5 (M3_DESIGN §9), used by a task program with process events: the generic ProcessEvent
+    # node, DetectObject's trigger (a fresh capture), FollowPath's event-free runs (from / to), and
+    # paths.yaml's events key (TMR 2.3.0's loader refuses it as an unknown key) arrived with 6a2414e.
+    'ProcessEvent': ('2.4.0', '6a2414e', 'ProcessEvent (a process event on a logical channel)'),
+    'detect_trigger': ('2.4.0', '6a2414e', "DetectObject's trigger (a capture of a fresh result)"),
+    'follow_path_range': ('2.4.0', '6a2414e', "FollowPath from / to (a path's event-free runs)"),
+    'path_events': ('2.4.0', '6a2414e', "paths.yaml events (where a path stops for a process event)"),
+    # vNext M3.6 (ADR-0026), used by a task program with manipulation steps: the grasp-candidate
+    # contract's two nodes arrived with cb4d1a2 (TMR 2.5.0, which depends on trainit_interfaces >= 0.2.0,
+    # the GraspCandidate messages: the bundle reaches the interface through TMR, never directly).
+    'DetectCandidates': ('2.5.0', 'cb4d1a2',
+                         'DetectCandidates (a grasp-candidate set; trainit_interfaces >= 0.2.0 through TMR)'),
+    'SetWaypointFromCandidate': ('2.5.0', 'cb4d1a2', "SetWaypointFromCandidate (a grasp idiom's targets)"),
 }
 # The TMR_FLOORS rows only a CANONICAL package can be given -- one whose bt_params carry the
 # end-effector contract's eef block (ADR-0022, its amendment M2.7; ADR-0021 amendment G0): a
@@ -236,6 +395,12 @@ TMR_FLOORS = {
 # capability -- its floor stays what it was before the contract existed.
 EEF_CONTRACT_CAPABILITIES = ('VerifyGrasp', 'CommandActuator', 'detect_fault', 'eef_block',
                              'move_waypoint_fault', 'moveit_clients_namespace')
+# The TMR_FLOORS rows only a CANONICAL TASK PROGRAM's package can be given (vNext M3.3): a template
+# application's package never gets them, so a template's file that does not parse keeps the floor it
+# had before them.
+TASK_PROGRAM_CAPABILITIES = ('FollowPath', 'waypoint_canonical_keys', 'move_goal_tolerance',
+                             'ProcessEvent', 'detect_trigger', 'follow_path_range', 'path_events',
+                             'DetectCandidates', 'SetWaypointFromCandidate')
 
 
 # --- the end-effector ADAPTER rows (ADR-0022 D6) ------------------------------------------------

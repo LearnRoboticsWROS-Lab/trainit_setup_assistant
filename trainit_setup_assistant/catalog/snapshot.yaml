@@ -4,8 +4,8 @@
 # test_catalog.py fails when a registry moves and this file does not (vNext M1, M2.1).
 catalog_version: 1
 derived_with:
-  trainit_setup_assistant: 7.8.1
-  trainit_motion_runtime: 2.1.0
+  trainit_setup_assistant: 8.0.0
+  trainit_motion_runtime: 2.5.0
   trainit_perception: 0.5.0
   trainit_policy_runtime: 0.1.0
 providers:
@@ -183,7 +183,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_setup_assistant
-    version: 7.8.1
+    version: 8.0.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -453,7 +453,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_motion_runtime
-    version: 2.1.0
+    version: 2.5.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -685,6 +685,14 @@ registries:
     - pilz
     - ompl
     - ompl_chomp
+    provider:
+    - pilz_ptp
+    - ompl
+    - ompl_chomp
+    - pilz_lin
+    - pilz_circ
+    - pilz_sequence
+    - cartesian_waypoints
     detection_method:
     - color_mask
     - custom
@@ -717,13 +725,21 @@ registries:
   trainit_motion_runtime:
     planner_registry:
       file: tmr_planner_registry.yaml
-      sha256: 98e249a05a697a473478f7fec1249017d255904776dd242ac9fcaf60205c937a
-      schema_version: 1
+      sha256: adf6065ae14e3aab449ea5e8a5ed657ce6563f3a9ba01506e9549f45e7f1de6b
+      schema_version: 2
     planner_modes:
     - pilz
     - ompl
     - ompl_chomp
     - stomp
+    providers:
+    - pilz_ptp
+    - ompl
+    - ompl_chomp
+    - pilz_lin
+    - pilz_circ
+    - pilz_sequence
+    - cartesian_waypoints
     pipeline_files:
     - chomp_planning.yaml
     - ompl_planning.yaml

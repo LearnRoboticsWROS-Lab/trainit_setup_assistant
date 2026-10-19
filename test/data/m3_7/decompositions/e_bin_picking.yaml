@@ -1,0 +1,54 @@
+# M3_DESIGN §19 E -- CAPSULE BIN PICKING (the M4.5 structure), as a Canonical Task Program (a
+# generation test, never shipped). The bin_picking template's emptying loop with DECLARED wrappers:
+#   repeat (until stopped) { fallback { pick one part | the bin stalled: pulse the agitator } }
+# and inside "pick one part" the design's retry: each try samples the bin afresh and grasps the BEST
+# candidate (the canonical model has no variables: a try never advances an index; trying the ranked
+# list in order is a fallback over the indices -- test_m3_7_decompositions.py compares both with the
+# template). No BinPickingTask; the only manipulation vocabulary is detect, grasp and release.
+perception:
+  detectors:
+    - name: bin_cam
+      method: custom
+      params: {class_id: capsule}
+      continuous: true
+      external_node: {package: m37_bin_camera, executable: detections}   # publishes Detection3DArray
+application:
+  type: task_program
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 20, acceleration: 20}
+  waypoints:                   # base_link, tool down
+    - {name: home, type: joint, named: home}
+    - {name: bin_view, position: [0.45, 0.25, 0.3], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: place, position: [0.3, -0.3, 0.15], orientation: [1.0, 0.0, 0.0, 0.0]}
+  tasks:
+    - name: empty_the_bin
+      description: pick capsules until the program is stopped; a stalled bin is agitated
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+        - repeat:
+            cycles: -1
+            body:
+              - fallback:
+                  bodies:
+                    - - retry:
+                          attempts: 3
+                          body:
+                            - move: {to: bin_view, type: ptp, profile: transit}
+                            - detect: {detector: bin_cam, source: detections, approach: [0.0, 0.0, -1.0],
+                                       keep: 1, out: ranked}
+                            - task: pick_best
+                      - task: place_capsule
+                    - - process: {kind: process_on, channel: bin_agitator}
+                      - dwell: {ms: 1500}
+                      - process: {kind: process_off, channel: bin_agitator}
+    - name: pick_best
+      inputs: [{name: ranked, type: candidates}]
+      steps:
+        - grasp: {candidates: ranked, index: 0, orientation_from: bin_view, standoff_m: 0.05,
+                  profile: transit, approach_profile: approach, retract: {along_approach: 0.1}}
+    - name: place_capsule
+      steps:
+        - release: {at: place, standoff_m: 0.05, profile: transit, approach_profile: approach,
+                    retract: {dz: 0.08}}
+  main_task: empty_the_bin

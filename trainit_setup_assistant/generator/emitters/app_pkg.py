@@ -36,6 +36,19 @@ class AppEmitter(Emitter):
         legacy_gripper = gripper_present and eef_dev is None
 
         template = get_application(app.type)
+        # vNext M3.3: a Canonical Task Program is planned ONCE, validated (the orchestrator refused
+        # any problem before this emitter ran) and resolved; every file below is written from it.
+        plan = None
+        if app.is_task_program():
+            from ...applications.task_program import plan_program
+            plan = plan_program(project)
+            if project.scene.payload is not None:
+                # vNext M3.7 review: the grasp and release idioms do not attach a payload to the
+                # planning scene in this version (KNOWN_DEBT); the text said they would (M3.6)
+                ctx.manifest.warn(f'application: scene payload "{project.scene.payload.id}" is not '
+                                  'used by the task program: its grasp and release steps do not attach '
+                                  'an object to the planning scene in this version (the transfer is '
+                                  'planned without the payload): it is not written')
         # The robot slot (ADR-0016 Decision 3). Empty => every generated node at the ROOT,
         # byte-for-byte the pre-ADR-0016 bundle. The from-scratch flow reports the
         # hand-off warnings here (the scene-loader flow reports them in its own emitter).
@@ -65,13 +78,36 @@ class AppEmitter(Emitter):
 
         # --- bt_params.yaml (GENERATE from the task graph) ---
         bt_ctx = build_bt_params_context(project)
-        bt_params_text = ctx.render('app/bt_params.yaml.j2', **bt_ctx)
-        ctx.generate_to(f'{pkg}/config/bt_params.yaml', bt_params_text,
-                        source='app/bt_params.yaml.j2')
+        if plan is None:
+            bt_params_text = ctx.render('app/bt_params.yaml.j2', **bt_ctx)
+            ctx.generate_to(f'{pkg}/config/bt_params.yaml', bt_params_text,
+                            source='app/bt_params.yaml.j2')
+        else:
+            from ..program_files import (motion_profiles_yaml, paths_yaml,
+                                         task_parameters_lines, tasks_yaml)
+            g = dict(bt_ctx['g'], planner_mode=plan.planner_mode,
+                     process_path_backend=plan.backend, process_controller=plan.process_controller)
+            bt_params_text = ctx.render('app/bt_params_program.yaml.j2', g=g,
+                                        task_parameters=task_parameters_lines(
+                                            plan, bt_ctx['scene_params']))
+            ctx.generate_to(f'{pkg}/config/bt_params.yaml', bt_params_text,
+                            source='app/bt_params_program.yaml.j2')
+            if plan.paths:
+                ctx.generate_to(f'{pkg}/config/paths.yaml', paths_yaml(plan),
+                                source='application:task_program')
+            ctx.generate_to(f'{pkg}/config/motion_profiles.yaml', motion_profiles_yaml(plan),
+                            source='application:task_program')
+            # vNext M3.7: the task manifest (no runtime reads it: MainTree runs main_task)
+            ctx.generate_to(f'{pkg}/config/tasks.yaml', tasks_yaml(project, plan),
+                            source='application:task_program')
 
         # --- BT tree XML (GENERATE by the application template) ---
         tree_name = template.tree_filename(project)
-        tree_xml = template.build_tree_xml(project)
+        if plan is None:
+            tree_xml = template.build_tree_xml(project)
+        else:
+            from ...applications.task_program import program_tree_xml
+            tree_xml = program_tree_xml(project, plan)
         ctx.generate_to(f'{pkg}/bt_trees/{tree_name}', tree_xml,
                         source=f'application:{app.type.value}')
 
@@ -146,8 +182,12 @@ class AppEmitter(Emitter):
                       moveit_config_package=project.bundle.moveit_config_package,
                       app_package=pkg,
                       tree_filename=tree_name,
-                      default_planner_mode=app.global_planner_mode.value,
+                      default_planner_mode=(plan.planner_mode if plan else
+                                            app.global_planner_mode.value),
                       gazebo_supported=(Backend.GAZEBO in dep.modes),
+                      # vNext M3.3: a task program loads its own profiles (and paths)
+                      program=plan is not None,
+                      program_paths=bool(plan and plan.paths),
                       # trainit_run_bt is a CLIENT of this robot's move_group, so it runs
                       # in the robot slot; the detector nodes stay GLOBAL (ADR-0016).
                       cell_namespace=cell_ns,
@@ -175,7 +215,9 @@ class AppEmitter(Emitter):
                           # the GripperCommand fails and, coupled, the grasp Bool never fires —
                           # ADR-0012). Gated so a non-gazebo cell (the golden) keeps 8.0 exactly.
                           bt_delay_default=('15.0' if (Backend.GAZEBO in dep.modes) else '8.0'),
-                          default_planner_mode=app.global_planner_mode.value)
+                          default_planner_mode=(plan.planner_mode if plan else
+                                                app.global_planner_mode.value),
+                          start_tolerance=plan.start_tolerance if plan else None)
         else:
             # From-scratch bootstrap: no base config bringup exists — the app bringup
             # assembles move_group + controllers itself (and a mock gripper server).
@@ -209,6 +251,7 @@ class AppEmitter(Emitter):
                           gazebo_supported=(Backend.GAZEBO in dep.modes),
                           world_default=(project.scene.world_path or ''),
                           gazebo_cm_bootstrap=dep.gazebo_cm_bootstrap,
+                          start_tolerance=plan.start_tolerance if plan else None,
                           gazebo_gripper_controller=(
                               robot.gripper.controller_name
                               if gripper_present and robot.gripper.kind is GripperKind.PARALLEL
@@ -228,7 +271,12 @@ class AppEmitter(Emitter):
         # --- README.md (TEMPLATE): how to build/run per mode + where to tune DOF ---
         # Emitted for the MVP scene-loader flow; the from-scratch/golden path is kept
         # byte-stable (no README) until the golden is regenerated.
-        if robot.base_moveit_config_path:
+        if plan is not None:
+            # vNext M3.3: a task program's README is the program, readable (both flows)
+            from ..program_files import program_readme
+            ctx.generate_to(f'{pkg}/README.md', program_readme(project, plan),
+                            source='application:task_program')
+        elif robot.base_moveit_config_path:
             ctx.render_to(f'{pkg}/README.md', 'app/README.md.j2',
                           robot_name=robot.robot_name, app_type=app.type.value,
                           # the streamed-moves section + the servo.yaml row (ADR-0015):
@@ -255,7 +303,9 @@ class AppEmitter(Emitter):
         # capability snapshot.
         use = use_of(trees=ctx.written(f'{pkg}/bt_trees/', '.xml'),
                      bt_params=ctx.written(f'{pkg}/config/', 'bt_params.yaml'),
-                     launches=ctx.written(f'{pkg}/launch/', '.py'))
+                     launches=ctx.written(f'{pkg}/launch/', '.py'),
+                     profiles=ctx.written(f'{pkg}/config/', 'motion_profiles.yaml'),
+                     paths=ctx.written(f'{pkg}/config/', 'paths.yaml'))
         for unreadable in use.unreadable:
             ctx.manifest.warn(f'runtime requirement: {unreadable} does not parse -- the bundle '
                               f'will not run as generated; trainit_motion_runtime is required at '

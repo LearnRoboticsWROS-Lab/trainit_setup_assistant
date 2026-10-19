@@ -8,6 +8,7 @@ from ..model.enums import AppType
 from .base import ApplicationTemplate
 from .bin_picking import BinPicking
 from .pick_and_place import PickAndPlace
+from .task_program import TaskProgramApplication
 from .vision_guided_motion import VisionGuidedMotion
 
 _REGISTRY: Dict[str, ApplicationTemplate] = {
@@ -17,6 +18,9 @@ _REGISTRY: Dict[str, ApplicationTemplate] = {
     # holding check + gated stall recovery). A subclass of the vision template,
     # so every vision/relative check is inherited rather than re-derived.
     AppType.BIN_PICKING.value: BinPicking(),
+    # vNext M3.3 (ADR-0024): the Canonical Task Program -- not a template: the project's own
+    # program, validated and resolved before any file (applications/task_program.py).
+    AppType.TASK_PROGRAM.value: TaskProgramApplication(),
 }
 
 

@@ -361,10 +361,10 @@ def test_one_refresh_is_a_fixed_point(monkeypatch):
 # --- one reader, one refusal: a registry of another schema --------------------------------------
 
 def test_a_registry_of_another_schema_is_refused_by_every_tsa_reader():
-    newer = COPY.read_bytes().replace(b'schema_version: 1', b'schema_version: 2')
+    newer = COPY.read_bytes().replace(b'schema_version: 2', b'schema_version: 3')
     assert newer != COPY.read_bytes()
-    with pytest.raises(RuntimeError, match=r"schema_version 2, and this TSA reads schema 1.*"
-                                           r"readers updated first"):
+    with pytest.raises(RuntimeError, match=r"schema_version 3, and this TSA reads schemas "
+                                           r"\[1, 2\].*readers updated first"):
         parse_planner_registry(newer, 'the copy')        # catalog/__init__.py AND derive.py
 
 
@@ -429,10 +429,13 @@ def test_refresh_reports_a_stale_copy_and_then_writes_it_byte_for_byte(scratch_c
 
 
 @pytest.mark.parametrize('edit, why', [
-    (lambda b: b.replace(b'schema_version: 1', b'schema_version: 2'), 'readers updated first'),
+    (lambda b: b.replace(b'schema_version: 2', b'schema_version: 3'), 'readers updated first'),
     (lambda b: b.replace(b'stability: stable', b'stability: experimental', 1),   # pilz: first
      "no longer offers ['pilz']"),
-], ids=['another_schema', 'drops_a_required_mode'])
+    (lambda b: b.replace(b'reserved: [orientation_constraints, jerk_constraints, ',
+                         b'reserved: [orientation_constraints, '),
+     "no longer declares [\"capability 'jerk_constraints'\"]"),
+], ids=['another_schema', 'drops_a_required_mode', 'drops_a_capability_tsa_names'])
 def test_refresh_refuses_a_registry_this_tsa_cannot_read_and_writes_nothing(
         scratch_catalog, capsys, edit, why):
     registry = edit(COPY.read_bytes())

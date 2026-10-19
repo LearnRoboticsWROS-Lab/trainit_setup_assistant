@@ -1,0 +1,141 @@
+# TrainIt public sample cell, as a CANONICAL TASK PROGRAM: the same UR5e with its suction cup
+# (robot, end-effector contract and scene as project.yaml), running a general motion program on
+# mode:=mock -- PTP, LIN and CIRC moves, then the same motion as ONE blended path.
+#
+# - Generate it like project.yaml, FROM THIS DIRECTORY (its paths are relative to it):
+#     ros2 run trainit_setup_assistant trainit_generate task_program.yaml -o <workspace>/src/ur5e_program
+# - Read the application block from the top: WAYPOINTS say WHERE, the steps of a TASK say HOW
+#   (move type, profile), PATHS chain several waypoints into one motion, PROFILES name reusable
+#   limits. No provider is named: TSA resolves each motion to the registry's default provider and
+#   writes the choice into the bundle (config/bt_params.yaml, config/paths.yaml, README.md).
+schema_version: 4
+project_name: ur5e_program_sample
+
+bundle:
+  description_package: ur5e_program_description
+  moveit_config_package: ur5e_program_trainit_config
+  app_package: ur5e_program_app
+
+meta:                          # written into the three generated package.xml files: put yours
+  maintainer_name: TrainIt sample user
+  maintainer_email: user@example.com
+  license: Apache-2.0
+  version: 0.1.0
+
+robot:
+  robot_name: ur5e_suction
+  description:
+    urdf_dir: urdf             # relative to this directory
+    top_xacro: ur5e_suction.urdf.xacro
+  base_frame: base_link
+  tip_link: tcp
+  planning_group:
+    name: ur_manipulator
+    base_link: base_link
+    tip_link: tcp              # the cup lip: every TCP waypoint below is a pose of this link
+    joints: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint,
+             wrist_3_joint]
+  gripper:
+    kind: suction
+    eef_parent_link: tcp       # the grasp site's TCP: the short form derives it from this link
+    contract:
+      actuator: {command_interface: set_bool}
+      verification: {require_grasp_confirmation: false, require_release_confirmation: false}
+      adapters: {mock: trainit_mock}
+  named_states:
+    - name: home               # tool down, TCP at about (0.49, 0.13, 0.39) m
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                     wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+    - name: above_pick         # TCP at (0.45, 0.25, 0.205), tool down: 15 cm above the pick
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.2452, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -1.3256}
+    - name: above_place        # TCP at (0.45, -0.25, 0.205), tool down: 15 cm above the place
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: -0.769, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -2.3398}
+  joint_limits:
+    per_joint:                 # velocity under the URDF's pi rad/s (Pilz refuses more than the
+                               # URDF); acceleration: ur_moveit_config's 5.0
+      shoulder_pan_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      shoulder_lift_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      elbow_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_1_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_2_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_3_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+  ompl:
+    projection_evaluator: joints(shoulder_pan_joint,shoulder_lift_joint)
+  initial_positions: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                      wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+  # The self-collision matrix: the 11 pairs of ur_moveit_config's srdf/ur_macro.srdf.xacro
+  # (Apache-2.0), transcribed, plus the tool's one: the cup body touches the flange face.
+  disable_collisions:
+    - {link1: base_link, link2: base_link_inertia, reason: Adjacent}
+    - {link1: base_link_inertia, link2: shoulder_link, reason: Adjacent}
+    - {link1: tool0, link2: wrist_1_link, reason: Never}
+    - {link1: tool0, link2: wrist_2_link, reason: Never}
+    - {link1: tool0, link2: wrist_3_link, reason: Adjacent}
+    - {link1: forearm_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: forearm_link, link2: wrist_1_link, reason: Adjacent}
+    - {link1: shoulder_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_2_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_3_link, reason: Never}
+    - {link1: wrist_2_link, link2: wrist_3_link, reason: Adjacent}
+    - {link1: suction_body, link2: wrist_3_link, reason: Adjacent}
+
+scene:
+  objects:                     # the table top is 5 mm under the robot base (its mesh starts at 0)
+    - {id: table, shape: box, dims: [1.2, 1.2, 0.05], frame: base_link,
+       position: [0.3, 0.0, -0.03]}
+
+deployment:
+  modes: [mock]
+  default_mode: mock
+
+application:
+  type: task_program
+
+  motion_profiles:             # named limits, reused by the steps below; speed/acceleration in % of
+                               # the joint limits, tcp_velocity_mps a TCP limit (the smaller wins)
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 30, acceleration: 30, tcp_velocity_mps: 0.1}
+    process: {speed: 20, acceleration: 20, tcp_velocity_mps: 0.08}
+
+  waypoints:                   # WHERE: a pose [x, y, z] (m) + [qx, qy, qz, qw], or a joint target
+    - {name: home, type: joint, named: home}
+    # Taught on UR's own `base` frame (what a UR teach pendant shows: base_link turned 180 deg about
+    # Z), tool pointing down. The runtime puts every pose into base_link through TF.
+    - {name: w1, frame: base, position: [-0.45, -0.25, 0.30], orientation: [0.0, 1.0, 0.0, 0.0]}
+    - {name: w2, relative: {to: w1, frame: tool, dz: 0.20}}   # 200 mm along the tool axis: down
+    - {name: w2b, frame: base, position: [-0.45, 0.0, 0.05], orientation: [0.0, 1.0, 0.0, 0.0]}
+    - {name: w3, frame: base, position: [-0.45, 0.25, 0.10], orientation: [0.0, 1.0, 0.0, 0.0]}
+    - {name: w4, frame: base, position: [-0.45, 0.25, 0.30], orientation: [0.0, 1.0, 0.0, 0.0]}
+
+  paths:                       # HOW several waypoints become ONE motion
+    - name: sweep              # w1 -> w2 -> (arc through w2b) -> w3 -> w4, without stopping
+      states: [w1, w2, w3, w4]
+      segments:
+        - {type: lin, blend_radius_m: 0.02}             # blend into the arc
+        - {type: circ, via: w2b, blend_radius_m: 0.02}  # blend into the last line
+        - {type: lin}                                   # the path ends at rest
+      continuity: blend
+      profile: process
+      goal_tolerance: {position_m: 0.001, orientation_rad: 0.01}   # path-wide, at w4
+
+  tasks:
+    - name: validation_a
+      steps:                   # a robot program, top to bottom
+        - move: {to: home, type: ptp, profile: transit}
+        - move: {to: w1, type: ptp, profile: transit}
+        - move: {to: w2, type: lin, profile: approach}
+        - move: {to: w3, type: circ, via: w2b, profile: approach}
+        - move: {to: w4, type: lin, profile: approach}
+        - move: {to: home, type: ptp, profile: transit}
+        - move: {to: w1, type: ptp, profile: transit}     # a path starts where the robot is
+        - path: sweep
+        - move: {to: home, type: ptp, profile: transit}
+  main_task: validation_a
+
+  runtime:
+    allowed_start_tolerance: 0.05   # rad: MoveIt refuses to start a trajectory farther than this

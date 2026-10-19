@@ -8,9 +8,15 @@ project's intent:
 
   the BT trees      every node (a node TSA does not date is a TSA defect: RuntimeError), the ports
                     and port values that arrived later (DetectObject ``keep``,
-                    SetWaypointFromDetection ``index``, keep <= 1's first-published match), the
+                    SetWaypointFromDetection ``index``, keep <= 1's first-published match;
+                    vNext M3.5: DetectObject ``trigger``, FollowPath ``from`` / ``to``), the
                     scene nodes when the tree runs in a namespace
   the bt_params     the joint-position gripper targets, the end-effector contract's ``eef`` block
+  the profiles      (a task program's config/motion_profiles.yaml, vNext M3.4) which profiles carry
+                    a goal tolerance: a ptp / free / lin waypoint of the bt_params naming one needs
+                    TMR 2.3.0 (``move_goal_tolerance``)
+  the paths         (a task program's config/paths.yaml, vNext M3.5) whether a path carries
+                    ``events``: TMR 2.4.0's loader reads them (``path_events``)
   the launch files  the launch helper's ``backend=``, and whether trainit_run_bt and
                     scene_manager_node run under a ``namespace=`` -- parsed with ``ast``: a TMR node
                     started with a literal ``package=``/``executable=``, its namespace a non-empty
@@ -47,7 +53,8 @@ from typing import (Dict, FrozenSet, Iterable, List, Mapping, NamedTuple, Option
 import yaml
 
 from ..catalog import (BT_BUILTIN_NODES, EEF_ADAPTER_ROWS, EEF_CONTRACT_CAPABILITIES,
-                       HARDWARE_LAYER, TMR_BT_NODES, TMR_FIRST_VERSION, TMR_FLOORS)
+                       HARDWARE_LAYER, TASK_PROGRAM_CAPABILITIES, TMR_BT_NODES, TMR_FIRST_VERSION,
+                       TMR_FLOORS)
 
 _TMR = 'trainit_motion_runtime'
 _POLICY_RUNTIME = 'trainit_policy_runtime'
@@ -78,6 +85,10 @@ class Use(NamedTuple):
     # does not parse: only then does a file that does not parse assume the contract's rows, and
     # only then does a namespaced trainit_run_bt need TMR 2.1.0 (vNext G0)
     canonical: bool = False
+    # a Canonical Task Program's package (vNext M3.3): a tree with FollowPath or task subtrees, or
+    # task_parameters with MoveWaypoint's canonical keys -- only then does a file that does not
+    # parse assume the task program's rows
+    task_program: bool = False
 
 
 def _version_key(version: str) -> tuple:
@@ -133,6 +144,10 @@ def _tree_capabilities(root: ET.Element, namespaced: bool, used: Set[str]) -> bo
             used.add('detection_index')
         if tag == 'DetectObject' and 'fault' in el.attrib:
             used.add('detect_fault')                 # ADR-0022 D5: the canonical gate
+        if tag == 'DetectObject' and el.get('trigger', 'false') != 'false':
+            used.add('detect_trigger')               # vNext M3.5: a capture
+        if tag == 'FollowPath' and ('from' in el.attrib or 'to' in el.attrib):
+            used.add('follow_path_range')            # vNext M3.5: a path's event-free run
         if tag == 'MoveWaypoint' and 'fault' in el.attrib:
             used.add('move_waypoint_fault')          # ADR-0022 amendment M2.7: the motion gate
         if namespaced and tag in _SCENE_SERVICE_NODES:
@@ -183,9 +198,31 @@ def _launch_facts(name: str, tree: ast.AST, facts: Set[str], executables: Set[st
     return policy
 
 
-def use_of(trees: Texts = (), bt_params: Texts = (), launches: Texts = ()) -> Use:
-    """What one package's generated trees, bt_params and launch files use (module docstring)."""
+# the motion values MoveWaypoint sends through a MoveGroupInterface route (circ: the sequence route)
+_MGI_MOTIONS = ('ptp', 'free', 'lin', 'linear')
+_TOLERANCE_KEYS = ('goal_position_tolerance', 'goal_orientation_tolerance')
+
+
+def use_of(trees: Texts = (), bt_params: Texts = (), launches: Texts = (),
+           profiles: Texts = (), paths: Texts = ()) -> Use:
+    """What one package's generated trees, bt_params, launch files, motion profiles and paths use
+    (module docstring)."""
     unreadable: List[str] = []
+    path_events = False                 # vNext M3.5: a path of paths.yaml with process events
+    for name, text in _named(paths, 'paths'):
+        try:
+            data = (yaml.safe_load(text) or {}).get('paths') or {}
+            path_events |= any(isinstance(p, dict) and 'events' in p for p in data.values())
+        except (yaml.YAMLError, AttributeError) as exc:
+            unreadable.append(_where(name, exc))
+    tolerant: Set[str] = set()          # vNext M3.4: the profiles that carry a goal tolerance
+    for name, text in _named(profiles, 'motion_profiles'):
+        try:
+            data = (yaml.safe_load(text) or {}).get('motion_profiles') or {}
+            tolerant |= {p for p, entry in data.items()
+                         if isinstance(entry, dict) and any(k in entry for k in _TOLERANCE_KEYS)}
+        except (yaml.YAMLError, AttributeError) as exc:
+            unreadable.append(_where(name, exc))
     facts: Set[str] = set()
     executables: Set[str] = set()
     policy = False
@@ -207,6 +244,8 @@ def use_of(trees: Texts = (), bt_params: Texts = (), launches: Texts = ()) -> Us
             continue
         policy |= _tree_capabilities(root, 'tree_namespaced' in facts, used)
     canonical = False
+    task_program = any('<FollowPath' in text or '<SubTree' in text
+                       for _name_, text in _named(trees, 'tree'))
     for name, text in _named(bt_params, 'bt_params'):
         try:
             data = yaml.safe_load(text) or {}
@@ -214,18 +253,32 @@ def use_of(trees: Texts = (), bt_params: Texts = (), launches: Texts = ()) -> Us
         except (yaml.YAMLError, AttributeError) as exc:
             unreadable.append(_where(name, exc))
             canonical |= bool(re.search(r'^\s+eef:\s*$', text, re.M))
+            task_program |= bool(re.search(r'^\s+(profile|frame|tcp):', text, re.M))
             continue
         if any('gripper_close_position' in p or 'gripper_open_position' in p for p in params):
             used.add('gripper_positions')
         if any('eef' in p for p in params):
             used.add('eef_block')                    # ADR-0022: the end-effector contract
+        entries = [entry for p in params for entry in ((p.get('task_parameters') or {}).values()
+                                                       if isinstance(p.get('task_parameters'), dict)
+                                                       else ()) if isinstance(entry, dict)]
+        # vNext M3.3: MoveWaypoint's profile / frame / tcp keys on a waypoint (TMR 2.2.0)
+        if any(any(k in entry for k in ('profile', 'frame', 'tcp')) for entry in entries):
+            used.add('waypoint_canonical_keys')
+        # vNext M3.4: a ptp / free / lin move whose profile carries a goal tolerance (TMR 2.3.0)
+        if any(entry.get('profile') in tolerant and entry.get('motion', 'free') in _MGI_MOTIONS
+               for entry in entries):
+            used.add('move_goal_tolerance')
+    if path_events:
+        used.add('path_events')
     canonical |= 'eef_block' in used
+    task_program |= bool(used & set(TASK_PROGRAM_CAPABILITIES))
     if canonical and 'tree_namespaced' in facts:
         # vNext G0 (owner section 5, ADR-0023): a canonical runner in a cell namespace relies on
         # TMR 2.1.0's MoveIt clients resolving there; a legacy one keeps its floor (owner M2.7)
         used.add('moveit_clients_namespace')
     return Use(tuple(n for n in TMR_FLOORS if n in used), frozenset(executables), policy,
-               tuple(unreadable), canonical)
+               tuple(unreadable), canonical, task_program)
 
 
 def requirement(use: Use, needs: Iterable[str] = ()) -> Requirement:
@@ -238,7 +291,8 @@ def requirement(use: Use, needs: Iterable[str] = ()) -> Requirement:
                            f'generator/runtime_requirements.py (vNext M2.4)')
     if use.unreadable:
         newest = max((row[0] for name, row in TMR_FLOORS.items()
-                      if use.canonical or name not in EEF_CONTRACT_CAPABILITIES),
+                      if (use.canonical or name not in EEF_CONTRACT_CAPABILITIES)
+                      and (use.task_program or name not in TASK_PROGRAM_CAPABILITIES)),
                      key=_version_key)
         return Requirement(newest, _comment(f'{_TMR} >= {newest}: {", ".join(use.unreadable)} '
                                             f'does not parse, so every capability TSA dates is '

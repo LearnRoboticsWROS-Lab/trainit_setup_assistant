@@ -1,0 +1,141 @@
+# Validation C (vNext M3.6, checkpoint M3-D): the MANIPULATION CONTRACT, offline, as a Canonical Task
+# Program on the public UR5e sample cell (its robot, end-effector contract -- grasp and release
+# CONFIRMED -- and scene). Producer: a synthetic GRASP-CANDIDATE producer (any producer
+# publishes the same message).
+#
+#   detect -> candidate set `parts` -> grasp (PreGrasp PTP, Approach LIN, close, verify held, Retract
+#   LIN along the approach) -> release at the taught `place` (PreRelease PTP, Approach LIN, verify
+#   held, open, verify released, Retract LIN up)
+#
+# Validation C and Validation C (detections) differ ONLY in their detect step: both producers
+# converge onto the same grasp step and the same runtime contract (GraspCandidate, ADR-0026).
+# The designed goals (base_link; the candidate at (0.4, 0, 0.1) with approach (0.6, 0, -0.8),
+# standoff 0.05 m, reference `pick_nominal` tool down):
+#   PreGrasp (0.37, 0, 0.14)  Approach -> (0.4, 0, 0.1)  Retract (0.34, 0, 0.18)
+#   TCP orientation align_approach = (0.9486833, 0, 0.3162278, 0) (qx, qy, qz, qw)
+#   PreRelease (0.3, -0.3, 0.2)  Approach -> (0.3, -0.3, 0.15)  Retract (0.3, -0.3, 0.23)
+# Generate it FROM THIS DIRECTORY (its urdf path is relative to it):
+#     trainit_generate validation_c.yaml -o <workspace>/src/m3d
+schema_version: 4
+project_name: m3d_validation_c
+
+bundle:
+  description_package: m3d_description
+  moveit_config_package: m3d_trainit_config
+  app_package: m3d_app
+
+meta:                          # written into the three generated package.xml files: put yours
+  maintainer_name: TrainIt sample user
+  maintainer_email: user@example.com
+  license: Apache-2.0
+  version: 0.1.0
+
+robot:
+  robot_name: ur5e_suction
+  description:
+    urdf_dir: ../../../examples/ur5e_suction/urdf   # the public sample's, relative to this directory
+    top_xacro: ur5e_suction.urdf.xacro
+  base_frame: base_link
+  tip_link: tcp
+  planning_group:
+    name: ur_manipulator
+    base_link: base_link
+    tip_link: tcp              # the cup lip: every TCP waypoint below is a pose of this link
+    joints: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint,
+             wrist_3_joint]
+  gripper:
+    kind: suction
+    eef_parent_link: tcp       # the grasp site's TCP: the short form derives it from this link
+    contract:
+      actuator: {command_interface: set_bool}
+      verification: {require_grasp_confirmation: true, require_release_confirmation: true}
+      adapters: {mock: trainit_mock}
+  named_states:
+    - name: home               # tool down, TCP at about (0.49, 0.13, 0.39) m
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                     wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+    - name: above_pick         # TCP at (0.45, 0.25, 0.205), tool down: 15 cm above the pick
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.2452, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -1.3256}
+    - name: above_place        # TCP at (0.45, -0.25, 0.205), tool down: 15 cm above the place
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: -0.769, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -2.3398}
+  joint_limits:
+    per_joint:                 # velocity under the URDF's pi rad/s (Pilz refuses more than the
+                               # URDF); acceleration: ur_moveit_config's 5.0
+      shoulder_pan_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      shoulder_lift_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      elbow_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_1_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_2_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_3_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+  ompl:
+    projection_evaluator: joints(shoulder_pan_joint,shoulder_lift_joint)
+  initial_positions: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                      wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+  # The self-collision matrix: the 11 pairs of ur_moveit_config's srdf/ur_macro.srdf.xacro
+  # (Apache-2.0), transcribed, plus the tool's one: the cup body touches the flange face.
+  disable_collisions:
+    - {link1: base_link, link2: base_link_inertia, reason: Adjacent}
+    - {link1: base_link_inertia, link2: shoulder_link, reason: Adjacent}
+    - {link1: tool0, link2: wrist_1_link, reason: Never}
+    - {link1: tool0, link2: wrist_2_link, reason: Never}
+    - {link1: tool0, link2: wrist_3_link, reason: Adjacent}
+    - {link1: forearm_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: forearm_link, link2: wrist_1_link, reason: Adjacent}
+    - {link1: shoulder_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_2_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_3_link, reason: Never}
+    - {link1: wrist_2_link, link2: wrist_3_link, reason: Adjacent}
+    - {link1: suction_body, link2: wrist_3_link, reason: Adjacent}
+
+scene:
+  objects:                     # the table top is 5 mm under the robot base (its mesh starts at 0)
+    - {id: table, shape: box, dims: [1.2, 1.2, 0.05], frame: base_link,
+       position: [0.3, 0.0, -0.03]}
+
+deployment:
+  modes: [mock]
+  default_mode: mock
+
+perception:
+  detectors:
+    - name: grasp_provider
+      method: custom
+      params: {class_id: part}
+      continuous: true
+      external_node:              # a grasp producer: it publishes trainit_interfaces/GraspCandidateArray
+        package: m3d_synthetic_producer
+        executable: synthetic_candidates
+application:
+  type: task_program
+
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 20, acceleration: 20}
+
+  waypoints:                   # base_link, tool down
+    - {name: pick_nominal, position: [0.4, 0.0, 0.3], orientation: [1.0, 0.0, 0.0, 0.0]}   # align_approach's reference
+    - {name: place, position: [0.3, -0.3, 0.15], orientation: [1.0, 0.0, 0.0, 0.0]}
+
+  tasks:
+    - name: validation_c
+      steps:
+        - detect: {detector: grasp_provider, source: candidates, out: parts}
+        - grasp:
+            candidates: parts
+            orientation_from: pick_nominal
+            standoff_m: 0.05
+            profile: transit
+            approach_profile: approach
+            retract: {along_approach: 0.1}
+        - release:
+            at: place
+            standoff_m: 0.05
+            profile: transit
+            approach_profile: approach
+            retract: {dz: 0.08}
+  main_task: validation_c

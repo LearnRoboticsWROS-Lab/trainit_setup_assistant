@@ -29,6 +29,7 @@ and never because the capability snapshot (what COMPILED the bundle, M2.3) knows
 Fast and ROS-free, except the last test (fresh interpreters, a few seconds).
 """
 import ast
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -49,8 +50,9 @@ import identity_cases
 import ws_paths
 from trainit_setup_assistant import catalog
 from trainit_setup_assistant.catalog import (BT_BUILTIN_NODES, EEF_CONTRACT_CAPABILITIES,
-                                             TMR_BT_NODES, TMR_EEF_EVIDENCE_PENDING,
-                                             TMR_FIRST_VERSION, TMR_FLOORS)
+                                             TASK_PROGRAM_CAPABILITIES, TMR_BT_NODES,
+                                             TMR_EEF_EVIDENCE_PENDING, TMR_FIRST_VERSION,
+                                             TMR_FLOORS)
 from trainit_setup_assistant.generator import Orchestrator
 from trainit_setup_assistant.generator import runtime_requirements as rr
 from trainit_setup_assistant.generator.orchestrator import generate_scene_loader_config
@@ -99,6 +101,22 @@ PINNED_FLOORS = {
     # vNext G0 (owner section 5, ADR-0023): a canonical runner in a cell namespace, TMR 2.1.0 (its
     # MoveIt clients built with the node's namespace in c2c9f01, under package.xml 2.0.0)
     'moveit_clients_namespace': ('2.1.0', 'c2c9f01'),
+    # vNext M3.3 (ADR-0024): a Canonical Task Program's FollowPath and MoveWaypoint's profile /
+    # frame / tcp keys, TMR 2.2.0 (b399a33, the M3.1 surfaces)
+    'FollowPath': ('2.2.0', 'b399a33'),
+    'waypoint_canonical_keys': ('2.2.0', 'b399a33'),
+    # vNext M3.4 (ADR-0025 Decision 3): a ptp / free / lin move's goal tolerance, honoured on the
+    # MoveGroupInterface routes since TMR 2.3.0 (8ed8a36)
+    'move_goal_tolerance': ('2.3.0', '8ed8a36'),
+    # vNext M3.5 (M3_DESIGN §9): a task program's process events -- the ProcessEvent node,
+    # DetectObject's trigger, FollowPath's from / to and paths.yaml's events, TMR 2.4.0 (6a2414e)
+    'ProcessEvent': ('2.4.0', '6a2414e'),
+    'detect_trigger': ('2.4.0', '6a2414e'),
+    'follow_path_range': ('2.4.0', '6a2414e'),
+    'path_events': ('2.4.0', '6a2414e'),
+    # vNext M3.6 (ADR-0026): the grasp-candidate contract's nodes, TMR 2.5.0
+    'DetectCandidates': ('2.5.0', 'cb4d1a2'),
+    'SetWaypointFromCandidate': ('2.5.0', 'cb4d1a2'),
 }
 
 
@@ -162,7 +180,8 @@ DATED_PORTS = {
     'SetAttachedCollisionCheck': {'value'}, 'SetReleasePolicy': {'policy'},
     'DetectObject': {'detector', 'class_id', 'target_frame', 'timeout_ms', 'out_key',
                      'topic', 'keep',                                        # keep: 1.6.0
-                     'fault'},                                     # fault: 2.0.0 (ADR-0022 D5)
+                     'fault',                                      # fault: 2.0.0 (ADR-0022 D5)
+                     'trigger'},                                   # trigger: 2.4.0 (vNext M3.5)
     'SetWaypointFromDetection': {'waypoint', 'from', 'dx', 'dy', 'dz', 'orientation',
                                  'index'},                                     # index: 1.6.0
     'SetWaypointRelative': {'waypoint', 'from', 'dx', 'dy', 'dz', 'droll', 'dpitch', 'dyaw'},
@@ -176,6 +195,18 @@ DATED_PORTS = {
     'Sequence': {'name', '_failureIf'}, 'Fallback': {'name', '_failureIf'}, 'Sleep': {'msec'},
     'Script': {'code'},
     'Repeat': {'num_cycles'}, 'RetryUntilSuccessful': {'num_attempts'},
+    # vNext M3.3: a task program's path (TMR 2.2.0) and its task subtrees (BehaviorTree.CPP's own)
+    'FollowPath': {'path',
+                   'from', 'to'},                       # vNext M3.5: follow_path_range, 2.4.0
+    'SubTree': {'ID', '_autoremap'},
+    # vNext M3.5: the generic process event (2.4.0)
+    'ProcessEvent': {'kind', 'channel', 'value'},
+    # vNext M3.6 (ADR-0026), 2.5.0
+    'DetectCandidates': {'source', 'detector', 'target_frame', 'timeout_ms', 'keep', 'out_key', 'class_id',
+                         'default_approach'},
+    'SetWaypointFromCandidate': {'from', 'index', 'grasp', 'pregrasp', 'retract', 'standoff_m',
+                                 'retract_along_approach', 'retract_dz', 'orientation', 'orientation_from',
+                                 'eef', 'site'},
 }
 DATED_BT_PARAMS = {'planner_mode', 'process_path_backend', 'group', 'base_frame', 'tip_link',
                    'gripper_action', 'process_controller', 'bt_tree_id', 'enforce_validation',
@@ -183,7 +214,9 @@ DATED_BT_PARAMS = {'planner_mode', 'process_path_backend', 'group', 'base_frame'
                    'gripper_close_position', 'gripper_open_position',          # these two: 1.5.0
                    'eef'}                                                      # 2.0.0 (ADR-0022)
 DATED_WAYPOINT_KEYS = {'type', 'position', 'orientation', 'named', 'joints', 'motion', 'planner',
-                       'speed', 'aux', 'aux_is_center'}
+                       'speed', 'aux', 'aux_is_center',
+                       'accel',                       # MoveWaypoint's since TMR_FIRST_VERSION
+                       'profile', 'frame', 'tcp'}     # vNext M3.3: waypoint_canonical_keys, 2.2.0
 DATED_SCENE_KEYS = {'frame_id', 'force_republish_hz', 'scene_update_wait_ms', 'gripper_cmd_topic',
                     'scene_reset_topic', 'attach_link', 'attached_collision_check',
                     'grasp_attach_mode', 'touch_links', 'attach_object_ids', 'object_ids',
@@ -197,7 +230,8 @@ DATED_HELPER_ARGS = {'robot_name', 'moveit_config_package', 'use_isaac', 'trajec
 DATED_TMR_EXECUTABLES = {'trainit_run_bt', 'scene_manager_node'}
 DATED_TMR_IMPORTS = {'build_move_group_params', 'available_pipeline_names'}
 DATED_RUN_BT_ARGS = {'bt_tree_file', 'planner_mode', 'motion_profiles_file', 'available_pipelines',
-                     'groot_monitor'}
+                     'groot_monitor',
+                     'paths_file'}       # vNext M3.3: with FollowPath (2.2.0), never without it
 # the values TSA's own vocabularies write into what TMR reads (free-text fields pass through)
 DATED_VALUES = {
     'MotionType': {'ptp', 'lin', 'circ', 'free'},
@@ -275,6 +309,15 @@ DETECT_FAULT = "DetectObject's fault output"
 EEF_BLOCK = 'the eef parameter block (ADR-0022)'
 WAYPOINT_FAULT = "MoveWaypoint's fault output"
 RUN_BT_NS = 'trainit_run_bt reaches MoveIt in the cell namespace (ADR-0023)'
+FOLLOW_PATH = 'FollowPath (a path of config/paths.yaml)'                   # vNext M3.3
+CANONICAL_KEYS = "MoveWaypoint's profile, frame and tcp keys"            # vNext M3.3
+MOVE_TOLERANCE = "a move's goal tolerance on a MoveGroupInterface route"   # vNext M3.4
+PROCESS_EVENT = 'ProcessEvent (a process event on a logical channel)'      # vNext M3.5
+DETECT_TRIGGER = "DetectObject's trigger (a capture of a fresh result)"
+PATH_RANGE = "FollowPath from / to (a path's event-free runs)"
+PATH_EVENTS = 'paths.yaml events (where a path stops for a process event)'
+DETECT_CANDIDATES = 'DetectCandidates (a grasp-candidate set; trainit_interfaces >= 0.2.0 through TMR)'   # M3.6
+CANDIDATE_TARGETS = "SetWaypointFromCandidate (a grasp idiom's targets)"
 
 
 def _for(version: str, *reasons: str) -> str:
@@ -460,7 +503,8 @@ def test_a_file_that_does_not_parse_assumes_every_dated_capability():
     package: never the end-effector contract's rows (ADR-0022) -- only a package whose bt_params
     carry the eef block can use them -- so its floor is the one it had before they existed."""
     newest = max((row[0] for name, row in TMR_FLOORS.items()
-                  if name not in EEF_CONTRACT_CAPABILITIES), key=_key)
+                  if name not in EEF_CONTRACT_CAPABILITIES
+                  and name not in TASK_PROGRAM_CAPABILITIES), key=_key)     # vNext M3.3: likewise
     bad_tree = _tree('<MoveWaypoint waypoint="a&b"/>')
     bad_launch = 'x = 1\nNode(package="trainit_policy_runtime", x=")\n'
     use = rr.use_of(trees={'cell_app/bt_trees/t.xml': bad_tree},
@@ -483,7 +527,10 @@ def test_a_canonical_file_that_does_not_parse_assumes_the_contract_rows_too():
     use = rr.use_of(trees={'cell_app/bt_trees/t.xml': bad_tree}, bt_params=[params])
     assert use.canonical and 'eef_block' in use.capabilities
     req = rr.requirement(use)
-    assert req.version == max((row[0] for row in TMR_FLOORS.values()), key=_key) == '2.1.0'
+    # vNext M3.3: never a task program's rows (FollowPath, the canonical waypoint keys: 2.2.0) --
+    # only a package with FollowPath, a SubTree or those keys can use them
+    assert req.version == max((row[0] for name, row in TMR_FLOORS.items()
+                               if name not in TASK_PROGRAM_CAPABILITIES), key=_key) == '2.1.0'
 
 
 # --- 4. the application matrix -------------------------------------------------------------------
@@ -496,6 +543,81 @@ _CARD = textwrap.dedent("""
         tcp_pose_base: [0.4267, -0.278, 0.1589, -0.006, -0.7006, 0.7134, 0.0117]
         object_attached: true
 """)
+
+
+UR5E = PKG / 'examples' / 'ur5e_suction'
+
+
+def _task_program(_card=None):
+    """vNext M3.3: the public cell's Canonical Task Program (Validation A), loaded the README's way
+    (from its directory) and its description directory made absolute, so it generates from any
+    directory."""
+    with _cwd(UR5E):
+        p = load_project('task_program.yaml')
+    p.robot.description.urdf_dir = str(UR5E / 'urdf')
+    p.bundle = BundleSpec.from_prefix('cell')
+    return p
+
+
+def _task_program_move_tolerance(_card=None):
+    """vNext M3.4: the same program, its lin/circ `approach` profile carrying a goal tolerance (the
+    lin moves w2 and w4 then rely on TMR 2.3.0 honouring it on the MoveGroupInterface route)."""
+    from trainit_setup_assistant.model.motion import GoalTolerance
+    p = _task_program()
+    p.application.program.motion_profiles['approach'].goal_tolerance = GoalTolerance(position_m=0.002)
+    return p
+
+
+M3_5 = PKG / 'test' / 'data' / 'm3_5'
+
+
+def _task_program_process(_card=None):
+    """vNext M3.5: Validation B (an inspection program: process steps on a logical channel, a path
+    with three captures), plus a set_value step -- every M3.5 surface a bundle can carry."""
+    from trainit_setup_assistant.model.program import ProcessStep, TaskStep
+    with _cwd(M3_5):
+        p = load_project('validation_b.yaml')
+    p.robot.description.urdf_dir = str(UR5E / 'urdf')
+    p.bundle = BundleSpec.from_prefix('cell')
+    p.application.program.tasks[0].steps.insert(3, TaskStep(process=ProcessStep(
+        kind='set_value', channel='inspection_light', value=0.8)))
+    return p
+
+
+M3_6 = PKG / 'test' / 'data' / 'm3_6'
+
+
+def _task_program_manipulation(_card=None):
+    """vNext M3.6: Validation C (a detect, a grasp from candidates, a release at a taught target) plus
+    a tool step -- every M3.6 surface a bundle can carry."""
+    from trainit_setup_assistant.model.program import TaskStep, ToolStep, ToolVerify
+    with _cwd(M3_6):
+        p = load_project('validation_c.yaml')
+    p.robot.description.urdf_dir = str(UR5E / 'urdf')
+    p.bundle = BundleSpec.from_prefix('cell')
+    p.application.program.tasks[0].steps.append(TaskStep(tool=ToolStep(verify=ToolVerify(expect='released'))))
+    return p
+
+
+@contextlib.contextmanager
+def _cwd(path):
+    old = os.getcwd()
+    if path is not None:
+        os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(old)
+
+
+def _ur_description() -> bool:
+    try:
+        import xacro  # noqa: F401
+        from ament_index_python.packages import get_package_share_directory
+        get_package_share_directory('ur_description')
+        return True
+    except Exception:                                   # noqa: BLE001
+        return False
 
 
 def _example():
@@ -681,6 +803,13 @@ CASES = {   # name -> (needs the golden, builder(card))
     'Q_canonical_suction_root': (False, lambda c: _canonical_suction(c, '')),
     'Q_canonical_suction_r3': (False, lambda c: _canonical_suction(c, '/r3')),
     'Q_canonical_golden_r1': (True, lambda c: _canonical_golden_r1()),
+    # vNext M3.3: a Canonical Task Program (FollowPath, the canonical waypoint keys, paths_file)
+    'T_task_program': (False, _task_program),
+    # vNext M3.4: a lin move whose profile carries a goal tolerance (TMR 2.3.0)
+    'T_task_program_move_tolerance': (False, _task_program_move_tolerance),
+    # vNext M3.5: process events (ProcessEvent, DetectObject trigger, FollowPath from/to, path events)
+    'T_task_program_process': (False, _task_program_process),
+    'T_task_program_manipulation': (False, _task_program_manipulation),
 }
 # F (no policy) is every case without a policy step; G (no perception) every case without a TP
 # detector node: A, C, D, E, P (but the golden-based ones), S, Z, N, J, U.
@@ -746,6 +875,19 @@ EXPECTED = {
                                False),
     'Q_canonical_golden_r1': ({APP: ('2.1.0', _for('2.1.0', RUN_BT_NS)),
                                CFG: ('1.5.0', _for('1.5.0', SCENE_MANAGER_NS))}, 'plain', False),
+    # vNext M3.3: a Canonical Task Program needs TMR 2.2.0 for what it uses (its eef rows, 2.0.0,
+    # are below the floor and not named)
+    'T_task_program': ({APP: ('2.2.0', _for('2.2.0', FOLLOW_PATH, CANONICAL_KEYS)), CFG: BASE},
+                       None, False),
+    'T_task_program_move_tolerance': ({APP: ('2.3.0', _for('2.3.0', MOVE_TOLERANCE)), CFG: BASE},
+                                      None, False),
+    # vNext M3.5: process events need TMR 2.4.0 for all four surfaces
+    'T_task_program_process': ({APP: ('2.4.0', _for('2.4.0', PROCESS_EVENT, DETECT_TRIGGER, PATH_RANGE,
+                                                    PATH_EVENTS)), CFG: BASE}, None, False),
+    # vNext M3.6: the manipulation idioms need TMR 2.5.0 for the candidate contract's two nodes (the tool
+    # step's VerifyGrasp, 2.0.0, is below the floor and not named)
+    'T_task_program_manipulation': ({APP: ('2.5.0', _for('2.5.0', DETECT_CANDIDATES, CANDIDATE_TARGETS)),
+                                     CFG: BASE}, None, False),
 }
 # the package whose launch starts the end-effector adapters, per canonical case (ADR-0022 [D])
 HARDWARE = {'Q_canonical_suction': (CFG, 'isaac_eef_adapter, mock_eef_adapter'),
@@ -754,7 +896,11 @@ HARDWARE = {'Q_canonical_suction': (CFG, 'isaac_eef_adapter, mock_eef_adapter'),
             'Q_composite_mock_r1': (APP, 'mock_eef_adapter'),
             'Q_canonical_suction_root': (APP, 'mock_eef_adapter'),
             'Q_canonical_suction_r3': (APP, 'mock_eef_adapter'),
-            'Q_canonical_golden_r1': (CFG, 'isaac_eef_adapter, mock_eef_adapter')}
+            'Q_canonical_golden_r1': (CFG, 'isaac_eef_adapter, mock_eef_adapter'),
+            'T_task_program': (APP, 'mock_eef_adapter'),
+            'T_task_program_move_tolerance': (APP, 'mock_eef_adapter'),
+            'T_task_program_process': (APP, 'mock_eef_adapter'),
+            'T_task_program_manipulation': (APP, 'mock_eef_adapter')}
 
 
 # the generated text a package reference can live in: the closed world of dependencies (vNext
@@ -784,6 +930,8 @@ def bundles():
         for name, (needs_golden, build) in CASES.items():
             if needs_golden and not GOLDEN_PROJECT.is_file():
                 continue
+            if name.startswith('T_') and not _ur_description():
+                continue                                   # the UR5e cell needs ur_description
             manifest = Orchestrator().generate(build(card), tmp / name)
             out[name] = dict(_read(tmp / name), _warnings=list(manifest.warnings))
     return out
@@ -1293,7 +1441,7 @@ def test_a_scene_loader_cell_without_the_golden(namespace, gazebo, app, cfg, tmp
 # --- 6. negative tests ---------------------------------------------------------------------------
 
 def test_1_a_snapshot_capability_is_not_a_dependency(bundles):
-    """The snapshot knows TP, the policy runtime, MoveIt Servo and TMR 2.1.0; a motion-only
+    """The snapshot knows TP, the policy runtime, MoveIt Servo and TMR 2.3.0; a motion-only
     bundle needs none of them, and its TMR floor is not the snapshot's TMR."""
     snap = catalog.snapshot()
     ids = {row['id'] for row in snap['providers']}
@@ -1302,7 +1450,7 @@ def test_1_a_snapshot_capability_is_not_a_dependency(bundles):
     names = {dep for rel, text in files.items() if rel.endswith('package.xml')
              for _t, dep, _a in _deps(text)}
     assert not names & {'trainit_perception', 'trainit_policy_runtime', 'moveit_servo'}
-    assert snap['derived_with']['trainit_motion_runtime'] == '2.1.0'      # refreshed in vNext M2.7
+    assert snap['derived_with']['trainit_motion_runtime'] == '2.5.0'      # refreshed in vNext M3.6
     assert {v for rel, text in files.items() if rel.endswith('package.xml')
             for v, _c in _tmr_lines(text)} == {'1.4.0'}
 
@@ -1352,7 +1500,8 @@ def test_1_the_requirement_never_reads_the_catalog_snapshot():
     assert {a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.level
             for a in n.names} == {'BT_BUILTIN_NODES', 'TMR_BT_NODES', 'TMR_FIRST_VERSION',
                                   'TMR_FLOORS', 'EEF_CONTRACT_CAPABILITIES', 'EEF_ADAPTER_ROWS',
-                                  'HARDWARE_LAYER'}       # vNext M2.6: constants, like the others
+                                  'HARDWARE_LAYER',       # vNext M2.6: constants, like the others
+                                  'TASK_PROGRAM_CAPABILITIES'}                      # vNext M3.3
     absolute = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
                 and not n.level} | {a.name for n in ast.walk(tree) if isinstance(n, ast.Import)
                                     for a in n.names}

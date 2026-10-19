@@ -1,0 +1,52 @@
+# M3_DESIGN §19 F -- BOTTLE NESTING (B-GATE), as a Canonical Task Program (a generation test, never
+# shipped): repeat { detect -> grasp -> move -> release into the next nest slot }. The design names ONE
+# missing concept, the `pattern` target (the slots as origin + pitch + counts), reserved and refused
+# (R-M3-14) until B-GATE; here the slots are taught waypoints, one release each. The design's composite
+# tool (a grasp at site `a`, whose TCP is not the arm's tip) needs multi-TCP motion, refused by R-M3-05
+# until the composite cell (M6): here the cell's one site. test_m3_7_decompositions.py asserts both
+# refusals and generates the rest.
+perception:
+  detectors:
+    - name: tray_cam
+      method: custom
+      params: {class_id: bottle}
+      continuous: true
+      external_node: {package: m37_tray_producer, executable: candidates}   # publishes GraspCandidateArray
+application:
+  type: task_program
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 20, acceleration: 20}
+  waypoints:                   # base_link, tool down
+    - {name: home, type: joint, named: home}
+    - {name: tray_view, position: [0.45, 0.25, 0.3], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: above_nest, position: [0.35, -0.25, 0.3], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: nest_0, position: [0.3, -0.3, 0.15], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: nest_1, position: [0.35, -0.3, 0.15], orientation: [1.0, 0.0, 0.0, 0.0]}
+  tasks:
+    - name: nest_bottles
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+        - repeat:
+            cycles: 6
+            body:
+              - task: nest_into_0
+              - task: nest_into_1
+    - name: nest_into_0
+      steps:
+        - task: take_bottle
+        - release: {at: nest_0, standoff_m: 0.05, profile: transit, approach_profile: approach,
+                    retract: {dz: 0.1}}
+    - name: nest_into_1
+      steps:
+        - task: take_bottle
+        - release: {at: nest_1, standoff_m: 0.05, profile: transit, approach_profile: approach,
+                    retract: {dz: 0.1}}
+    - name: take_bottle
+      steps:
+        - move: {to: tray_view, type: ptp, profile: transit}
+        - detect: {detector: tray_cam, source: candidates, keep: 1}
+        - grasp: {orientation_from: tray_view, standoff_m: 0.05, profile: transit,
+                  approach_profile: approach, retract: {along_approach: 0.1}}
+        - move: {to: above_nest, type: ptp, profile: transit}
+  main_task: nest_bottles

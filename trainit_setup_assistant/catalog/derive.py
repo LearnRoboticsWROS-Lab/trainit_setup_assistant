@@ -9,8 +9,10 @@ Nothing here is typed in twice. Each row is read from the place that owns the fa
   TMR          its installed planner registry ``config/planner_profiles.yaml`` (ADR-0021) and
                ``config/pipelines/``; the planner modes a project may select are
                ``catalog.offered_planner_modes`` of THAT registry -- never TSA's ``PlannerId``,
-               which is built from the committed copy, so one refresh is a fixed point
-  TP           its installed configuration vocabulary, ``trainit_perception.vocabulary.export()``
+               which is built from the committed copy, so one refresh is a fixed point; since
+               registry schema 2 (ADR-0025) also its motion provider rows and the ones a request
+               may resolve to (``catalog.eligible_providers``)
+  TP         its installed configuration vocabulary, ``trainit_perception.vocabulary.export()``
                (ADR-0021, amendment M2.2): detection methods, candidate rules, grasp faces, the
                version floors, the face size band -- the same record the refresh commits as
                ``tp_registry_snapshot.yaml``, so one refresh is a fixed point
@@ -39,8 +41,8 @@ import yaml
 from .. import __version__ as TSA_VERSION
 from ..model import enums as E
 from . import (EEF_ADAPTER_ROWS, REGISTRY_FILE, TP_REGISTRY_FILE, TP_TIERS,
-               declared_planner_modes, offered_planner_modes, parse_planner_registry,
-               tp_registry_text)
+               declared_planner_modes, declared_providers, eligible_providers,
+               offered_planner_modes, parse_planner_registry, tp_registry_text)
 
 CHECKED_ON = '2026-10-06'
 
@@ -330,6 +332,8 @@ def derive(tmr_bytes: Optional[bytes] = None, tp_vocabulary: Optional[dict] = No
         registries=dict(
             tsa_selectable=dict(
                 planner=offered_planner_modes(tmr['registry']),
+                # the motion provider rows a request may resolve to (registry schema 2, ADR-0025)
+                provider=eligible_providers(tmr['registry']),
                 detection_method=[m.value for m in E.DetectionMethod],
                 candidate_rule=selectable_rules,
                 execution=[m.value for m in E.ExecutionMode],
@@ -339,6 +343,7 @@ def derive(tmr_bytes: Optional[bytes] = None, tp_vocabulary: Optional[dict] = No
                 planner_registry=dict(file=REGISTRY_FILE, sha256=tmr['sha256'],
                                       schema_version=tmr['registry']['schema_version']),
                 planner_modes=declared_planner_modes(tmr['registry']),
+                providers=list(declared_providers(tmr['registry'])),
                 pipeline_files=tmr['pipeline_files']),
             trainit_perception=tp))
 

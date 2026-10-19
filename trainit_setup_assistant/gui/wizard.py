@@ -14,7 +14,7 @@ import os
 from typing import Dict, List, Optional
 
 from python_qt_binding.QtCore import Qt, QTimer
-from python_qt_binding.QtGui import QBrush, QColor, QImage, QPixmap
+from python_qt_binding.QtGui import QBrush, QColor, QFont, QFontDatabase, QImage, QPixmap
 from python_qt_binding.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -30,6 +30,7 @@ from python_qt_binding.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QPlainTextEdit,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -47,7 +48,39 @@ from ..model.backend import profile_for
 from ..model.enums import (Backend, CandidateRule, EndEffectorActuation, ExecutionMode,
                            GripperJointTarget, MotionType, PlannerId, SimGraspAdapter)
 from ..model.task import effective_planner
-from .controller import AssistantController
+from .controller import TASK_PROGRAM_READ_ONLY, AssistantController
+
+
+# --- the Canonical Task Program in the wizard (vNext M3.3) -----------------------------------------
+# YAML-first: the wizard SHOWS a task program and VALIDATES it; the template editors leave it as
+# written. One notice, in the wizard's own vocabulary: title (the box), state, explanation, action.
+_PROGRAM_EXPLANATION = (
+    'This project describes its robot program as a Canonical Task Program: waypoints say WHERE, '
+    'the move, path and dwell steps of its tasks say HOW, and motion profiles and paths are '
+    'reusable. In this TSA version the program is edited in project.yaml, under application: '
+    '(YAML-first). The wizard shows it and validates it; the application-type and block editors do '
+    'not change it, so your program stays exactly as written.')
+
+
+def _program_where(ctrl) -> str:
+    """Where the program is edited: the opened file, or project.yaml."""
+    return (f'Edit it in {ctrl.project_path} (application:).' if ctrl.project_path
+            else 'Edit it in the project file (application:).')
+
+
+def _program_notice(explanation: str, action: str):
+    """A neutral information box for a task program: (box, the state label)."""
+    box = QGroupBox('Canonical Task Program')
+    v = QVBoxLayout(box)
+    state = QLabel('')
+    state.setWordWrap(True)
+    state.setStyleSheet('font-weight:bold;')
+    v.addWidget(state)
+    for text in (explanation, action):
+        label = QLabel(text)
+        label.setWordWrap(True)
+        v.addWidget(label)
+    return box, state
 
 
 def _parse_joint_csv(text: str) -> Dict[str, float]:
@@ -1536,9 +1569,9 @@ class ApplicationPage(QWizardPage):
     # (saved projects carry them); labels are the product names (D-015).
     APPS = [('pick_and_place', 'Blind pick and place', True),
             ('vision_guided_motion', 'Vision guided motion', True),
-            ('bin_picking', 'Bin picking (emptying loop)', True),
-            ('gluing', 'Gluing', False), ('follow_path', 'Follow path', False),
-            ('waypoint_replay', 'Waypoint replay', False), ('cnc', 'CNC tending', False)]
+            ('bin_picking', 'Bin picking (emptying loop)', True)]
+    # TSA 8.0 (M3 decision 7): gluing, path following, waypoint replay and CNC tending are no longer
+    # offered (greyed) as application types: each is a Canonical Task Program, written in YAML.
 
     def __init__(self, ctrl: AssistantController):
         super().__init__()
@@ -1549,8 +1582,9 @@ class ApplicationPage(QWizardPage):
                          'per-segment planner, and the detectors from Step 5 bound to '
                          'waypoints. "Bin picking" adds the emptying LOOP: ranked '
                          'candidates, a retry over them, a check that the object really '
-                         'came up, and a recovery step when the bin stalls. Greyed '
-                         'entries are roadmap. Motion type + planner are chosen PER '
+                         'came up, and a recovery step when the bin stalls. Any other '
+                         'application (a path, gluing, machine tending, ...) is a Canonical '
+                         'Task Program, written in YAML. Motion type + planner are chosen PER '
                          'WAYPOINT in the next step.')
         form = QFormLayout(self)
         self.app_type = QComboBox()
@@ -1608,6 +1642,29 @@ class ApplicationPage(QWizardPage):
         form.addRow(self.bin_box)
         self.bin_box.setVisible(False)
 
+        # vNext M3.3: a Canonical Task Program fixes its own type (YAML-first): no choice here
+        self._form = form
+        self._titles = (self.title(), self.subTitle())
+        self.program_box, self.program_state = _program_notice(
+            _PROGRAM_EXPLANATION,
+            'Next: Step 7 shows the program and validates it; Step 8 generates the bundle and '
+            'refuses any problem before it writes a file.')
+        form.addRow(self.program_box)
+        self.program_box.setVisible(False)
+
+    def _show_program(self, program: bool) -> None:
+        label = self._form.labelForField(self.app_type)
+        for widget in (self.app_type, label):
+            if widget is not None:
+                widget.setVisible(not program)
+        if program:
+            self.bin_box.setVisible(False)
+            self.setSubTitle('This project\'s application is set by its file: a Canonical Task '
+                             'Program. ' + _program_where(self.ctrl))
+        else:
+            self.setSubTitle(self._titles[1])
+        self.program_box.setVisible(program)
+
     def _on_app_changed(self, idx: int) -> None:
         # The loop panel belongs to ONE application; showing it for the others would
         # suggest the fields do something there (they do not — only bin_picking reads them).
@@ -1619,6 +1676,14 @@ class ApplicationPage(QWizardPage):
             cur = self.ctrl.project.application.type.value
             per = self.ctrl.project.perception
         except Exception:  # noqa: BLE001
+            return
+        program = self.ctrl.is_task_program()
+        self._show_program(program)
+        if program:
+            from ..applications.task_program import program_summary
+            self.program_state.setText(
+                'Application type: task_program -- '
+                + program_summary(self.ctrl.project.application.program))
             return
         tokens = [t for t, _, _ in self.APPS]
         cfg = self.ctrl.project.application.bin_picking
@@ -1638,6 +1703,8 @@ class ApplicationPage(QWizardPage):
         self._on_app_changed(self.app_type.currentIndex())
 
     def validatePage(self) -> bool:
+        if self.ctrl.is_task_program():
+            return True                        # YAML-first: the type and the program stay as written
         idx = max(0, self.app_type.currentIndex())
         token, _, enabled = self.APPS[idx]
         if not enabled:
@@ -2391,8 +2458,17 @@ class BlocksPage(QWizardPage):
                          'waypoints), orange=process. Greyed blocks are roadmap.')
         self.blocks: list = []          # ordered [{kind:..., ...}]
         self._selected: int = -1
+        self._titles = (self.title(), self.subTitle())
 
-        root = QHBoxLayout(self)
+        # vNext M3.3: the block editor, or -- for a Canonical Task Program -- its read-only overview
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.editor = QWidget()
+        outer.addWidget(self.editor, 1)
+        self.program_panel = self._program_panel()
+        self.program_panel.setVisible(False)
+        outer.addWidget(self.program_panel, 1)
+        root = QHBoxLayout(self.editor)
 
         # ---- left: palette ---------------------------------------------------
         pal = QVBoxLayout()
@@ -2488,6 +2564,72 @@ class BlocksPage(QWizardPage):
         apply_btn.clicked.connect(self.apply_inspector)
         insp.addWidget(apply_btn)
         root.addLayout(insp, 3)
+
+    # ---- the Canonical Task Program (vNext M3.3): shown, validated, never rewritten ---------------
+    def _program_panel(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        box, self.program_state = _program_notice(
+            _PROGRAM_EXPLANATION,
+            'Validate checks every reference, frame, provider and limit exactly as Generate (Step 8) '
+            'does, without writing a file.')
+        v.addWidget(box)
+        self.program_view = QPlainTextEdit()
+        self.program_view.setReadOnly(True)
+        self.program_view.setLineWrapMode(QPlainTextEdit.NoWrap)
+        mono = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        mono.setStyleHint(QFont.TypeWriter)
+        mono.setFamily('monospace')
+        self.program_view.setFont(mono)
+        v.addWidget(self.program_view, 1)
+        row = QHBoxLayout()
+        self.program_validate = QPushButton('Validate the program')
+        self.program_validate.clicked.connect(self.validate_program)
+        row.addWidget(self.program_validate)
+        row.addStretch(1)
+        v.addLayout(row)
+        self.program_result = QLabel('')
+        self.program_result.setWordWrap(True)
+        self.program_result.setTextFormat(Qt.PlainText)
+        self.program_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        v.addWidget(self.program_result)
+        return w
+
+    def validate_program(self) -> None:
+        """The program's refusals (red) and warnings (amber), or that it is ready to generate."""
+        errors, warnings = self.ctrl.validate_program()
+        if errors:
+            head = (f'{len(errors)} problem' + ('s' if len(errors) > 1 else '')
+                    + ' -- Generate would refuse the program:')
+            body = [head] + [f'  {e}' for e in errors]
+            style = 'color:#c62828;'
+        else:
+            body = ['Valid: every reference, frame, provider and limit checks out; ready to '
+                    'generate.']
+            style = 'color:#2e7d32; font-weight:bold;'
+        if warnings:
+            body += ['', 'Warnings (TMR checks these when the program runs):'] + \
+                [f'  {w_}' for w_ in warnings]
+            if not errors:
+                style = 'color:#8a6d3b;'
+        self.program_result.setStyleSheet(style)
+        self.program_result.setText('\n'.join(body))
+
+    def _show_program(self, program: bool) -> None:
+        self.editor.setVisible(not program)
+        self.program_panel.setVisible(program)
+        if program:
+            from ..applications.task_program import program_overview, program_summary
+            prog = self.ctrl.project.application.program
+            self.setTitle('Step 7 — Task program (read-only overview)')
+            self.setSubTitle('The program as its file writes it (YAML-first). '
+                             + _program_where(self.ctrl) + ' Validate it here.')
+            self.program_state.setText(program_summary(prog))
+            self.program_view.setPlainText(program_overview(prog))
+            self.program_result.setText('')
+        else:
+            self.setTitle(self._titles[0])
+            self.setSubTitle(self._titles[1])
 
     # ---- inspector forms -----------------------------------------------------
     def _empty_form(self) -> QWidget:
@@ -3661,6 +3803,9 @@ class BlocksPage(QWizardPage):
             app = self.ctrl.project.application
         except Exception:  # noqa: BLE001
             return
+        self._show_program(app.is_task_program())
+        if app.is_task_program():
+            return                        # vNext M3.3: shown, never folded into blocks
         if self.blocks or not app.sequence:
             return                        # keep in-progress edits
         blocks = []
@@ -3773,6 +3918,8 @@ class BlocksPage(QWizardPage):
         self._refresh()
 
     def validatePage(self) -> bool:
+        if self.ctrl.is_task_program():
+            return True                   # vNext M3.3: the program stays as written
         self._sync_model()
         return True
 

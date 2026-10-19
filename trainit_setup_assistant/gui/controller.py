@@ -84,9 +84,19 @@ def _resolve_mesh_path(resource: str) -> str:
     return ''
 
 
+# vNext M3.3 (ADR-0024): what the wizard says, and refuses, for a Canonical Task Program. Its
+# program is authored in project.yaml; the template editors (Step 6's type, Step 7's blocks) would
+# rewrite it as a template application, so they leave it untouched and say why.
+TASK_PROGRAM_READ_ONLY = (
+    'This project is a Canonical Task Program: its waypoints, motion profiles, paths and tasks are '
+    'edited in project.yaml (application:), YAML-first in this TSA version. The template editors '
+    '(application type, blocks) do not edit it, so they change nothing here.')
+
+
 class AssistantController:
     def __init__(self, project: Optional[CanonicalProject] = None):
         self.project: Optional[CanonicalProject] = project
+        self.project_path: Optional[str] = None          # the opened project.yaml, if any
         # the scene+planner config package name generated at Step 3 (used by Step 4's
         # bring-up procedure so it names the package the user actually created).
         self.scene_loader_pkg: Optional[str] = None
@@ -105,6 +115,7 @@ class AssistantController:
 
     def open_project(self, path) -> CanonicalProject:
         self.project = load_project(path)
+        self.project_path = os.path.abspath(str(path))   # where a task program is edited
         return self.project
 
     def new_blank_project(self, project_name: str = 'robot_app') -> CanonicalProject:
@@ -550,8 +561,21 @@ class AssistantController:
         return len(pairs)
 
     # ---- application (S4/S5) ----
-    def set_application(self, app_type: str, global_planner_mode: str = 'pilz') -> None:
+    def is_task_program(self) -> bool:
+        """The loaded project is a Canonical Task Program (vNext M3.3): YAML-first, read-only for
+        the template editors."""
+        return self.project is not None and self.project.application.is_task_program()
+
+    def _template_application(self):
+        """The application, for a template editor -- refused for a Canonical Task Program, whose
+        program the template fields would silently overwrite (vNext M3.3)."""
         app = self._require().application
+        if app.is_task_program():
+            raise ValueError(TASK_PROGRAM_READ_ONLY)
+        return app
+
+    def set_application(self, app_type: str, global_planner_mode: str = 'pilz') -> None:
+        app = self._template_application()
         app.type = AppType(app_type)
         app.global_planner_mode = PlannerId(global_planner_mode)
 
@@ -561,7 +585,7 @@ class AssistantController:
         """Edit the emptying loop (ADR-0016 Decision 4). Every argument is keep-or-set
         (``None`` keeps), so a caller writes only what the user changed. Read ONLY by the
         bin_picking template, so setting it on another application changes nothing."""
-        cfg = self._require().application.bin_picking
+        cfg = self._template_application().bin_picking
         if tries is not None:
             cfg.tries = int(tries)
         if holding_check is not None:
@@ -600,7 +624,7 @@ class AssistantController:
         it (``<MoveWaypoint>``); ``'servo'`` streams it with MoveIt Servo
         (``<ServoTrack>``). Its own axis — orthogonal to ``motion`` and ``planner``.
         """
-        app = self._require().application
+        app = self._template_application()
         # ``tcp`` forces the type: a camera-guided or step-relative move may carry
         # NO captured pose (it is written at run time) yet must stay a tcp goal.
         if tcp is None:
@@ -636,13 +660,13 @@ class AssistantController:
         default, is a legacy action exactly as before (the field is not even set)."""
         contract = {k: v for k, v in (('actuator', actuator), ('target', target), ('site', site))
                     if v is not None}
-        self._require().application.tool_actions.append(
+        self._template_application().tool_actions.append(
             ToolAction(at_waypoint=at_waypoint, kind=ToolActionKind(kind),
                        payload_ref=payload_ref, **contract))
 
     def set_wait_after(self, waypoint: str, ms: int) -> None:
         """Process-layer Wait block: pause (ms) after the waypoint + its tool actions."""
-        seg = self._require().application.segment_for(waypoint)
+        seg = self._template_application().segment_for(waypoint)
         if seg is None:
             raise ValueError(f'no move named "{waypoint}"')
         seg.wait_after_ms = max(0, int(ms))
@@ -650,13 +674,13 @@ class AssistantController:
     def set_loop(self, cycles: int, start: str = None, end: str = None) -> None:
         """Repeat a slice of the sequence. start/end are inclusive waypoint names;
         None/None keeps the historical whole-sequence behaviour."""
-        app = self._require().application
+        app = self._template_application()
         app.loop_cycles = int(cycles)
         app.loop_start = start or None
         app.loop_end = end or None
 
     def clear_application(self) -> None:
-        app = self._require().application
+        app = self._template_application()
         app.waypoints, app.segments, app.tool_actions, app.sequence = [], [], [], []
         app.detections = []
         app.policies = []
@@ -665,7 +689,7 @@ class AssistantController:
         """Explicit camera sampling (D-018): DetectObject for ``detector`` fires
         immediately before the move to ``before_waypoint``."""
         from ..model import DetectPoint
-        self._require().application.detections.append(
+        self._template_application().detections.append(
             DetectPoint(detector=detector, before_waypoint=before_waypoint))
 
     def add_policy(self, name: str, before_waypoint: str, *, mode: str = 'hybrid',
@@ -686,7 +710,7 @@ class AssistantController:
             offset = [float(p) for p in parts]     # PolicyStep validates len == 6
             if not any(abs(x) > 1e-9 for x in offset):
                 offset = None                      # all-zero == no calibration (byte-stable)
-        self._require().application.policies.append(
+        self._template_application().policies.append(
             PolicyStep(name=name, before_waypoint=before_waypoint, mode=mode,
                        card=card, require_attached=require_attached,
                        attached_topic=(attached_topic or None),
@@ -887,7 +911,7 @@ class AssistantController:
         """Make a waypoint vision-driven: its position is overwritten at run time
         from the detector (+ base-frame offsets); the captured pose stays as the
         recorded fallback."""
-        wp = self._require().application.waypoint_by_name(waypoint)
+        wp = self._template_application().waypoint_by_name(waypoint)
         if wp is None:
             raise ValueError(f'no waypoint named "{waypoint}"')
         wp.relative = None                 # mutually exclusive with a relative binding
@@ -895,7 +919,7 @@ class AssistantController:
                                   dz=float(dz), orientation=orientation)
 
     def unbind_vision(self, waypoint: str) -> None:
-        wp = self._require().application.waypoint_by_name(waypoint)
+        wp = self._template_application().waypoint_by_name(waypoint)
         if wp is not None:
             wp.vision = None
 
@@ -906,7 +930,7 @@ class AssistantController:
         from another step's final pose (vision included) + offsets. Clears any
         vision binding (the two are mutually exclusive)."""
         from ..model import RelativeBinding
-        wp = self._require().application.waypoint_by_name(waypoint)
+        wp = self._template_application().waypoint_by_name(waypoint)
         if wp is None:
             raise ValueError(f'no waypoint named "{waypoint}"')
         if step == waypoint:
@@ -917,7 +941,7 @@ class AssistantController:
                                       dpitch=float(dpitch), dyaw=float(dyaw))
 
     def unbind_relative(self, waypoint: str) -> None:
-        wp = self._require().application.waypoint_by_name(waypoint)
+        wp = self._template_application().waypoint_by_name(waypoint)
         if wp is not None:
             wp.relative = None
 
@@ -1273,6 +1297,22 @@ class AssistantController:
         except KeyError as exc:
             problems.append(str(exc))
         return problems
+
+    def validate_program(self):
+        """A Canonical Task Program's (errors, warnings), as generation judges it (vNext M3.3):
+        the program's refusals and the end-effector contract's, then what TMR checks at run time."""
+        from ..applications.task_program import ProgramRefusals, plan_program
+        from ..generator.eef_contract import eef_contract_problems, eef_contract_warnings
+        p = self._require()
+        if not p.application.is_task_program():
+            return [], []
+        errors: List[str] = list(eef_contract_problems(p))
+        warnings: List[str] = list(eef_contract_warnings(p))
+        try:
+            warnings += plan_program(p).warnings
+        except ProgramRefusals as exc:
+            errors += list(exc.problems)
+        return errors, warnings
 
     def generate(self, output_dir) -> GenerationManifest:
         return Orchestrator().generate(self._require(), output_dir)

@@ -42,8 +42,11 @@ from .perception import (CANDIDATE_RULE_TERMS, DEFAULT_INPUT_TOPICS, METHOD_PROV
                          candidate_rule_refusal, computable_rules, computable_terms,
                          effective_candidate_rule, missing_candidate_terms,
                          preferred_candidate_rule)
+from .program import (DenseSource, Dwell, MoveStep, PathDef, PathGenerator, PathSegment,
+                      RelativeFrame, RelativeTarget, RuntimeSettings, Task, TaskProgram, TaskStep,
+                      TaskWaypoint)
 from .project import (BundleSpec, CanonicalProject, ProjectMeta, SCHEMA_VERSION,
-                      SCHEMA_VERSION_EEF_CONTRACT)
+                      SCHEMA_VERSION_EEF_CONTRACT, SCHEMA_VERSION_TASK_PROGRAM)
 from .robot import (
     ArmControllerSpec,
     DescriptionSource,
@@ -59,6 +62,8 @@ from .robot import (
     RobotSpec,
     normalize_cell_namespace,
 )
+from .motion import (GoalTolerance, MotionConstraints, MotionIntent, MotionProfile,
+                     PathContinuity, ProviderChoices, ProviderId)
 from .scene import Payload, SceneObject, SceneSpec
 from .task import (ApplicationSpec, BinPickingSpec, DetectPoint, MotionSegment,
                    PolicyStep, ToolAction, Waypoint, effective_planner)
@@ -164,6 +169,31 @@ __all__ = [
     'SceneSignal',
     'Device',
     'derive_device',
+    # the canonical motion request and its provider (vNext M3.2, ADR-0025); the resolution is
+    # model.capabilities
+    'GoalTolerance',
+    'MotionConstraints',
+    'MotionIntent',
+    'MotionProfile',
+    'PathContinuity',
+    'ProviderChoices',
+    'ProviderId',
+    # the Canonical Task Program (vNext M3.3, ADR-0024); its validation and generation are
+    # applications.task_program
+    'SCHEMA_VERSION_TASK_PROGRAM',
+    'TaskProgram',
+    'TaskWaypoint',
+    'RelativeTarget',
+    'RelativeFrame',
+    'MoveStep',
+    'Dwell',
+    'TaskStep',
+    'Task',
+    'PathDef',
+    'PathSegment',
+    'PathGenerator',
+    'DenseSource',
+    'RuntimeSettings',
     # io
     'load_project',
     'save_project',

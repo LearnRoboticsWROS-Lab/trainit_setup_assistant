@@ -45,13 +45,24 @@ def launch_setup(context, *args, **kwargs):
     if not bt_tree:
         bt_tree = os.path.join(pkg, "bt_trees", "{{ tree_filename }}")
     bt_params = os.path.join(pkg, "config", "bt_params.yaml")
+{% if program is defined and program %}
+    # A Canonical Task Program: the application's own motion profiles{{ ' and paths' if (program_paths is defined and program_paths) else '' }}
+    profiles = os.path.join(pkg, "config", "motion_profiles.yaml")
+{% if program_paths is defined and program_paths %}
+    paths = os.path.join(pkg, "config", "paths.yaml")
+{% endif %}
+{% else %}
     profiles = os.path.join(
         get_package_share_directory("trainit_motion_runtime"), "config", "bt", "trainit_profiles.yaml")
+{% endif %}
 
     node_params = {
         "bt_tree_file": bt_tree,
         "planner_mode": LaunchConfiguration("planner_mode"),
         "motion_profiles_file": profiles,
+{% if program_paths is defined and program_paths %}
+        "paths_file": paths,
+{% endif %}
         "available_pipelines": available_pipeline_names(),
         "groot_monitor": LaunchConfiguration("groot_monitor"),
     }

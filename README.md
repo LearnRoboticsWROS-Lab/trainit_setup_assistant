@@ -824,6 +824,9 @@ loop, retry and alternative, with no condition, variable or expression of their 
 
 ## Running a generated bundle
 
+A bundle is plain ROS 2 packages: it runs on TMR, MoveIt and the robot's controllers, and none of
+its packages depends on `trainit_setup_assistant`. TSA is needed only to generate or regenerate it.
+
 **The first time**, install what the bundle needs. From the workspace whose `src/` holds the
 bundle, with TrainIt sourced (Install, step 2):
 
@@ -896,24 +899,25 @@ the plugin reason above.
 
 ## CLIs (headless)
 
-Each runs as `ros2 run trainit_setup_assistant <command>`: an `ament_python` package installs
-its commands under `lib/trainit_setup_assistant`, not on `PATH`.
+Each runs as `ros2 run trainit_setup_assistant <command>` in a sourced workspace: an
+`ament_python` package installs its commands under `lib/trainit_setup_assistant`, not on `PATH`,
+so a bare `trainit_generate` is not found.
 
-- `trainit_generate <project.yaml> -o <dir>` — generate the bundle. A project without an
+- `ros2 run trainit_setup_assistant trainit_generate <project.yaml> -o <dir>` — generate the bundle. A project without an
   end-effector contract needs no ROS. One with a contract compiles its robot description first
   (R9), so it needs `xacro` and a sourced environment that finds every package the description
   uses (`ur_description`, for the public sample). A relative path in a project resolves against
   the current directory, not against the project file. A `<dir>` that is not empty is refused;
   `--force` deletes it first.
-- `trainit_verify <project.yaml> --golden <dir> [--build]` — equivalence + optional build.
-- `trainit_compute_collisions <project.yaml> [--write]` — the self-collision matrix
+- `ros2 run trainit_setup_assistant trainit_verify <project.yaml> --golden <dir> [--build]` — equivalence + optional build.
+- `ros2 run trainit_setup_assistant trainit_compute_collisions <project.yaml> [--write]` — the self-collision matrix
   (`robot.disable_collisions`), from the MoveIt Setup Assistant's `collisions_updater`, so it
   needs ROS: printed, or with `--write` saved into the project, which rewrites the file without
   its comments.
-- `trainit_isaac_kit --into <dir>` — copies the reusable Isaac-cell tooling (the stage validator,
+- `ros2 run trainit_setup_assistant trainit_isaac_kit --into <dir>` — copies the reusable Isaac-cell tooling (the stage validator,
   the collision-mesh exporter and two Script Node templates) into an existing `<cell>_isaac`
   package; a file already there is kept unless `--force`.
-- `trainit_setup_assistant` — the Qt wizard.
+- `ros2 run trainit_setup_assistant trainit_setup_assistant` — the Qt wizard.
 
 ## Version notes
 
@@ -1041,6 +1045,14 @@ its commands under `lib/trainit_setup_assistant`, not on `PATH`.
 > bundle -- are refused at load, naming `task_program`. A task program's bundle gains
 > `config/tasks.yaml` (and its README a row for it); no new TMR floor. Every template bundle: unchanged
 > but the manifest's provenance.
+
+## Licence
+
+Apache-2.0: [`LICENSE`](LICENSE). The other TrainIt Community repositories
+([`trainit_community.repos`](trainit_community.repos)) are Apache-2.0 too. A generated bundle
+carries the licence its project's `meta.license` names (Apache-2.0 by default). Third-party
+packages a bundle uses (MoveIt, BehaviorTree.CPP, a robot's description) keep their own licences;
+none is redistributed here.
 
 ## For maintainers
 

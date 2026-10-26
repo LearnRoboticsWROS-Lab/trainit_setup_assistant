@@ -1,0 +1,54 @@
+# TrainIt Application Composer template: Process path.
+# A process (dispensing, gluing, sealing) switched on along a path at constant speed.
+# The waypoint values are PLACEHOLDERS: re-teach them on your robot (Step 7: move the robot in RViz,
+# then Capture TCP / Capture joints). Pure canonical data: no template-specific runtime.
+# approach_j is the joint configuration 'approach' is reached with: the PTP goes to approach_j, so the LIN
+# to the start and the path run from the same configuration every cycle. Re-teach approach and approach_j
+# TOGETHER: put the robot at the approach, then "Capture TCP + joints" into 'approach'. Until then approach_j is
+# the named state home (valid on any robot).
+template: {title: Process path, description: 'A process (dispensing, gluing, sealing) switched on along a path at
+    constant speed.'}
+application:
+  type: task_program
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 20, acceleration: 20}
+    process: {speed: 10, acceleration: 10}
+  waypoints:
+  - {name: home, type: joint, named: home}
+  - name: approach
+    position: [0.45, 0.0, 0.25]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  - {name: approach_j, type: joint, named: home}
+  - name: start
+    position: [0.4, 0.0, 0.12]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  - name: retract
+    position: [0.4, 0.0, 0.25]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  paths:
+  - name: contour
+    source:
+      generator:
+        type: polyline
+        points:
+        - [0.4, 0.0, 0.12]
+        - [0.5, 0.0, 0.12]
+        - [0.5, 0.1, 0.12]
+        - [0.4, 0.1, 0.12]
+        closed: true
+      orientation: [1.0, 0.0, 0.0, 0.0]
+    continuity: blend
+    profile: process
+    provider: cartesian_waypoints
+  tasks:
+  - name: machine_contour
+    steps:
+    - move: {to: approach_j, type: ptp, profile: transit}
+    - move: {to: start, type: lin, profile: approach}
+    - process: {kind: process_on, channel: spindle}
+    - {path: contour}
+    - process: {kind: process_off, channel: spindle}
+    - move: {to: retract, type: lin, profile: approach}
+    - move: {to: home, type: ptp, profile: transit}
+  main_task: machine_contour

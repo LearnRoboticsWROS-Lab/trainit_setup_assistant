@@ -1450,7 +1450,7 @@ def test_1_a_snapshot_capability_is_not_a_dependency(bundles):
     names = {dep for rel, text in files.items() if rel.endswith('package.xml')
              for _t, dep, _a in _deps(text)}
     assert not names & {'trainit_perception', 'trainit_policy_runtime', 'moveit_servo'}
-    assert snap['derived_with']['trainit_motion_runtime'] == '2.5.0'      # refreshed in vNext M3.6
+    assert snap['derived_with']['trainit_motion_runtime'] == '2.5.1'      # refreshed in vNext I0 (TMR 2.5.1)
     assert {v for rel, text in files.items() if rel.endswith('package.xml')
             for v, _c in _tmr_lines(text)} == {'1.4.0'}
 

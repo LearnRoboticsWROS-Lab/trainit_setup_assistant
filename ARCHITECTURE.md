@@ -662,8 +662,8 @@ CommandActuator, VerifyGrasp per `require_*`, no SetReleasePolicy, the bin-picki
 verdict/fault/holding gate), `scene.yaml`'s `eef/<id>/engaged`, the TrainIt adapter rows appended
 to BRIDGES, and its dependencies. The EEF adapter rows are typed in TSA's catalog (ADR-0021's
 named exception M2.6-1); legacy end-effector bridge rows are identified by catalog data (R18). The
-GUI changes are guards only: the gripper setters and the Step-2 ingest leave a canonical gripper
-untouched, and Step 7 keeps a canonical project's tool actions as they are (an `actuate` action in
+GUI changes were guards only (vNext I0 adds the End effector section of Step 7: ADR-0022 amendment I0): the
+gripper setters and the Step-2 ingest leave a canonical gripper untouched, and Step 7 keeps a canonical project's tool actions as they are (an `actuate` action in
 its own read-only block, a grasp's `site` carried through the block). A composite BUNDLE is
 refused (R22); legacy projects generate the same content.
 

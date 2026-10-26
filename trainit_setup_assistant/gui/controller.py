@@ -97,6 +97,8 @@ class AssistantController:
     def __init__(self, project: Optional[CanonicalProject] = None):
         self.project: Optional[CanonicalProject] = project
         self.project_path: Optional[str] = None          # the opened project.yaml, if any
+        self.path_notes: List[str] = []                   # vNext I0.0: paths found only via the cwd
+        self.last_generation_dir: Optional[str] = None    # vNext I0.1: editor state, never saved
         # the scene+planner config package name generated at Step 3 (used by Step 4's
         # bring-up procedure so it names the package the user actually created).
         self.scene_loader_pkg: Optional[str] = None
@@ -116,7 +118,46 @@ class AssistantController:
     def open_project(self, path) -> CanonicalProject:
         self.project = load_project(path)
         self.project_path = os.path.abspath(str(path))   # where a task program is edited
+        self._remember_file()
         return self.project
+
+    # ---- vNext I0.12: the project file (D4 save, external changes, reload) ----
+    def _remember_file(self) -> None:
+        from ..composer.files import fingerprint
+        from ..model.io import project_yaml
+        self._file_print = fingerprint(self.project_path) if self.project_path else None
+        self._saved_yaml = project_yaml(self.project) if self.project is not None else None
+
+    def has_unsaved_changes(self) -> bool:
+        """The project shown differs from the one last read or written (what a reload would discard)."""
+        from ..model.io import project_yaml
+        saved = getattr(self, '_saved_yaml', None)
+        return self.project is not None and saved is not None and project_yaml(self.project) != saved
+
+    def file_changed_on_disk(self) -> bool:
+        """The project file changed since TSA read or wrote it (a hand edit of the YAML)."""
+        from ..composer.files import fingerprint
+        if not self.project_path:
+            return False
+        now = fingerprint(self.project_path)
+        before = getattr(self, '_file_print', None)
+        return now is not None and before is not None and now[1] != before[1]
+
+    def reload_project(self) -> CanonicalProject:
+        """Re-read the project file (after a hand edit): the GUI shows the file's model."""
+        if not self.project_path:
+            raise ValueError('the project has no file yet')
+        return self.open_project(self.project_path)
+
+    def save_project_file(self, confirm):
+        """Save to the project's own file under D4 (comments announced, a .bak first, never the only
+        copy destroyed silently). Returns ``(saved, backup, message)``."""
+        from ..composer.files import save_with_backup
+        result = save_with_backup(self._require(), self.project_path, confirm,
+                                  changed_on_disk=self.file_changed_on_disk())
+        if result[0]:
+            self._remember_file()
+        return result
 
     def new_blank_project(self, project_name: str = 'robot_app') -> CanonicalProject:
         """Bootstrap a minimal project (MVP entry): the robot is then configured by
@@ -134,8 +175,23 @@ class AssistantController:
             application=ApplicationSpec(), deployment=DeploymentSpec())
         return self.project
 
-    def save(self, path) -> Path:
-        return save_project(self._require(), path)
+    def save(self, path, adopt: bool = True) -> Path:
+        """Write the project. ``adopt`` (the default): the written file becomes the project's file, so
+        its relative paths resolve beside it (vNext I0.0). A COPY written elsewhere (Step 8's reference
+        copy in the bundle) is ``adopt=False``: the project keeps its own file."""
+        out = save_project(self._require(), path)
+        if adopt:
+            self.project_path = os.path.abspath(str(out))
+            self._remember_file()
+        return out
+
+    def resolved_project(self) -> CanonicalProject:
+        """The project with its relative paths resolved against the project file (vNext I0.0;
+        the current directory is a deprecated fallback): what validation and generation read. The
+        edited project keeps every path as written. ``self.path_notes`` holds the fallbacks."""
+        from ..model.paths import resolve_project_paths
+        resolved, self.path_notes = resolve_project_paths(self._require(), self.project_path)
+        return resolved
 
     # ---- robot / group / frames (S1) ----
     def robot_summary(self) -> dict:
@@ -291,7 +347,7 @@ class AssistantController:
         generator, so it cannot affect bundle bytes."""
         grip = self._require().robot.gripper
         names: List[str] = []
-        base = self._require().robot.base_moveit_config_path
+        base = self.resolved_project().robot.base_moveit_config_path
         if base and grip.eef_group_name:
             try:
                 from ..robotmodel.srdf_reader import read_srdf
@@ -1120,13 +1176,24 @@ class AssistantController:
         from ..importers.usd_scene import (build_group_rules, read_cell_prims,
                                            read_ros2_bool_topics, scan_meshes)
         p = self._require()
+        # vNext I0.1: the bound robot prim names the robot and its base (no name heuristics)
+        binding = p.deployment.isaac
+        robot_prim = binding.robot_prim if binding is not None else None
+        if base_prim is None and robot_prim:
+            base_prim = f'{robot_prim.rstrip("/")}/{p.robot.base_frame}'
         if base_prim is None:
             base_prim = f'/World/{p.robot.robot_name}/{p.robot.base_frame}'
         self._usd_prims = read_cell_prims(usd_path, base_prim=base_prim,
-                                          robot_hint=p.robot.robot_name)
+                                          robot_hint=p.robot.robot_name, robot_prim=robot_prim,
+                                          base_frame=p.robot.base_frame)
+        # what the import read: recorded as the scene's provenance when the mapping is applied
+        from ..composer.integration import file_sha256
+        self._usd_import = {'file': str(usd_path), 'sha256': file_sha256(usd_path),
+                            'base_prim': base_prim}
         # surfaced to the user: if the mesh dir is not found every suggestion is empty,
         # which would build a scene the loader cannot render.
-        self.mesh_scan = scan_meshes(mesh_pkg, p.robot.base_moveit_config_path)
+        base_path = self.resolved_project().robot.base_moveit_config_path   # vNext I0.0 paths
+        self.mesh_scan = scan_meshes(mesh_pkg, base_path)
         # The Isaac side NAMES the gripper-close signal; the base moveit_config does not.
         # Auto-apply only while the value is still the shipped default, so a project that
         # already carries a deliberate topic is never silently overwritten on reload.
@@ -1134,11 +1201,31 @@ class AssistantController:
             str(usd_path), exclude=(p.scene.scene_reset_topic,))
         self.usd_base_prim_ok = getattr(read_cell_prims, 'base_prim_ok', True)
         self.usd_base_prim_tried = getattr(read_cell_prims, 'base_prim_tried', base_prim)
-        default_topic = SceneSpec.model_fields['gripper_cmd_topic'].default
+        # pydantic 1.x has no `model_fields` (vNext I0.1: found on the apt pydantic 1.8.2)
+        fields = getattr(SceneSpec, 'model_fields', None) or SceneSpec.__fields__
+        default_topic = fields['gripper_cmd_topic'].default
         if self.usd_bool_topics and p.scene.gripper_cmd_topic == default_topic:
             self.set_scene_loader_params(gripper_cmd_topic=self.usd_bool_topics[0])
-        return build_group_rules(self._usd_prims, mesh_pkg,
-                                 hint_path=p.robot.base_moveit_config_path)
+        return self._preserve_rules(build_group_rules(self._usd_prims, mesh_pkg,
+                                                      hint_path=base_path))
+
+    def _preserve_rules(self, rules: list) -> list:
+        """vNext I0.1 (re-import): a group the scene already holds keeps the user's decisions --
+        category, grasp, mesh -- matched by the object's id group (``bottle_0_0`` -> ``bottle``)."""
+        from ..importers.usd_scene import group_key
+        known = {o.id: o for o in self._require().scene.objects}       # a .world row is one object
+        for o in self._require().scene.objects:
+            known.setdefault(group_key(o.id), o)                        # a USD row is a group
+        for r in rules:
+            o = known.get(r.get('group'))
+            if o is None:
+                continue
+            r['category'] = getattr(o.category, 'value', o.category)
+            r['grasp'] = bool(o.grasp_target)
+            if o.mesh_resource:
+                r['mesh'] = o.mesh_resource
+            r['include'] = True
+        return rules
 
     def apply_usd_mapping(self, rules, replace: bool = True) -> int:
         """Build the scene from the held USD prims + the (edited) group rules: one mesh
@@ -1177,6 +1264,10 @@ class AssistantController:
                 orientation=pr['orientation'], category=r.get('category', 'static'),
                 grasp_target=_is_grasp(r), source='usd',
                 aabb_center=pr.get('local_center') or [0.0, 0.0, 0.0])
+        imp = getattr(self, '_usd_import', None)
+        if imp is not None:                         # vNext I0.1: the projection's source world
+            from ..model import SceneProvenance
+            p.scene.provenance = SceneProvenance(source='isaac_stage', **imp)
         return len(included)
 
     def import_usd_scene(self, usd_path, dynamic: bool = False, replace: bool = False,
@@ -1256,9 +1347,12 @@ class AssistantController:
         p.scene.world_path = str(world_path)
         self._world_objs = import_world(world_path, default_frame=p.robot.base_frame,
                                         robot_base_world_pose=pose, mesh_package=mesh_package)
-        return [{'group': o.id, 'count': 1, 'category': o.category.value,
-                 'grasp': bool(o.grasp_target), 'mesh': o.mesh_resource or '', 'include': True}
-                for o in self._world_objs]
+        from ..composer.integration import file_sha256
+        self._world_import = {'file': str(world_path), 'sha256': file_sha256(world_path)}
+        return self._preserve_rules(
+            [{'group': o.id, 'count': 1, 'category': o.category.value,
+              'grasp': bool(o.grasp_target), 'mesh': o.mesh_resource or '', 'include': True}
+             for o in self._world_objs])
 
     def apply_world_mapping(self, rules, replace: bool = True) -> int:
         """Build the scene from the held ``.world`` models + the (edited) rules: one
@@ -1282,11 +1376,15 @@ class AssistantController:
                 mesh_resource=o.mesh_resource or None, scale=list(o.scale),
                 orientation=list(o.orientation),
                 category=r.get('category', 'static'), grasp_target=_is_grasp(r), source='world')
+        imp = getattr(self, '_world_import', None)
+        if imp is not None:                         # vNext I0.1: the projection's source world
+            from ..model import SceneProvenance
+            p.scene.provenance = SceneProvenance(source='gazebo_world', **imp)
         return len(included)
 
     # ---- validation + generation (S6) ----
     def validate(self) -> List[str]:
-        p = self._require()
+        p = self.resolved_project()
         problems: List[str] = []
         if not p.robot.planning_group.joints:
             problems.append('planning group has no joints')
@@ -1306,16 +1404,46 @@ class AssistantController:
         p = self._require()
         if not p.application.is_task_program():
             return [], []
+        p = self.resolved_project()
         errors: List[str] = list(eef_contract_problems(p))
         warnings: List[str] = list(eef_contract_warnings(p))
         try:
             warnings += plan_program(p).warnings
         except ProgramRefusals as exc:
             errors += list(exc.problems)
-        return errors, warnings
+        # vNext I0.1: how the project is INTEGRATED with its MoveIt config, world and robot binding
+        from ..composer.integration import integration_problems
+        i_errors, i_warnings = integration_problems(p)
+        # owner Test C: a PTP to a TCP pose before Cartesian motion (R-I0-05)
+        from ..composer.advice import configuration_advice
+        return errors + i_errors, warnings + i_warnings + configuration_advice(p)
+
+    # ---- vNext I0.10: start a task program from a template ----
+    def apply_template(self, template_id: str) -> CanonicalProject:
+        """Replace the application with an installed template's canonical program (robot, scene,
+        perception and deployment stay); through the canonical model."""
+        from ..composer.templates import apply_template
+        self.project = apply_template(self._require(), template_id)
+        return self.project
+
+    # ---- vNext I0.1: the deployment world binding and the scene-sync status ----
+    def set_isaac_binding(self, stage: Optional[str], robot_prim: Optional[str] = None) -> None:
+        """Bind (or, with ``stage`` None, unbind) the Isaac world: the stage that owns it and the
+        robot articulation inside it (Case A). Validated by :meth:`validate_program`."""
+        from ..model import IsaacBinding
+        p = self._require()
+        p.deployment.isaac = (IsaacBinding(stage=str(stage), robot_prim=robot_prim or None)
+                              if stage else None)
+
+    def scene_status(self, joint_states_age: Optional[float] = None):
+        """The scene-sync status (LIVE / OFFLINE / CURRENT / SNAPSHOT / STALE / MANUAL), computed."""
+        from ..composer.integration import scene_status
+        return scene_status(self.resolved_project(), joint_states_age)
 
     def generate(self, output_dir) -> GenerationManifest:
-        return Orchestrator().generate(self._require(), output_dir)
+        manifest = Orchestrator().generate(self.resolved_project(), output_dir)
+        self.last_generation_dir = str(output_dir)     # vNext I0.1: the Overview reads its manifest
+        return manifest
 
     # ---- Step 3: generate the intermediate scene+planner config (for RViz config) ----
     def scene_loader_package_name(self) -> str:
@@ -1329,7 +1457,7 @@ class AssistantController:
         pkg = package_name or self.scene_loader_package_name()
         self.scene_loader_pkg = pkg          # remember it for Step 6's bring-up procedure
         self.workspace_root = self._workspace_root(output_dir)  # colcon build runs HERE
-        return generate_scene_loader_config(self._require(), output_dir, pkg)
+        return generate_scene_loader_config(self.resolved_project(), output_dir, pkg)
 
     @staticmethod
     def _workspace_root(output_dir) -> str:

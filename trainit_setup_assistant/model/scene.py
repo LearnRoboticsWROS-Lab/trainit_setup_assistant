@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, Field, root_validator, validator
 
 from .faces import DEFAULT_FACE, face_params as registered_face_params
 
@@ -223,6 +223,28 @@ class Payload(BaseModel):
     attach_offset: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0])
 
 
+class SceneProvenance(BaseModel):
+    """Where the planning projection came from (vNext I0.1, I0_DESIGN.md §7): the deployment world
+    file it was imported from, as written, and its SHA-256 at import time. TSA re-hashes the file
+    to tell CURRENT from STALE (the world changed: re-import). Written by an import, never edited;
+    no generated file reads it."""
+
+    source: str                          # isaac_stage | gazebo_world
+    file: str
+    sha256: str
+    base_prim: Optional[str] = None      # isaac_stage: the robot base prim the import inverted
+
+    @validator('source')
+    def _source(cls, v):  # noqa: N805
+        if v not in PROVENANCE_SOURCES:
+            raise ValueError(f"scene.provenance.source must be one of {', '.join(PROVENANCE_SOURCES)}, "
+                             f'got {v!r}')
+        return v
+
+
+PROVENANCE_SOURCES = ('isaac_stage', 'gazebo_world')
+
+
 class SceneSpec(BaseModel):
     objects: List[SceneObject] = Field(default_factory=list)
     payload: Optional[Payload] = None
@@ -269,6 +291,8 @@ class SceneSpec(BaseModel):
     #                (the planner routes the held payload around obstacles); the mesh
     #                reappears at the tool pose on release.
     grasp_attach_mode: str = 'attach_box'   # default: universal AABB cuboid (payload-aware)
+    # vNext I0.1: the world file this projection was imported from (optional; written only when set)
+    provenance: Optional[SceneProvenance] = None
 
     def grasp_target_ids(self) -> List[str]:
         """Ids of dynamic objects the gripper grasps (attach_object_ids)."""

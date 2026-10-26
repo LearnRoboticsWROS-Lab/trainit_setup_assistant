@@ -4,8 +4,8 @@
 # test_catalog.py fails when a registry moves and this file does not (vNext M1, M2.1).
 catalog_version: 1
 derived_with:
-  trainit_setup_assistant: 8.0.0
-  trainit_motion_runtime: 2.5.0
+  trainit_setup_assistant: 8.1.0
+  trainit_motion_runtime: 2.5.1
   trainit_perception: 0.5.0
   trainit_policy_runtime: 0.1.0
 providers:
@@ -183,7 +183,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_setup_assistant
-    version: 8.0.0
+    version: 8.1.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -453,7 +453,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_motion_runtime
-    version: 2.5.0
+    version: 2.5.1
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'

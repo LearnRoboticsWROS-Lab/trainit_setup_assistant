@@ -7,7 +7,7 @@ package_name = 'trainit_setup_assistant'
 
 setup(
     name=package_name,
-    version='8.0.0',
+    version='8.1.0',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -33,6 +33,7 @@ setup(
             'resources/gazebo_cell_kit/*',
             'resources/gazebo_cell_kit/scripts/*',
             'resources/gazebo_cell_kit/worlds/*',
+            'resources/templates/*.yaml',
         ],
     },
     # pydantic >= 1.8.2 (NOT >=2): the code uses only the v1/v2-overlap API, so TrainIt installs

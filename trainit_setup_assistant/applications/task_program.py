@@ -49,7 +49,8 @@ from ..model.program import (CHANNEL_KINDS, CONTROL_KINDS, AnchorWhen, DetectSou
                              GraspExpectation, ProcessEventSpec, RelativeFrame, TaskDataType, TaskProgram,
                              TaskWaypoint, walk_steps)
 from .base import ApplicationTemplate, scene_dims_key, scene_pos_key
-from .eef_tree import canonical_device, continuous_everywhere, eef_attrs, verify_grasp
+from .eef_tree import (canonical_device, close_nodes, continuous_everywhere, eef_attrs, open_nodes,
+                       verify_grasp)
 
 _REGISTRY = tmr_planner_registry()
 # MoveWaypoint executes a percent between 1 and 100 (it clamps below 1 %, bt_nodes.cpp): a smaller
@@ -1026,7 +1027,8 @@ class _Planner:
         dev = canonical_device(self.project)
         if dev is None:
             self.refuse(f'R-M3-13: {where}: a manipulation or tool step commands the end effector through '
-                        'its contract (ADR-0022), and this project has none: add robot.gripper.contract')
+                        'its contract (ADR-0022), and this project has none: adopt one in Step 7, End effector '
+                        '(robot.gripper.contract)')
             return None
         if eef is not None and eef != dev.id:
             self.refuse(f"R-M3-13: {where}: no end effector is named '{eef}' (the contract's device is "
@@ -1034,10 +1036,11 @@ class _Planner:
             return None
         return dev
 
-    def _device(self, where: str, eef: Optional[str], site: Optional[str]):
+    def _device(self, where: str, eef: Optional[str], site: Optional[str], need_tip: bool = True):
         """The device and grasp site a manipulation step uses (ADR-0022): the contract's only device
-        by default, its only site by default; the site's TCP must be the robot's tip link (R-M3-05,
-        R-M3-13). (None, None) after a refusal."""
+        by default, its only site by default; a step that MOVES to the site needs its TCP to be the
+        robot's tip link (R-M3-05, R-M3-13), a tool close / open does not (``need_tip``). (None, None)
+        after a refusal."""
         dev = self._device_only(where, eef)
         if dev is None:
             return None, None
@@ -1054,7 +1057,7 @@ class _Planner:
                             f"{', '.join(x.id for x in dev.sites)})")
                 return None, None
         tip = self.robot.tip_link
-        if s.tcp != tip:
+        if need_tip and s.tcp != tip:
             self.refuse(f"R-M3-05: {where}: grasp site '{s.id}' holds the object at TCP '{s.tcp}', and every "
                         f"motion of this version runs for the robot's tip link '{tip}': a grasp at another "
                         'TCP is UNSUPPORTED_BY_CURRENT_CANONICAL_MODEL (planned with the multi-TCP motion '
@@ -1245,10 +1248,8 @@ class _Planner:
             nodes = []
             z = _rotate(self.targets[g.at].orientation, (0.0, 0.0, 1.0))
             target_text = f'`{g.at}` (taught; its approach is its tool +Z = {_vec_text(_round_vec(z))})'
-        nodes += [f'<MoveWaypoint waypoint="{pre}"/>', f'<MoveWaypoint waypoint="{grasp}"/>',
-                  f'<CloseGripper {eef_attrs(dev, site.id)}/>']
-        if dev.require_grasp_confirmation:
-            nodes.append(verify_grasp(dev, site.id, 'held'))
+        nodes += [f'<MoveWaypoint waypoint="{pre}"/>', f'<MoveWaypoint waypoint="{grasp}"/>']
+        nodes += close_nodes(dev, site.id)
         nodes.append(f'<MoveWaypoint waypoint="{retract}"/>')
         how = (f'PreGrasp PTP ({g.profile}) {_standoff_text(g.standoff_m)} -> Approach LIN '
                f"({g.approach_profile}) -> close site '{site.id}'"
@@ -1302,11 +1303,7 @@ class _Planner:
         pre, at, retract = (m.waypoint for m in moves)
         nodes = [f'<MoveWaypoint waypoint="{pre}"/>', f'<MoveWaypoint waypoint="{at}"/>']
         held_first = bool(dev.require_grasp_confirmation) and continuous_everywhere(self.project, dev)
-        if held_first:
-            nodes.append(verify_grasp(dev, site.id, 'held'))
-        nodes.append(f'<OpenGripper {eef_attrs(dev, site.id)}/>')
-        if dev.require_release_confirmation:
-            nodes.append(verify_grasp(dev, site.id, 'released'))
+        nodes += open_nodes(self.project, dev, site.id, held_guard=True)
         nodes.append(f'<MoveWaypoint waypoint="{retract}"/>')
         how = (f'PreRelease PTP ({rel.profile}) {_standoff_text(rel.standoff_m)} -> Approach LIN '
                f'({rel.approach_profile})' + (' -> verify held' if held_first else '')
@@ -1320,6 +1317,8 @@ class _Planner:
 
     def plan_tool(self, task: str, index: str, step) -> Optional[StepPlan]:
         t = step.tool
+        if t.close is not None or t.open is not None:
+            return self._plan_grip(task, index, 'close' if t.close is not None else 'open', t.close or t.open)
         if t.actuate is not None:
             a = t.actuate
             where = f"task '{task}' step {index} (tool actuate '{a.actuator}' -> '{a.target}')"
@@ -1340,7 +1339,7 @@ class _Planner:
                     which = 'engage' if a.target == s.engage else 'release'
                     self.refuse(f"R-M3-13: {where}: '{a.target}' is the {which} target of grip actuator "
                                 f"'{act.id}' (site '{s.id}'): a grip is closed and opened by the grasp and "
-                                'release steps (ADR-0022 R11)')
+                                "release steps or 'tool: close / open' (ADR-0022 R11)")
                     return None
             return StepPlan('tool', f'<CommandActuator {eef_attrs(dev)} actuator="{a.actuator}" '
                                     f'target="{a.target}"/>',
@@ -1365,6 +1364,24 @@ class _Planner:
         return StepPlan('tool', verify_grasp(dev, v.site, v.expect.value),
                         summary=('--', f'verify {v.expect.value}' + (f" at site '{v.site}'" if v.site else ''),
                                  '--'))
+
+    def _plan_grip(self, task: str, index: str, which: str, g) -> Optional[StepPlan]:
+        """vNext I0 (owner decision D-E1, ADR-0024 amendment I0): a grasp's / a release's actuation where the
+        robot is -- the same nodes and verification policy, no motion."""
+        where = f"task '{task}' step {index} (tool {which}" + (f" at site '{g.site}'" if g.site else '') + ')'
+        dev, site = self._device(where, g.eef, g.site, need_tip=False)
+        if dev is None:
+            return None
+        if which == 'close':
+            nodes = close_nodes(dev, site.id)
+            how = f"close site '{site.id}' (no motion)" + (' -> verify held' if dev.require_grasp_confirmation else '')
+        else:
+            # no held guard: a plain open is valid with nothing held (a cycle start); the guard belongs to the
+            # release idiom, or to an explicit 'tool: {verify: {expect: held}}' step (architecture review M1)
+            nodes = open_nodes(self.project, dev, site.id, held_guard=False)
+            how = (f"open site '{site.id}' (no motion)"
+                   + (' -> verify released' if dev.require_release_confirmation else ''))
+        return StepPlan('tool', nodes=nodes, summary=('--', how, '--'))
 
     # -- the program --
     def plan(self) -> Optional[ProgramPlan]:
@@ -2186,8 +2203,14 @@ def _overview_steps(program: TaskProgram, steps, prefix: str, pad: int) -> List[
             lines.append(f'{sp}{n}  {r.describe()}, profiles {r.profile} / {r.approach_profile}')
         elif step.tool is not None:
             t = step.tool
-            lines.append(f'{sp}{n}  tool ' + (f'actuate {t.actuate.actuator} -> {t.actuate.target}'
-                                               if t.actuate is not None else f'verify {t.verify.expect.value}'))
+            if t.actuate is not None:
+                what = f'actuate {t.actuate.actuator} -> {t.actuate.target}'
+            elif t.verify is not None:
+                what = f'verify {t.verify.expect.value}'
+            else:
+                g = t.close or t.open
+                what = t.form() + (f' site {g.site}' if g.site else '')
+            lines.append(f'{sp}{n}  tool {what}')
         elif step.task is not None:
             lines.append(f'{sp}{n}  task  {step.task} (call)')
         elif step.repeat is not None:
@@ -2203,6 +2226,15 @@ def _overview_steps(program: TaskProgram, steps, prefix: str, pad: int) -> List[
                 lines.append(f'{sp}      alternative {b}:')
                 lines += _overview_steps(program, body, f'{label}.{b}', pad + 8)
     return lines
+
+
+def resolve_targets(project: CanonicalProject) -> Tuple[Dict[str, Target], List[str]]:
+    """Every waypoint of a task program resolved to WHERE (a relative target's chain followed), with the
+    waypoint refusals: what the live waypoint check reads (vNext I0, owner Test C). A waypoint that cannot
+    be resolved is missing from the targets; the rest of the program is not planned."""
+    planner = _Planner(project)
+    planner.resolve_waypoints()
+    return dict(planner.targets), list(planner.problems)
 
 
 def plan_program(project: CanonicalProject) -> ProgramPlan:
@@ -2301,6 +2333,7 @@ def _steps_xml(steps: Sequence[StepPlan], indent: str) -> List[str]:
 __all__ = ['CAPTURE_PREFIX', 'MIN_MOVE_SCALING', 'percent', 'task_tree_id', 'MovePlan', 'PathPlan', 'PlannedEvent',
            'CandidateSet', 'TaskSummary', 'iter_plans',
            'ProgramPlan', 'ProgramRefusals', 'StepPlan',
-           'TMR_BASE_PROFILE', 'Target', 'TaskProgramApplication', 'plan_program',
+           'PATH_START_TOLERANCE', 'TMR_BASE_PROFILE', 'Target', 'TaskProgramApplication', 'plan_program',
+           'resolve_targets',
            'move_text', 'program_overview', 'program_summary', 'program_tree_xml',
            'provider_text', 'scaling_text']

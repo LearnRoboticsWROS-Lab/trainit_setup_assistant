@@ -779,7 +779,7 @@ def test_l_the_wizard_shows_a_task_program_and_leaves_it_as_written(qapp, tmp_pa
     blocks = w.blocks_page
     blocks.initializePage()
     assert not blocks.editor.isVisibleTo(blocks) and blocks.program_panel.isVisibleTo(blocks)
-    assert blocks.title() == 'Step 7 — Task program (read-only overview)'
+    assert blocks.title() == 'Step 7 — Application Composer'          # vNext I0: no longer read-only
     assert '8  path  sweep' in blocks.program_view.toPlainText()
     assert blocks.validatePage()
     blocks.validate_program()
@@ -842,7 +842,7 @@ def test_the_math_of_a_tool_frame_offset():
 def test_the_readme_example_is_the_example_file():
     """TSA's README shows the example's application block: the same program, never a second one."""
     readme = (PKG / 'README.md').read_text()
-    section = readme.split('## A Canonical Task Program (YAML-first)', 1)[1]
+    section = readme.split('## A Canonical Task Program (YAML)', 1)[1]          # vNext I0: no longer YAML-first
     block = section.split('```yaml\n', 1)[1].split('```', 1)[0]
     shown = yaml.safe_load(block)['application']
     real = raw()['application']

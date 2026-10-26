@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Union
 
@@ -190,6 +191,12 @@ def project_to_dict(project: CanonicalProject) -> dict:
         node = det.get('external_node') if isinstance(det, dict) else None
         if isinstance(node, dict) and node.get('detect_service') is False:
             node.pop('detect_service')
+    # vNext I0.1: the world binding and the scene's provenance are written only when set, so a
+    # project without them saves byte-identical to TSA 8.0
+    for section, key in (('deployment', 'isaac'), ('scene', 'provenance')):
+        node = data.get(section)
+        if isinstance(node, dict) and node.get(key) is None:
+            node.pop(key, None)
     application = data.get('application')
     if isinstance(application, dict):
         application.pop('program', None)        # a template application: no program, no key
@@ -231,8 +238,14 @@ def save_project(project: CanonicalProject, path: Union[str, Path]) -> Path:
     before."""
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    flow = None if project.application.is_task_program() else False
-    out.write_text(
-        yaml.safe_dump(project_to_dict(project), sort_keys=False, default_flow_style=flow)
-    )
+    text = project_yaml(project)
+    tmp = out.with_name(f'.{out.name}.tmp')          # vNext I0.12: written whole, then renamed (atomic)
+    tmp.write_text(text)
+    os.replace(tmp, out)
     return out
+
+
+def project_yaml(project: CanonicalProject) -> str:
+    """The exact text :func:`save_project` writes (vNext I0.12: the Composer's YAML view shows it)."""
+    flow = None if project.application.is_task_program() else False
+    return yaml.safe_dump(project_to_dict(project), sort_keys=False, default_flow_style=flow)

@@ -484,12 +484,14 @@ EEF_ADAPTER_ROWS = {
 # ``eef_legacy_bridge`` serves the legacy end-effector contract and is REFUSED next to a contract
 # (the canonical adapter replaces it); a ``gripper_state_merger`` is kept, and its gripper input is
 # where the adapter's pseudo-joint echo goes; a ``camera`` row is not an end-effector at all. Any
-# other row active in a mode with a canonical binding gets a validate() warning naming it.
+# other row active in a mode with a canonical binding gets a validate() warning naming it. ``eef_kind``: what
+# a legacy bridge drives (vNext I0 §34: a contract suggestion reads it, never an executable's name).
 EEF_BRIDGE_ROLES = (
     dict(package='fr3wml_isaac', executable='isaac_suction_bridge.py', role='eef_legacy_bridge',
+         eef_kind='suction',
          why='the reference cell\'s Isaac suction bridge (the legacy Trigger pair and stage Bool)'),
     dict(package='fairino_gripper', executable='gripper_suction_action_server',
-         role='eef_legacy_bridge', why='the FAIRINO GripperCommand-to-Trigger suction shim'),
+         role='eef_legacy_bridge', eef_kind='suction', why='the FAIRINO GripperCommand-to-Trigger suction shim'),
     dict(package='fairino_gripper', executable='gripper_action_server',
          role='eef_legacy_bridge', why='the FAIRINO soft-gripper GripperCommand shim'),
     dict(package='fairino_gripper', executable='joint_state_merger', role='gripper_state_merger',

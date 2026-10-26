@@ -786,7 +786,11 @@ def test_u_the_wizard_shows_a_composition_and_leaves_it_as_written(qapp, tmp_pat
 
 def test_u_the_wizard_offers_no_removed_application_type(qapp):
     from trainit_setup_assistant.gui.wizard import ApplicationPage
-    assert [t for t, _, _ in ApplicationPage.APPS] == ['pick_and_place', 'vision_guided_motion', 'bin_picking']
+    from trainit_setup_assistant.model.enums import DEPRECATED_APP_TYPES
+    offered = [t for t, _, _ in ApplicationPage.APPS]
+    assert not set(offered) & set(DEPRECATED_APP_TYPES)
+    # vNext I0.10: the task program is offered as the Application Composer (from a template)
+    assert offered == ['pick_and_place', 'vision_guided_motion', 'bin_picking', 'task_program']
 
 
 # --- V / W. no future-track semantics, determinism -------------------------------------------------------------------

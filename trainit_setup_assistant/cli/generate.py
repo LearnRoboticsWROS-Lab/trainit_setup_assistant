@@ -38,6 +38,7 @@ def main(argv=None) -> int:
     try:
         from ..generator import Orchestrator
         from ..model import load_project
+        from ..model.paths import resolve_project_paths
     except ImportError as exc:
         from ._deps import die_on_missing_dependency
         return die_on_missing_dependency(exc)
@@ -47,6 +48,16 @@ def main(argv=None) -> int:
     except Exception as exc:  # noqa: BLE001 - surface any load/validation error
         print(f'error: failed to load project {args.project}: {exc}', file=sys.stderr)
         return 2
+    # vNext I0.0: a relative path resolves against the project file (the cwd: deprecated fallback)
+    project, path_notes = resolve_project_paths(project, args.project)
+    for note in path_notes:
+        print(f'warning: {note}', file=sys.stderr)
+    # vNext I0.1: the integration checks (MoveIt-config drift, a stale scene, the Isaac binding) are
+    # reported, never a refusal: no generated file depends on them
+    from ..composer.integration import integration_problems
+    from ..composer.advice import configuration_advice
+    for problem in sum(integration_problems(project), []) + configuration_advice(project):
+        print(f'warning: {problem}', file=sys.stderr)
 
     out = Path(args.output)
     if out.exists():

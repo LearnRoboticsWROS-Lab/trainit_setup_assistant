@@ -254,7 +254,8 @@ def test_a_tool_step_is_one_end_effector_node():
     ({'release': {'at': 'place', 'profile': 't', 'approach_profile': 'a', 'retract': {'dz': 0.1}}}, 'standoff_m'),
     ({'tool': {'actuate': {'actuator': 'a', 'target': 'b'}, 'verify': {'expect': 'held'}}}, 'exactly one of'),
     ({'tool': {'verify': {'expect': 'maybe'}}}, "expects 'held' or 'released'"),
-    ({'tool': {'close': {}}}, 'a grip is opened and closed by the grasp and release steps'),
+    # vNext I0 (owner decision D-E1, ADR-0024 amendment I0): 'tool: close / open' is a step now; the hint names it
+    ({'tool': {'grip': {}}}, "a grip is 'close: {site: <id>}' or 'open: {site: <id>}'"),
     ({'pick': {'at': 'place'}}, 'a pick is a composition'),
     ({'place': {'at': 'place'}}, "a place is a 'release' step"),
 ])
@@ -271,7 +272,7 @@ def test_a_grasp_without_an_end_effector_contract_is_refused():
     def mutate(d):
         d['robot']['gripper'].pop('contract')
     text = problems(build(mutate))
-    assert 'R-M3-13' in text and 'add robot.gripper.contract' in text
+    assert 'R-M3-13' in text and 'adopt one in Step 7, End effector (robot.gripper.contract)' in text
 
 
 @pytest.mark.parametrize('change, needle', [

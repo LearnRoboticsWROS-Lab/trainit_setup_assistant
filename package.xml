@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>trainit_setup_assistant</name>
-  <version>8.0.0</version>
+  <version>8.1.0</version>
   <description>TrainIt Setup Assistant — a GUI + headless generator that produces a
     robot application bundle (description + moveit_config + app) for the TrainIt Motion
     Runtime, the way the MoveIt Setup Assistant produces a moveit_config. Robot- and
@@ -20,6 +20,9 @@
   <exec_depend>moveit_setup_assistant</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <!-- the Step 4 live check lists the controllers (vNext I0.2): found undeclared by the I0 close's
+       fresh-machine check, where nothing else had installed it yet -->
+  <exec_depend>controller_manager_msgs</exec_depend>
   <exec_depend>python_qt_binding</exec_depend>
   <exec_depend>trainit_motion_runtime</exec_depend>
   <exec_depend>python3-yaml</exec_depend>

@@ -28,14 +28,14 @@ from .enums import (
     WaypointRole,
     WaypointType,
 )
-from .deployment import DeploymentSpec, LaunchNodeSpec, RealIncludeSpec
+from .deployment import DeploymentSpec, IsaacBinding, LaunchNodeSpec, RealIncludeSpec
 from .end_effector import (AdapterBinding, CommandInterface, ControllerFlavour, Device,
                            EndEffectorAdapter, EndEffectorCapability, EndEffectorContract,
                            EvidenceClass, FollowJointTrajectoryActuator, GraspSiteSpec,
                            GripperCommandActuator, JointPositions, ResultPolicy, SceneSignal,
                            SetBoolActuator, VerificationSpec, derive_device)
 from .external_node import INPUT_ROLES, ExternalNodeSpec
-from .io import load_project, project_to_dict, save_project
+from .io import load_project, project_to_dict, project_yaml, save_project
 from .perception import (CANDIDATE_RULE_TERMS, DEFAULT_INPUT_TOPICS, METHOD_PROVIDES,
                          TERM_NEEDS, CameraSpec,
                          DetectorSpec, PerceptionSpec, RelativeBinding, VisionBinding,
@@ -64,7 +64,7 @@ from .robot import (
 )
 from .motion import (GoalTolerance, MotionConstraints, MotionIntent, MotionProfile,
                      PathContinuity, ProviderChoices, ProviderId)
-from .scene import Payload, SceneObject, SceneSpec
+from .scene import Payload, SceneObject, SceneProvenance, SceneSpec
 from .task import (ApplicationSpec, BinPickingSpec, DetectPoint, MotionSegment,
                    PolicyStep, ToolAction, Waypoint, effective_planner)
 
@@ -86,6 +86,7 @@ __all__ = [
     'GripperSpec',
     'ArmControllerSpec',
     'normalize_cell_namespace',
+    'SceneProvenance',
     'SceneSpec',
     'SceneObject',
     'Payload',
@@ -97,6 +98,7 @@ __all__ = [
     'ToolAction',
     'PolicyStep',
     'DeploymentSpec',
+    'IsaacBinding',
     'LaunchNodeSpec',
     'RealIncludeSpec',
     # perception (TSA v4, D-015)

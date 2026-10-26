@@ -57,9 +57,11 @@ def in_workspace(path: str) -> str:
     A path that exists is returned UNCHANGED (on that machine this is a no-op); one that does
     not is rebased on its first component that is a top-level directory of this workspace's
     src/: ``/any/where/src/fr3wml_digital_twin/fr5_app/urdf`` becomes
-    ``<WS_SRC>/fr3wml_digital_twin/fr5_app/urdf``. Anything else is returned unchanged.
+    ``<WS_SRC>/fr3wml_digital_twin/fr5_app/urdf``. Anything else is returned unchanged -- a
+    RELATIVE path too: it resolves beside its project file (vNext I0.0), nothing to rebase (its
+    ``..`` used to be taken for a top-level directory of src/).
     """
-    if not path or Path(path).exists():
+    if not path or not Path(path).is_absolute() or Path(path).exists():
         return path
     parts = Path(path).parts
     for i, part in enumerate(parts[1:], start=1):

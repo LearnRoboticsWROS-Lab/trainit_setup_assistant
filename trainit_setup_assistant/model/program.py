@@ -949,28 +949,46 @@ class ToolVerify(_Strict):
         return v
 
 
+class ToolGrip(_Strict):
+    """Close or open a grasp site's GRIP where the robot is, with no motion (vNext I0, owner decision D-E1,
+    ADR-0024 amendment I0): the actuation of a grasp / release without its approach and retract -- the
+    same nodes and the same verification policy (CloseGripper [+ VerifyGrasp held]; [VerifyGrasp held] +
+    OpenGripper [+ VerifyGrasp released]). ``eef`` / ``site``: the device and its site (default: the only
+    ones). Nothing moves, so the site's TCP need not be the tip link."""
+
+    eef: Optional[str] = None
+    site: Optional[str] = None
+
+    _keys = _strict_keys({}, 'a tool close / open')
+    _eef = _checked('eef', lambda v, w: v if v is None else _name(v, w), 'tool.close/open.eef')
+    _site = _checked('site', lambda v, w: v if v is None else _name(v, w), 'tool.close/open.site')
+
+
 TOOL_HINTS = {
-    'open': ("a grip is opened and closed by the grasp and release steps; another actuator is "
-             "'actuate: {actuator: <id>, target: <named target>}'"),
-    'close': ("a grip is opened and closed by the grasp and release steps; another actuator is "
-              "'actuate: {actuator: <id>, target: <named target>}'"),
     'command': "an end-effector command is 'actuate: {actuator: <id>, target: <named target>}'",
+    'grip': "a grip is 'close: {site: <id>}' or 'open: {site: <id>}' (or a grasp / release step)",
 }
+TOOL_FORMS = ('actuate', 'verify', 'close', 'open')
 
 
 class ToolStep(_Strict):
-    """An end-effector operation: exactly one of ``actuate`` or ``verify``."""
+    """An end-effector operation: exactly one of ``actuate``, ``verify``, ``close`` or ``open``."""
 
     actuate: Optional[ToolActuate] = None
     verify: Optional[ToolVerify] = None
+    close: Optional[ToolGrip] = None
+    open: Optional[ToolGrip] = None
 
     _keys = _strict_keys(TOOL_HINTS, 'a tool step')
 
     @root_validator(skip_on_failure=True)
     def _one(cls, values):  # noqa: N805
-        if (values.get('actuate') is None) == (values.get('verify') is None):
-            raise ValueError("R-M3-02: a tool step is exactly one of 'actuate' or 'verify'")
+        if sum(values.get(k) is not None for k in TOOL_FORMS) != 1:
+            raise ValueError("R-M3-02: a tool step is exactly one of 'actuate', 'verify', 'close' or 'open'")
         return values
+
+    def form(self) -> str:
+        return next(k for k in TOOL_FORMS if getattr(self, k) is not None)
 
 
 # --- composition (vNext M3.7, M3_DESIGN §4, M3_SCHEMA_PROPOSAL §1.1) --------------------------------
@@ -1573,7 +1591,7 @@ def describe_load_error(exc: Exception, data: dict, path) -> str:
 
 __all__ = ['AnchorWhen', 'CAPTURE_KEY', 'CHANNEL_KINDS', 'DetectSource', 'DetectStep', 'Dwell', 'DenseSource',
            'EventAnchor', 'EventKind', 'GraspExpectation', 'GraspStep', 'ORIENTATION_ALIGN_APPROACH',
-           'ReleaseStep', 'RetractSpec', 'ToolActuate', 'ToolStep', 'ToolVerify',
+           'ReleaseStep', 'RetractSpec', 'TOOL_FORMS', 'ToolActuate', 'ToolGrip', 'ToolStep', 'ToolVerify',
            'GENERATORS', 'describe_load_error', 'MoveStep', 'NAME', 'PROGRAM_KEYS', 'PathDef',
            'PathEvent', 'PathGenerator', 'PathSegment', 'ProcessEventSpec', 'ProcessStep', 'RelativeFrame',
            'RelativeTarget', 'RuntimeSettings', 'STEP_KINDS', 'Task', 'TaskProgram', 'TaskStep',

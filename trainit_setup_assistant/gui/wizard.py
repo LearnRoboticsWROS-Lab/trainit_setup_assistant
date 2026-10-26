@@ -57,15 +57,18 @@ from .controller import TASK_PROGRAM_READ_ONLY, AssistantController
 _PROGRAM_EXPLANATION = (
     'This project describes its robot program as a Canonical Task Program: waypoints say WHERE, '
     'the move, path and dwell steps of its tasks say HOW, and motion profiles and paths are '
-    'reusable. In this TSA version the program is edited in project.yaml, under application: '
-    '(YAML-first). The wizard shows it and validates it; the application-type and block editors do '
-    'not change it, so your program stays exactly as written.')
+    'reusable. The Application Composer (Step 7) and project.yaml are two views of the SAME program: '
+    'every Composer edit is validated by the canonical model and saved as YAML; a hand edit of the '
+    'YAML shows here on reload. The application-type and block editors of the template applications '
+    'do not change it.')
 
 
 def _program_where(ctrl) -> str:
-    """Where the program is edited: the opened file, or project.yaml."""
-    return (f'Edit it in {ctrl.project_path} (application:).' if ctrl.project_path
-            else 'Edit it in the project file (application:).')
+    """Where the program is edited (vNext I0: the Composer at Step 7, or its file -- one model; owner Test B:
+    "edit it in the project file" read as if the GUI could not edit it)."""
+    where = ctrl.project_path or 'the project file (YAML section: Save project)'
+    return f'Edit it here, in the sections on the left, or in {where}: one model.'
+
 
 
 def _program_notice(explanation: str, action: str):
@@ -393,9 +396,14 @@ def build_and_run_lines(project, out_dir: str, ws: str) -> List[str]:
 
 
 class GeneratePage(QWizardPage):
-    def __init__(self, ctrl: AssistantController):
+    def __init__(self, ctrl: AssistantController, launcher=None, settings=None):
         super().__init__()
         self.ctrl = ctrl
+        from ..composer.settings import LauncherSettings
+        from .launcher import Launcher
+        self.launcher = launcher if launcher is not None else Launcher(self)
+        self.settings = settings if settings is not None else LauncherSettings.load()
+        self.out_dir_generated = None
         self.setTitle('Step 8 — Generate the bundle')
         self.setSubTitle('Name the bundle and generate the 3 packages (app + trainit_config '
                          '+ description). The bundle README has the one-command run.')
@@ -403,6 +411,7 @@ class GeneratePage(QWizardPage):
         self.project_name = QLineEdit()
         form.addRow('Project / bundle name', self.project_name)
         self.output_dir = QLineEdit()
+        self.output_dir.setPlaceholderText('<your colcon workspace>/src')
         browse = QPushButton('Browse…')
         browse.clicked.connect(self._browse)
         row = QHBoxLayout()
@@ -415,16 +424,86 @@ class GeneratePage(QWizardPage):
         self.result = QTextEdit()
         self.result.setReadOnly(True)
         form.addRow('Result', self.result)
+        # vNext I0.11 (ADR-0027): build, start, run and observe the generated bundle from here; each
+        # command is shown before it runs and the bundle stays runnable without TSA
+        from ..composer.integration import STATEMENT
+        self.run_mode = QComboBox()
+        form.addRow('Run in', self.run_mode)
+        banner = QLabel(STATEMENT)
+        banner.setWordWrap(True)
+        banner.setStyleSheet('color:#555555; font-style:italic;')
+        form.addRow(banner)
+        from .run_panel import RunPanel
+        # owner Test C (friction row 23): Step 4's planning environment is shown here too, so it can be
+        # stopped before the bundle starts its own move_group and controllers
+        self.run_panel = RunPanel(self.launcher, [
+            ('environment', 'Planning environment (Step 4)', self._environment_command),
+            ('build', 'Build the bundle', self._build_command),
+            ('isaac', 'Start Isaac (bound stage)', self._isaac_command),
+            ('bringup', 'Start the bundle (no tree)', self._bringup_command),
+            ('run', 'Run the application', self._run_command),
+        ])
+        form.addRow('Run', self.run_panel)
+
+    # ---- vNext I0.11: the commands (composer.launch_plan) ----
+    def _ws_root(self) -> str:
+        from ..composer.launch_plan import workspace_root
+        root = workspace_root(self.out_dir_generated) if self.out_dir_generated else None
+        root = root or self.settings.workspace_root
+        if not root:
+            raise ValueError('generate the bundle into <ws>/src first (the workspace is its parent)')
+        return root
+
+    def _build_command(self):
+        from ..composer import launch_plan
+        b = self.ctrl.project.bundle
+        return launch_plan.build(self._ws_root(), [b.description_package, b.moveit_config_package, b.app_package])
+
+    def _isaac_command(self):
+        from ..composer import launch_plan
+        binding = self.ctrl.resolved_project().deployment.isaac
+        if binding is None:
+            raise ValueError('no Isaac stage is bound: load the USD at Step 2')
+        return launch_plan.isaac(binding.stage, self.settings.isaac_launcher)
+
+    def _environment_command(self):
+        """Step 8 only stops Step 4's planning environment (its button is "Stop" while it runs)."""
+        raise ValueError('start it at Step 4 (teaching); the bundle brings up its own')
+
+    def _bringup_command(self):
+        from ..composer import launch_plan
+        if self.launcher.running('environment'):
+            raise ValueError('the planning environment (Step 4) is running: stop it first (both start '
+                             'move_group and the controllers)')
+        return launch_plan.bringup(self._ws_root(), self.ctrl.project.bundle.app_package,
+                                   self.run_mode.currentText())
+
+    def _run_command(self):
+        from ..composer import launch_plan
+        return launch_plan.run(self._ws_root(), self.ctrl.project.bundle.app_package, self.run_mode.currentText())
 
     def initializePage(self) -> None:
-        # Bundle prefix = the ROBOT name -> <robot>_description / _trainit_config / _app.
-        robot = self.ctrl.robot_summary()['robot_name']
-        self.project_name.setText(robot)
-        # Default output: NEXT TO the base config package (generate() adds the
-        # <name>_bundle/ folder itself), so the bundle lands in the colcon src tree.
-        base = self.ctrl.project.robot.base_moveit_config_path
-        if base and not self.output_dir.text().strip():
-            self.output_dir.setText(os.path.dirname(str(base)))
+        # Bundle prefix = the PROJECT's name (the user's Step 1 input) -> <name>_description /
+        # _trainit_config / _app; what the user typed here is kept on re-entry (owner Test C, friction
+        # row 22: the robot's name silently renamed the project at Generate).
+        if not self.project_name.text().strip():
+            self.project_name.setText(self.ctrl.project.project_name)
+        modes = [getattr(m, 'value', m) for m in self.ctrl.project.deployment.modes if getattr(m, 'value', m) != 'real']
+        current = self.run_mode.currentText()
+        self.run_mode.clear()
+        self.run_mode.addItems(modes)
+        default = getattr(self.ctrl.project.deployment.default_mode, 'value', '')
+        self.run_mode.setCurrentText(current or (default if default in modes else (modes[0] if modes else '')))
+        # Default output: the src/ of the workspace Step 3 generated into (generate() adds the
+        # <name>_bundle/ folder itself) -- never next to the base MoveIt config, a source repository
+        # (owner Test C, friction row 22); none known: empty, the placeholder says what is expected.
+        ws_src = os.path.join(self.ctrl.workspace_root, 'src') if self.ctrl.workspace_root else ''
+        if ws_src and os.path.isdir(ws_src) and not self.output_dir.text().strip():
+            self.output_dir.setText(ws_src)
+
+    def _confirm(self, question: str) -> bool:  # pragma: no cover - a modal dialog needs a user
+        from python_qt_binding.QtWidgets import QMessageBox
+        return QMessageBox.question(self, 'Generate the bundle', question) == QMessageBox.Yes
 
     def _browse(self):  # pragma: no cover - needs a display
         path = QFileDialog.getExistingDirectory(self, 'Output directory')
@@ -433,9 +512,6 @@ class GeneratePage(QWizardPage):
 
     def generate(self) -> None:
         name = self.project_name.text().strip()
-        if name:
-            self.ctrl.set_project_name(name)
-        problems = self.ctrl.validate()
         out_dir = _expand_path(self.output_dir.text())
         if not out_dir:
             self.result.setPlainText('ERROR: please set an output directory')
@@ -445,8 +521,17 @@ class GeneratePage(QWizardPage):
         bundle_dirname = f'{name}_bundle' if name else 'bundle'
         if os.path.basename(os.path.normpath(out_dir)) != bundle_dirname:
             out_dir = os.path.join(out_dir, bundle_dirname)
+        # an existing bundle is replaced only when the user says so (owner Test C, friction row 22)
+        if os.path.isdir(out_dir) and os.listdir(out_dir) and not self._confirm(
+                f'{out_dir} already exists: generating REPLACES its files. Generate?'):
+            self.result.setPlainText(f'Not generated: {out_dir} is kept as it is.')
+            return
+        if name and name != self.ctrl.project.project_name:
+            self.ctrl.set_project_name(name)
+        problems = self.ctrl.validate()
         try:
             manifest = self.ctrl.generate(out_dir)
+            self.out_dir_generated = out_dir
         except Exception as exc:  # noqa: BLE001
             import traceback
             self.result.setPlainText(f'ERROR: {exc}\n\n{traceback.format_exc()}')
@@ -464,7 +549,7 @@ class GeneratePage(QWizardPage):
         # gizmo after building this bootstrap) — the two-pass workflow.
         try:
             proj_path = os.path.join(out_dir, 'project.yaml')
-            self.ctrl.save(proj_path)
+            self.ctrl.save(proj_path, adopt=self.ctrl.project_path is None)   # a copy: the project keeps its file
             lines.append(f'Saved project.yaml -> {proj_path} (reopen to continue)')
         except Exception as exc:  # noqa: BLE001
             lines.append(f'(could not save project.yaml: {exc})')
@@ -496,10 +581,23 @@ class ScenePage(QWizardPage):
         self.mesh_pkg = QLineEdit()
         self.mesh_pkg.setPlaceholderText('mesh package: USD scan pkg, or (.world) the ROS pkg hosting the gazebo models')
         usd_form.addRow('Mesh package', self.mesh_pkg)
+        # vNext I0.1: the robot INSIDE the Isaac stage (Case A), bound explicitly -- TSA checks its
+        # joints and base against the MoveIt robot; it never reads MoveIt semantics from the USD
+        self.robot_prim = QLineEdit()
+        self.robot_prim.setPlaceholderText('/World/<robot> — the robot articulation in the stage '
+                                           '(blank = /World/<robot name>)')
+        self.robot_prim.setToolTip('The Isaac stage is the deployment WORLD. The robot in it is a '
+                                   'deployment representation bound to the MoveIt robot by this prim '
+                                   'path: TSA validates its joints (by name) and base, and imports '
+                                   'the cell relative to that base.')
+        usd_form.addRow('Robot prim (Isaac)', self.robot_prim)
         # scene-loader attach param (not in the USD): links near the tool allowed to
         # touch a grasped object (self-collision relief), e.g. end_effector, tcp, wrist3_link.
-        self.touch_links = QLineEdit('tcp')
-        usd_form.addRow('Tool touch links (csv)', self.touch_links)
+        self.touch_links = QLineEdit()
+        self.touch_links.setPlaceholderText('read from the MoveIt config at Step 1 (the links next to the tool)')
+        self.touch_links.setToolTip('The links a held object may touch (no collision reported). TSA derives them '
+                                    'from the MoveIt config\'s chain at Step 1; edit only if needed.')
+        usd_form.addRow('Tool touch links (from the MoveIt config)', self.touch_links)
         # The two ROS contract topics scene_manager_node needs. They are NOT derivable
         # from the base moveit_config (they live as declare_parameter defaults inside the
         # cell bridge's own source), but the USD ActionGraph names the gripper one — so
@@ -512,7 +610,7 @@ class ScenePage(QWizardPage):
             'or you wire it at Step 7). Auto-filled from a USD ActionGraph; blank for a .world.')
         self.gripper_topic.lineEdit().setPlaceholderText(
             'e.g. /gripper_cmd — needed with a grasp target (auto-set on Apply if left blank)')
-        usd_form.addRow('Gripper cmd topic', self.gripper_topic)
+        usd_form.addRow('Gripper signal (read from the USD)', self.gripper_topic)
         self.reset_topic = QLineEdit()
         self.reset_topic.setPlaceholderText('blank = not applicable (Isaac-adapter only)')
         self.reset_topic.setToolTip(
@@ -563,27 +661,58 @@ class ScenePage(QWizardPage):
         grow.addWidget(QLabel('Grasp handling:'))
         self.grasp_mode = QComboBox()
         self.grasp_mode.addItems(['attach_box', 'remove'])
+        # owner Test F.1 (row 39): the choice is the project's -- shown as saved, saved when changed
+        self.grasp_mode.currentTextChanged.connect(self._grasp_mode_changed)
         grow.addWidget(self.grasp_mode)
         grow.addStretch(1)
         layout.addLayout(grow)
 
         layout.addWidget(QLabel('— resulting scene objects (edit individually below) —'))
+        # vNext I0.1 (D2): what is live and what is not -- computed, never a global "synchronized"
+        srow = QHBoxLayout()
+        self.sync_status = QLabel('')
+        self.sync_status.setWordWrap(True)
+        srow.addWidget(self.sync_status, 1)
+        self.reimport = QPushButton('Re-import world')
+        self.reimport.setToolTip('The world file changed since the scene was imported: read it again '
+                                 '(your categories, grasp flags and meshes are kept per group).')
+        self.reimport.clicked.connect(self.reimport_world)
+        self.reimport.setVisible(False)
+        srow.addWidget(self.reimport)
+        layout.addLayout(srow)
+        legend = QLabel('<small><b>CURRENT</b>: a fixed object, taken from the world file as it is now · '
+                        '<b>SNAPSHOT</b>: a moving object, its pose when imported — the planning scene does NOT '
+                        'follow it if it moves in the simulator · <b>STALE</b>: the world file changed since the '
+                        'import → Re-import world · <b>MANUAL</b>: an object you added by hand</small>')
+        legend.setWordWrap(True)
+        legend.setStyleSheet('color:#555555;')
+        layout.addWidget(legend)
         self.list = QListWidget()
         self.list.itemClicked.connect(self._on_select)
         layout.addWidget(self.list)
+        # vNext I0 (owner, Test A.1): editing objects by hand is ADVANCED -- the world file is the source
+        self.manual_toggle = QCheckBox('Advanced: add or edit objects by hand')
+        layout.addWidget(self.manual_toggle)
+        self.manual_box = QWidget()
+        manual = QVBoxLayout(self.manual_box)
+        manual.setContentsMargins(0, 0, 0, 0)
+        self.manual_toggle.toggled.connect(self.manual_box.setVisible)
         form = QFormLayout()
-        self.obj_id = QLineEdit('table')
+        self.obj_id = QLineEdit()
+        self.obj_id.setPlaceholderText('an id for the object')
         form.addRow('Object id', self.obj_id)
         self.shape = QComboBox()
         self.shape.addItems(['box', 'sphere', 'cylinder', 'cone', 'mesh'])
         form.addRow('Shape', self.shape)
-        self.dims = QLineEdit('2.0, 2.0, 0.10')
+        self.dims = QLineEdit()
+        self.dims.setPlaceholderText('metres')
         form.addRow('Dims (box x,y,z | sphere r | cyl/cone r,h)', self.dims)
         # mesh objects carry a package:// STL loaded by the scene loader (not AABB'd)
         self.mesh_resource = QLineEdit()
         self.mesh_resource.setPlaceholderText('shape=mesh: package://<pkg>/meshes/…stl')
         form.addRow('Mesh resource (mesh)', self.mesh_resource)
-        self.position = QLineEdit('0.0, 0.0, -0.08')
+        self.position = QLineEdit()
+        self.position.setPlaceholderText('x, y, z in the robot base frame (metres)')
         form.addRow('Position (x,y,z)', self.position)
         # cell role: static | actuated (URDF, adapter-driven) | dynamic (manipulated)
         self.category = QComboBox()
@@ -597,7 +726,7 @@ class ScenePage(QWizardPage):
         self.release_policy = QComboBox()
         self.release_policy.addItems(['freeze', 'gravity'])
         form.addRow('On release (Isaac)', self.release_policy)
-        layout.addLayout(form)
+        manual.addLayout(form)
         btns = QHBoxLayout()
         add = QPushButton('Add / update object')
         add.clicked.connect(self.add_object)
@@ -609,7 +738,9 @@ class ScenePage(QWizardPage):
         preview.clicked.connect(self.preview_live)
         for b in (add, remove, scene_yaml, preview):
             btns.addWidget(b)
-        layout.addLayout(btns)
+        manual.addLayout(btns)
+        layout.addWidget(self.manual_box)
+        self.manual_box.setVisible(False)
         self.status = QLabel('')
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -675,6 +806,10 @@ class ScenePage(QWizardPage):
             self.status.setText('set the USD path + mesh package first')
             return
         try:
+            robot_prim = self.robot_prim.text().strip() or \
+                f'/World/{self.ctrl.project.robot.robot_name}'
+            self.ctrl.set_isaac_binding(usd, robot_prim)          # vNext I0.1: the bound world
+            self.robot_prim.setText(robot_prim)
             self._rules = self.ctrl.import_usd_cell(usd, pkg)
         except Exception as exc:  # noqa: BLE001
             self.status.setText(f'USD load failed: {exc}')
@@ -816,8 +951,24 @@ class ScenePage(QWizardPage):
         self.gripper_topic.setCurrentText(cur)
         self.reset_topic.setText(sc.scene_reset_topic)
 
+    def _grasp_mode_changed(self, mode: str) -> None:
+        if self.ctrl.project is None or not mode:
+            return
+        try:
+            self.ctrl.set_scene_loader_params(grasp_attach_mode=mode)
+        except ValueError as exc:                          # shown, never raised into Qt
+            self.status.setText(f'grasp handling: {exc}')
+
     def initializePage(self):
         self._prefill_topics()
+        if self.ctrl.project is not None:
+            self.grasp_mode.blockSignals(True)
+            self.grasp_mode.setCurrentText(self.ctrl.project.scene.grasp_attach_mode)
+            self.grasp_mode.blockSignals(False)
+        binding = getattr(getattr(self.ctrl.project, 'deployment', None), 'isaac', None)
+        if binding is not None:
+            self.usd_path.setText(self.usd_path.text() or binding.stage)
+            self.robot_prim.setText(binding.robot_prim or '')
         # touch_links were derived from the robot chain at Step 1 — show them, don't ask.
         try:
             self.touch_links.setText(', '.join(self.ctrl.project.scene.touch_links))
@@ -827,8 +978,49 @@ class ScenePage(QWizardPage):
 
     def _refresh(self):
         self.list.clear()
+        try:
+            status = self.ctrl.scene_status(self._joint_states_age())
+        except Exception:  # noqa: BLE001 - a status must never break the page
+            status = None
+        by_id = {o.id: o for o in (status.objects if status else [])}
         for o in self.ctrl.project.scene.objects:
-            self.list.addItem(f'{o.id} [{o.shape.value}, {o.category.value}]')
+            st = by_id.get(o.id)
+            self.list.addItem(f'{o.id} [{o.shape.value}, {o.category.value}]'
+                              + (f'  {st.status}' if st else ''))
+            if st and st.detail:
+                self.list.item(self.list.count() - 1).setToolTip(st.detail)
+        self._show_sync(status)
+
+    def _joint_states_age(self):
+        live = getattr(self.wizard(), '_live', None) if self.wizard() else None
+        return live.joint_states_age() if live is not None else None
+
+    def _show_sync(self, status) -> None:
+        from ..composer.integration import STALE, STATEMENT
+        if status is None:
+            self.sync_status.setText('')
+            self.reimport.setVisible(False)
+            return
+        text = f'<b>{status.header()}</b> — {STATEMENT}'
+        if status.world == STALE:
+            text += f'<br><b>⚠ STALE:</b> {status.world_detail}'
+        self.sync_status.setText(text)
+        self.reimport.setVisible(status.world == STALE)
+
+    def reimport_world(self):
+        """vNext I0.1: read the recorded world file again into the review table, keeping the user's
+        per-group decisions; "Apply mapping" then rebuilds the scene and its provenance."""
+        prov = self.ctrl.project.scene.provenance
+        if prov is None:
+            return
+        self.usd_path.setText(prov.file)
+        if prov.source == 'gazebo_world':
+            self.load_world_scene()
+        else:
+            if not self.mesh_pkg.text().strip():
+                self.status.setText('set the Mesh package, then "Re-import world" again')
+                return
+            self.load_usd_mapping()
 
     def add_object(self):
         oid = self.obj_id.text().strip()
@@ -1569,7 +1761,9 @@ class ApplicationPage(QWizardPage):
     # (saved projects carry them); labels are the product names (D-015).
     APPS = [('pick_and_place', 'Blind pick and place', True),
             ('vision_guided_motion', 'Vision guided motion', True),
-            ('bin_picking', 'Bin picking (emptying loop)', True)]
+            ('bin_picking', 'Bin picking (emptying loop)', True),
+            # vNext I0.10: a Canonical Task Program, authored in the Application Composer (Step 7)
+            ('task_program', 'Task program — Application Composer (from a template)', True)]
     # TSA 8.0 (M3 decision 7): gluing, path following, waypoint replay and CNC tending are no longer
     # offered (greyed) as application types: each is a Canonical Task Program, written in YAML.
 
@@ -1642,6 +1836,23 @@ class ApplicationPage(QWizardPage):
         form.addRow(self.bin_box)
         self.bin_box.setVisible(False)
 
+        # vNext I0.10: start a task program from a template (pure canonical data, re-taught in Step 7)
+        from ..composer.templates import list_templates
+        self.template_box = QGroupBox('Task program — start from a template')
+        tform = QFormLayout(self.template_box)
+        self.templates = list_templates()
+        self.template = QComboBox()
+        for t in self.templates:
+            self.template.addItem(t.title, t.id)
+        self.template.currentIndexChanged.connect(self._template_changed)
+        tform.addRow('Template', self.template)
+        self.template_text = QLabel('')
+        self.template_text.setWordWrap(True)
+        tform.addRow(self.template_text)
+        form.addRow(self.template_box)
+        self.template_box.setVisible(False)
+        self._template_changed(0)
+
         # vNext M3.3: a Canonical Task Program fixes its own type (YAML-first): no choice here
         self._form = form
         self._titles = (self.title(), self.subTitle())
@@ -1651,12 +1862,52 @@ class ApplicationPage(QWizardPage):
             'refuses any problem before it writes a file.')
         form.addRow(self.program_box)
         self.program_box.setVisible(False)
+        # vNext I0.10: a task program can start over from a template (a second click confirms)
+        self.restart_button = QPushButton('Start over from the template above (replaces the program)')
+        self.restart_button.clicked.connect(self.restart_from_template)
+        form.addRow(self.restart_button)
+        self.restart_button.setVisible(False)
+        self.restart_note = QLabel('')
+        self.restart_note.setWordWrap(True)
+        form.addRow(self.restart_note)
+
+    def _template_changed(self, idx: int) -> None:
+        if 0 <= idx < len(self.templates):
+            t = self.templates[idx]
+            from ..composer.templates import requirements
+            need = requirements(t.application)
+            extra = []
+            if need['detectors']:
+                extra.append('needs the detector(s) ' + ', '.join(need['detectors']) + ' (Step 5)')
+            if need['named_states']:
+                extra.append('uses the MoveIt named state(s) ' + ', '.join(need['named_states']))
+            if need['channels']:
+                extra.append('switches the logical channel(s) ' + ', '.join(need['channels']))
+            # owner Test C (row 29): say what the text describes -- the template the button WOULD apply
+            self.template_text.setText(
+                f"Template '{t.title}': {t.description.rstrip('.')}" + ('; ' + '; '.join(extra) if extra else '')
+                + '. "Start over from the template above" would replace the program with it (the current program '
+                'is unchanged until you confirm); its waypoints are placeholders to re-teach in Step 7.')
+
+    def restart_from_template(self) -> None:
+        tid = self.template.currentData()
+        if getattr(self, '_confirm_restart', None) != tid:
+            self._confirm_restart = tid
+            self.restart_note.setText(f"⚠ This REPLACES the whole program with '{self.template.currentText()}'. "
+                                      'Click again to confirm (save first if you want to keep the current one).')
+            return
+        self._confirm_restart = None
+        self.ctrl.apply_template(tid)
+        self.restart_note.setText(f"The program now starts from '{self.template.currentText()}'.")
+        self.initializePage()
 
     def _show_program(self, program: bool) -> None:
         label = self._form.labelForField(self.app_type)
         for widget in (self.app_type, label):
             if widget is not None:
                 widget.setVisible(not program)
+        self.template_box.setVisible(program)                   # program: the restart template
+        self.restart_button.setVisible(program)
         if program:
             self.bin_box.setVisible(False)
             self.setSubTitle('This project\'s application is set by its file: a Canonical Task '
@@ -1670,6 +1921,7 @@ class ApplicationPage(QWizardPage):
         # suggest the fields do something there (they do not — only bin_picking reads them).
         token = self.APPS[idx][0] if 0 <= idx < len(self.APPS) else ''
         self.bin_box.setVisible(token == 'bin_picking')
+        self.template_box.setVisible(token == 'task_program')
 
     def initializePage(self) -> None:
         try:
@@ -1709,6 +1961,10 @@ class ApplicationPage(QWizardPage):
         token, _, enabled = self.APPS[idx]
         if not enabled:
             token = 'pick_and_place'           # guard: a disabled row cannot be chosen
+        if token == 'task_program':           # vNext I0.10: the program starts from the chosen template
+            self.ctrl.apply_template(self.template.currentData())
+            self._user_chose = True
+            return True
         # planner is per-waypoint; keep a sensible fallback for segments that don't set one
         self.ctrl.set_application(token, 'ompl')
         # The loop's configuration is written whatever the application, because the fields
@@ -1900,23 +2156,28 @@ class BaseConfigPage(QWizardPage):
         super().__init__()
         self.ctrl = ctrl
         self.setTitle('Step 1 — Robot & base config')
-        self.setSubTitle('Load your hand-made base moveit_config: robot, SRDF waypoints, '
-                         'controllers and the mock/isaac/real bridges are read from it.')
+        self.setSubTitle('Open a project, or start one from your MoveIt config package (made with MoveIt '
+                         'Setup Assistant): the robot, its planning group, named states, end effector, '
+                         'controllers and bridges are READ from it -- TSA does not redefine them.')
         form = QFormLayout(self)
         self.project_file = QLineEdit()
         pbrowse = QPushButton('Browse…')
         pbrowse.clicked.connect(self._browse_project)
         prow = QHBoxLayout(); prow.addWidget(self.project_file); prow.addWidget(pbrowse)
         form.addRow('Open project.yaml', prow)
-        self.project_name = QLineEdit('robot_app')
+        # vNext I0 (owner, Test A.1): no pre-filled names -- every value here is the user's
+        self.project_name = QLineEdit()
+        self.project_name.setPlaceholderText('a name for this application, e.g. my_cell')
         form.addRow('— or new — Project name', self.project_name)
-        self.base_pkg = QLineEdit('fr30_eef_moveit_config')
-        form.addRow('Base moveit_config package', self.base_pkg)
+        self.base_pkg = QLineEdit()
+        self.base_pkg.setPlaceholderText('the MoveIt config package (filled from the folder you browse)')
+        form.addRow('MoveIt config package', self.base_pkg)
         self.base_path = QLineEdit()
+        self.base_path.setPlaceholderText('the folder of that package')
         bbrowse = QPushButton('Browse…')
         bbrowse.clicked.connect(self._browse_base)
         brow = QHBoxLayout(); brow.addWidget(self.base_path); brow.addWidget(bbrowse)
-        form.addRow('Base package path', brow)
+        form.addRow('MoveIt config folder', brow)
         # THE ROBOT SLOT (ADR-0016). Empty is the answer for almost every project, and
         # saying so in the tooltip matters more than the field itself.
         self.cell_ns = QLineEdit()
@@ -1935,9 +2196,14 @@ class BaseConfigPage(QWizardPage):
             'detector serves every arm reaching into the bin).')
         self.cell_ns.textEdited.connect(self._on_ns_edited)
         form.addRow('Robot namespace (optional)', self.cell_ns)
+        self.load_button = QPushButton('Load the MoveIt config')
+        self.load_button.clicked.connect(self.load)
+        form.addRow(self.load_button)
         self.summary = QLabel('')
         self.summary.setWordWrap(True)
+        self.summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
         form.addRow('Loaded', self.summary)
+        self._loaded_from = None
 
     def _browse_project(self):  # pragma: no cover - needs a display
         path, _ = QFileDialog.getOpenFileName(self, 'Open project.yaml', '', 'project (*.yaml *.yml)')
@@ -1945,9 +2211,11 @@ class BaseConfigPage(QWizardPage):
             self.project_file.setText(path)
 
     def _browse_base(self):  # pragma: no cover - needs a display
-        path = QFileDialog.getExistingDirectory(self, 'Base moveit_config package dir')
+        path = QFileDialog.getExistingDirectory(self, 'MoveIt config package folder')
         if path:
             self.base_path.setText(path)
+            if not self.base_pkg.text().strip():       # the package is named after its folder
+                self.base_pkg.setText(os.path.basename(os.path.normpath(path)))
 
     def _on_ns_edited(self, _text: str) -> None:
         # textEdited fires on USER input only (setText does not), so a project opened on
@@ -1970,7 +2238,26 @@ class BaseConfigPage(QWizardPage):
             self.ctrl.set_cell_namespace(self.cell_ns.text())
         self.cell_ns.setText(self.ctrl.cell_namespace())
 
-    def validatePage(self) -> bool:
+    def _robot_text(self) -> str:
+        """What TSA read from the MoveIt config, line by line (vNext I0, owner Test A.1)."""
+        p = self.ctrl.project
+        r = p.robot
+        g = r.gripper
+        lines = [f'Robot: {r.robot_name}  (MoveIt config: {r.base_moveit_config_package or "—"})',
+                 f'Planning group: {r.planning_group.name}  ·  chain {r.planning_group.base_link} → '
+                 f'{r.planning_group.tip_link}',
+                 f"Joints ({len(r.planning_group.joints)}): {', '.join(r.planning_group.joints) or '⚠ none'}",
+                 f"Named states: {', '.join(s.name for s in r.named_states) or 'none'}",
+                 f'Arm controller: {r.arm_controller.name}',
+                 f"End effector: {g.eef_name or 'none'}"
+                 + (f' (group {g.eef_group_name}, on {g.eef_parent_link})' if g.eef_group_name else ''),
+                 f'Bridges for the deployments: {len(p.deployment.bridges)}']
+        ns = self.ctrl.cell_namespace()
+        lines.append(f'Robot namespace: {ns}' if ns else 'Robot namespace: none (one robot, at the root)')
+        return '\n'.join(lines)
+
+    def load(self) -> bool:
+        """Read the project or the MoveIt config NOW and show what was read."""
         try:
             if self.project_file.text().strip():
                 self.ctrl.open_project(_expand_path(self.project_file.text()))
@@ -1978,29 +2265,36 @@ class BaseConfigPage(QWizardPage):
                     self.cell_ns.setText(self.ctrl.cell_namespace())
                 self._apply_namespace()
             else:
-                self.ctrl.new_blank_project(self.project_name.text().strip() or 'robot_app')
-                info = self.ctrl.load_base_moveit_config(
-                    self.base_pkg.text().strip(), _expand_path(self.base_path.text()))
-                nj = len(info.get('arm_joints') or [])
-                warn = '' if nj else '  ⚠ NO ARM JOINTS — captured named states would be EMPTY'
+                name = self.project_name.text().strip()
+                pkg, path = self.base_pkg.text().strip(), self.base_path.text().strip()
+                if not name or not pkg or not path:
+                    self.summary.setText('Set the project name, the MoveIt config package and its folder '
+                                         '(or open a project.yaml).')
+                    self._loaded_from = None
+                    return False
+                self.ctrl.new_blank_project(name)
+                self.ctrl.load_base_moveit_config(pkg, _expand_path(path))
                 self._apply_namespace()
-                ns = self.ctrl.cell_namespace()
-                slot = f', namespace={ns}' if ns else ''
-                self.summary.setText(
-                    f"{info['robot_name']}: group={info['group']}, "
-                    f"joints={nj}, "
-                    f"named states={len(info['named_states'])}, "
-                    f"arm={info['arm_controller']}, "
-                    f"gripper={info['gripper_controller']}{slot}{warn}")
-                return True
         except Exception as exc:  # noqa: BLE001
             self.summary.setText(f'ERROR: {exc}')
+            self._loaded_from = None
             return False
-        s = self.ctrl.robot_summary()
-        ns = self.ctrl.cell_namespace()
-        slot = f' namespace={ns}' if ns else ' (one robot, at the root)'
-        self.summary.setText(
-            f"opened project: {s['robot_name']} group={s['group']}{slot}")
+        self._loaded_from = self._inputs()
+        self.summary.setText(self._robot_text())
+        return True
+
+    def _inputs(self):
+        if self.project_file.text().strip():
+            return ('project', self.project_file.text().strip())
+        return ('config', self.project_name.text().strip(), self.base_pkg.text().strip(),
+                self.base_path.text().strip())
+
+    def validatePage(self) -> bool:
+        # vNext I0 (owner, Test A.1): the user SEES what was read before leaving the page
+        if self._loaded_from is None or self._loaded_from != self._inputs():
+            if self.load():
+                self.summary.setText(self._robot_text() + '\n\nCheck the robot above, then press Next.')
+            return False
         return True
 
 
@@ -2029,8 +2323,9 @@ class GenerateConfigPage(QWizardPage):
         form.addRow('Result', self.result)
 
     def initializePage(self):
+        # vNext I0 (owner, Test A.1): the user names the package; the robot-based name is a suggestion
         try:
-            self.pkg_name.setText(self.ctrl.scene_loader_package_name())
+            self.pkg_name.setPlaceholderText(f'e.g. {self.ctrl.scene_loader_package_name()}')
         except Exception:  # noqa: BLE001
             pass
 
@@ -2044,6 +2339,9 @@ class GenerateConfigPage(QWizardPage):
         pkg = self.pkg_name.text().strip() or None
         if not out:
             self.result.setPlainText('ERROR: set an output directory (your ros2_ws/src)')
+            return
+        if not pkg:
+            self.result.setPlainText('ERROR: name the config package (the field shows a suggestion)')
             return
         # Overwrite guard: the default name equals a hand-made package would-be name, so a
         # blind Generate could clobber an existing package. Require an explicit re-click.
@@ -2062,9 +2360,8 @@ class GenerateConfigPage(QWizardPage):
             self.result.setPlainText(f'ERROR: {exc}')
             return
         pkg = pkg or self.ctrl.scene_loader_package_name()
-        snippet = self.ctrl.build_snippet(pkg)   # ws_root derived at generate time
         lines = [f"Generated {manifest.as_dict()['file_count']} files -> {out}/{pkg}", '',
-                 'Build it, then bring it up to configure the application:', snippet]
+                 'Next: Step 4 builds it and starts it (move_group, the scene, RViz) -- nothing to type.']
         for w in manifest.local_warnings:       # this machine's paths; the manifest has none
             lines.append(f'  warn: {w}')
         self.result.setPlainText('\n'.join(lines))
@@ -2074,11 +2371,16 @@ class GenerateConfigPage(QWizardPage):
 
 
 class ModeBringupPage(QWizardPage):
-    """Step 5-6: choose the mode and show the guided bring-up procedure."""
+    """Step 5-6: choose the mode and show the guided bring-up procedure; vNext I0.2: build, start
+    Isaac and start the planning environment from here (ADR-0027: launch + observe only)."""
 
-    def __init__(self, ctrl: AssistantController):
+    def __init__(self, ctrl: AssistantController, launcher=None, settings=None):
         super().__init__()
         self.ctrl = ctrl
+        from ..composer.settings import LauncherSettings
+        from .launcher import Launcher
+        self.launcher = launcher if launcher is not None else Launcher(self)
+        self.settings = settings if settings is not None else LauncherSettings.load()
         self.setTitle('Step 4 — Mode & bring-up (for configuration)')
         self.setSubTitle('Pick how you will run, then follow the procedure to BUILD + bring '
                          'up the scene+planner config so you can configure the application '
@@ -2091,11 +2393,87 @@ class ModeBringupPage(QWizardPage):
         # construction doesn't fire it.
         self.mode.currentTextChanged.connect(self._on_mode_changed)
         form.addRow('Mode', self.mode)
-        self.usd_path = QLineEdit()
-        self.usd_path.setPlaceholderText('isaac: path to your cell .usd (optional)')
-        form.addRow('USD scene (isaac)', self.usd_path)
-        self.procedure = QTextEdit(); self.procedure.setReadOnly(True)
-        form.addRow('Procedure', self.procedure)
+        # vNext I0 (owner, Test A.1): the buttons below RUN the procedure -- no duplicated text to type
+        self.usd_path = QLabel('')
+        self.usd_path.setWordWrap(True)
+        form.addRow('Isaac stage (bound at Step 2)', self.usd_path)
+        self.procedure = QLabel('')
+        self.procedure.setWordWrap(True)
+        form.addRow('How', self.procedure)
+        # vNext I0.2: the same procedure, run by TSA (each command is shown before it runs)
+        self.isaac_launcher = QLineEdit(self.settings.isaac_launcher)
+        self.isaac_launcher.setPlaceholderText('isaac-sim.sh of this machine (a user setting, not the project)')
+        self.isaac_launcher.editingFinished.connect(self._save_settings)
+        form.addRow('Isaac Sim launcher', self.isaac_launcher)
+        from .run_panel import RunPanel
+        self.run_panel = RunPanel(self.launcher, [
+            ('build', 'Build the config', self._build_command),
+            ('isaac', 'Start Isaac (open the bound stage, PLAY)', self._isaac_command),
+            ('environment', 'Start planning environment', self._environment_command),
+        ])
+        form.addRow('Run', self.run_panel)
+        self.check_button = QPushButton('Check the live robot')
+        self.check_button.clicked.connect(self.check_live)
+        self.live_result = QLabel('')
+        self.live_result.setWordWrap(True)
+        crow = QHBoxLayout(); crow.addWidget(self.check_button); crow.addWidget(self.live_result, 1)
+        form.addRow('Live', crow)
+
+    # ---- vNext I0.2: the commands (composer.launch_plan) ----
+    def _config_package(self) -> str:
+        return self.ctrl.scene_loader_pkg or self.ctrl.scene_loader_package_name()
+
+    def _ws_root(self) -> str:
+        root = self.ctrl.workspace_root or self.settings.workspace_root
+        if not root:
+            raise ValueError('no workspace: generate the scene+planner config into <ws>/src at Step 3')
+        return root
+
+    def _copy_base(self) -> bool:
+        return bool(self.ctrl.project.robot.base_moveit_config_path)
+
+    def _build_command(self):
+        from ..composer import launch_plan
+        if self._copy_base():
+            return launch_plan.build(self._ws_root(), [self._config_package()])
+        b = self.ctrl.project.bundle                  # a quick robot (D1): its bundle is the environment
+        return launch_plan.build(self._ws_root(), [b.description_package, b.moveit_config_package,
+                                                   b.app_package])
+
+    def _isaac_command(self):
+        from ..composer import launch_plan
+        binding = self.ctrl.resolved_project().deployment.isaac
+        if binding is None:
+            raise ValueError('no Isaac stage is bound: load the USD at Step 2')
+        return launch_plan.isaac(binding.stage, self.isaac_launcher.text().strip())
+
+    def _environment_command(self):
+        """The Step-3 scene+planner config (the normal flow: an existing MoveIt config); a quick robot
+        without one has no Step-3 package, so its generated bundle is brought up without its tree."""
+        from ..composer import launch_plan
+        if self._copy_base():
+            return launch_plan.planning_environment(self._ws_root(), self._config_package(),
+                                                    self.mode.currentText())
+        return launch_plan.bringup(self._ws_root(), self.ctrl.project.bundle.app_package,
+                                   self.mode.currentText())
+
+    def _save_settings(self) -> None:
+        self.settings.isaac_launcher = self.isaac_launcher.text().strip()
+        try:
+            self.settings.save()
+        except OSError:
+            pass
+
+    def check_live(self) -> None:  # pragma: no cover - needs a live ROS session
+        """The running environment against the project: joint states, TCP frame, arm controller."""
+        from ..livesession.checks import live_checks
+        try:
+            checks = live_checks(self.wizard().live_capture(), self.ctrl.project)
+        except Exception as exc:  # noqa: BLE001
+            self.live_result.setText(f'⚠ live check failed: {exc}')
+            return
+        marks = {True: '✔', False: '✖', None: '?'}
+        self.live_result.setText('\n'.join(f'{marks[c.ok]} {c.name}: {c.text}' for c in checks))
 
     def initializePage(self):
         # reflect the project's current default backend without firing set_mode
@@ -2125,9 +2503,18 @@ class ModeBringupPage(QWizardPage):
                 cfg = self.ctrl.scene_loader_package_name()
             except Exception:  # noqa: BLE001
                 cfg = '<the config you generated at Step 3>'
-        proc = self.ctrl.bringup_procedure(
-            self.mode.currentText(), cfg, usd_path=self.usd_path.text().strip() or None)
-        self.procedure.setPlainText(proc)
+        binding = getattr(getattr(self.ctrl.project, 'deployment', None), 'isaac', None)
+        self.usd_path.setText(binding.stage if binding is not None else 'none (no Isaac world bound)')
+        mode = self.mode.currentText()
+        steps = ['1. <b>Build the config</b> (once, and after every Step 3 regeneration)']
+        if mode == 'isaac':
+            steps.append('2. <b>Start Isaac</b>: it opens the bound stage and presses PLAY (wait for "PLAYING")')
+        steps.append(f'{len(steps) + 1}. <b>Start planning environment</b>: move_group, the planning scene and '
+                     f'RViz with MotionPlanning ({mode})')
+        steps.append(f'{len(steps) + 1}. <b>Check the live robot</b>; then teach in RViz: move the gizmo, Plan, '
+                     'Execute -- the waypoints are captured at Step 7')
+        self.procedure.setText('<br>'.join(steps) + f'<br><small>The commands are shown in the log; '
+                                                    f'package: {cfg}</small>')
 
     def validatePage(self) -> bool:
         try:
@@ -2465,7 +2852,15 @@ class BlocksPage(QWizardPage):
         outer.setContentsMargins(0, 0, 0, 0)
         self.editor = QWidget()
         outer.addWidget(self.editor, 1)
-        self.program_panel = self._program_panel()
+        # vNext I0.1: the Application Composer shell hosts the program views (Overview first)
+        from .composer import ComposerWidget
+        self.program_panel = ComposerWidget(
+            self.ctrl, self._program_panel(),
+            joint_states_age=lambda: (self.wizard()._live.joint_states_age()
+                                      if self.wizard() is not None and getattr(self.wizard(), '_live', None)
+                                      else None),
+            on_edit=self._program_edited,
+            live=lambda: self.wizard().live_capture())
         self.program_panel.setVisible(False)
         outer.addWidget(self.program_panel, 1)
         root = QHBoxLayout(self.editor)
@@ -2595,6 +2990,14 @@ class BlocksPage(QWizardPage):
         v.addWidget(self.program_result)
         return w
 
+    def _program_edited(self) -> None:
+        """vNext I0.3: a Composer edit committed a new project: the program text follows it."""
+        from ..applications.task_program import program_overview, program_summary
+        prog = self.ctrl.project.application.program
+        self.program_state.setText(program_summary(prog))
+        self.program_view.setPlainText(program_overview(prog))
+        self.program_result.setText('')
+
     def validate_program(self) -> None:
         """The program's refusals (red) and warnings (amber), or that it is ready to generate."""
         errors, warnings = self.ctrl.validate_program()
@@ -2621,12 +3024,13 @@ class BlocksPage(QWizardPage):
         if program:
             from ..applications.task_program import program_overview, program_summary
             prog = self.ctrl.project.application.program
-            self.setTitle('Step 7 — Task program (read-only overview)')
-            self.setSubTitle('The program as its file writes it (YAML-first). '
-                             + _program_where(self.ctrl) + ' Validate it here.')
+            self.setTitle('Step 7 — Application Composer')
+            self.setSubTitle('The canonical task program: the same model as its YAML. '
+                             + _program_where(self.ctrl) + ' Every edit is validated by it.')
             self.program_state.setText(program_summary(prog))
             self.program_view.setPlainText(program_overview(prog))
             self.program_result.setText('')
+            self.program_panel.refresh()
         else:
             self.setTitle(self._titles[0])
             self.setSubTitle(self._titles[1])
@@ -3930,15 +4334,27 @@ class SetupWizard(QWizard):
         self.controller = controller or AssistantController()
         self._live = None
         self.setWindowTitle('TrainIt Setup Assistant')
+        self._fit_screen()
         # MVP entry: load the hand-made base config (auto-configures the robot).
         self.base_page = BaseConfigPage(self.controller)
         self.gen_config_page = GenerateConfigPage(self.controller)
-        self.mode_page = ModeBringupPage(self.controller)
+        # vNext I0.2 (ADR-0027): ONE launcher for the wizard; closing TSA stops what it started
+        from ..composer.settings import LauncherSettings
+        from .launcher import Launcher
+        self.launcher = Launcher(self)
+        self.launcher_settings = LauncherSettings.load()
+        # setsid makes the children immune to the terminal's Ctrl-C / hang-up: TSA stops them on EVERY
+        # way out (window closed, Cancel, application quit), never only in closeEvent
+        from python_qt_binding.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self.launcher.stop_all)
+        self.mode_page = ModeBringupPage(self.controller, self.launcher, self.launcher_settings)
         self.scene_page = ScenePage(self.controller)
         self.perception_page = PerceptionPage(self.controller)
         self.application_page = ApplicationPage(self.controller)
         self.blocks_page = BlocksPage(self.controller)
-        self.generate_page = GeneratePage(self.controller)
+        self.generate_page = GeneratePage(self.controller, self.launcher, self.launcher_settings)
         # From-scratch / advanced pages: constructed (used by the CLI + tests, and as
         # manual overrides of the base-derived values), not in the default MVP flow.
         # waypoints_page is the LEGACY Step 6 (form-based), kept for tests/back-compat;
@@ -3957,11 +4373,29 @@ class SetupWizard(QWizard):
         self._camera = None
         self._camera_topics = None
 
+    def _fit_screen(self) -> None:
+        """owner Test A (row 11): a window large enough for its labels -- most of the screen, never larger
+        than it."""
+        from python_qt_binding.QtWidgets import QApplication
+        app = QApplication.instance()
+        screen = app.primaryScreen() if app is not None else None
+        if screen is None:
+            return
+        g = screen.availableGeometry()
+        self.resize(min(g.width(), max(1280, int(g.width() * 0.8))),
+                    min(g.height(), max(860, int(g.height() * 0.85))))
+
     def live_capture(self):  # pragma: no cover - needs a live ROS session
         """Lazily create the shared LiveCapture reader for the running session."""
+        from ..livesession import LiveCapture, joint_states_topic
+        p = self.controller.project
+        ns = p.robot.cell_namespace if p is not None else ''
+        # vNext I0.0 (ADR-0023): the robot's joint states, in its namespace -- the CURRENT project's
+        if self._live is not None and self._live.joint_states_topic != joint_states_topic(ns):
+            self._live.close()
+            self._live = None
         if self._live is None:
-            from ..livesession import LiveCapture
-            self._live = LiveCapture()
+            self._live = LiveCapture(namespace=ns)
         return self._live
 
     def planning_scene(self):  # pragma: no cover - needs a live ROS session
@@ -3983,7 +4417,12 @@ class SetupWizard(QWizard):
             self._camera_topics = topics
         return self._camera
 
+    def reject(self):  # pragma: no cover - GUI lifecycle
+        self.launcher.stop_all()
+        super().reject()
+
     def closeEvent(self, event):  # pragma: no cover - GUI lifecycle
+        self.launcher.stop_all()
         if self._live is not None:
             self._live.close()
         if self._scene_pub is not None:

@@ -36,6 +36,19 @@ class RealIncludeSpec(BaseModel):
     launch_file: str
 
 
+class IsaacBinding(BaseModel):
+    """The Isaac deployment's WORLD and the robot in it (vNext I0.1, I0_DESIGN.md §6).
+
+    ``stage`` is the USD stage that owns the physical / simulated world: TSA imports the planning
+    projection from it (``scene.provenance``) and opens it. ``robot_prim`` names the robot
+    articulation INSIDE the stage (Case A: the stage contains the robot) -- a deployment
+    REPRESENTATION that TSA binds to and validates (joints, base), never a source of MoveIt semantics.
+    Workflow metadata: no generated file reads it, so it never changes a bundle."""
+
+    stage: str
+    robot_prim: Optional[str] = None
+
+
 class DeploymentSpec(BaseModel):
     # validate_assignment: coerce a raw-string assignment (e.g. controller.set_mode)
     # back into a Backend member, so `default_mode` is always a Backend downstream.
@@ -64,6 +77,8 @@ class DeploymentSpec(BaseModel):
     # run — a documented Gazebo init race some cells (e.g. UR) need. Default False keeps
     # the clean spawners-only bring-up; ignored by every non-gazebo backend.
     gazebo_cm_bootstrap: bool = False
+    # vNext I0.1: the Isaac world + robot binding (optional; written only when set; not emitted)
+    isaac: Optional[IsaacBinding] = None
 
     def bridge_packages(self) -> List[str]:
         """Unique bridge packages (for package.xml exec_depend), in first-seen order."""

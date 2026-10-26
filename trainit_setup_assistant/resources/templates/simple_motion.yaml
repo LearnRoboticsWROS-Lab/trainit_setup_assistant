@@ -1,0 +1,57 @@
+# TrainIt Application Composer template: Simple motion.
+# PTP, LIN and CIRC moves through taught waypoints, then the same route as ONE blended path.
+# The waypoint values are PLACEHOLDERS: re-teach them on your robot (Step 7: move the robot in RViz,
+# then Capture TCP / Capture joints). Pure canonical data: no template-specific runtime.
+# w1_j is the joint configuration w1 is reached with: the PTP moves go to w1_j, so the LIN / CIRC moves and
+# the path start from the same configuration every cycle (a PTP to the TCP pose w1 lets IK choose one when
+# it runs). Until it is re-taught, w1_j is the named state home (valid on any robot). Re-teach w1 and w1_j
+# TOGETHER: put the robot at w1, then "Capture TCP + joints" into 'w1'.
+template: {title: Simple motion, description: 'PTP, LIN and CIRC moves through taught waypoints, then the same route
+    as ONE blended path.'}
+application:
+  type: task_program
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 30, acceleration: 30, tcp_velocity_mps: 0.1}
+    process: {speed: 20, acceleration: 20, tcp_velocity_mps: 0.08}
+  waypoints:
+  - {name: home, type: joint, named: home}
+  - name: w1
+    position: [0.45, 0.25, 0.3]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  - {name: w1_j, type: joint, named: home}
+  - name: w2
+    relative: {to: w1, frame: tool, dz: 0.2}
+  - name: w2b
+    position: [0.45, -0.0, 0.05]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  - name: w3
+    position: [0.45, -0.25, 0.1]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  - name: w4
+    position: [0.45, -0.25, 0.3]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  paths:
+  - name: sweep
+    states: [w1, w2, w3, w4]
+    segments:
+    - {type: lin, blend_radius_m: 0.02}
+    - {type: circ, via: w2b, blend_radius_m: 0.02}
+    - {type: lin}
+    continuity: blend
+    profile: process
+    goal_tolerance: {position_m: 0.001, orientation_rad: 0.01}
+  tasks:
+  - name: cycle
+    steps:
+    - move: {to: home, type: ptp, profile: transit}
+    - move: {to: w1_j, type: ptp, profile: transit}
+    - move: {to: w2, type: lin, profile: approach}
+    - move: {to: w3, type: circ, via: w2b, profile: approach}
+    - move: {to: w4, type: lin, profile: approach}
+    - move: {to: home, type: ptp, profile: transit}
+    - move: {to: w1_j, type: ptp, profile: transit}
+    - {path: sweep}
+    - move: {to: home, type: ptp, profile: transit}
+  main_task: cycle
+  runtime: {allowed_start_tolerance: 0.05}

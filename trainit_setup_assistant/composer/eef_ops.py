@@ -114,16 +114,25 @@ def _fix_steps(app: dict, fix) -> None:
 
 def adopt_contract(c: Composer, kind: str, contract: dict) -> List[str]:
     """Make the end effector canonical: its ``kind`` and ``contract``, and the deployment's legacy end-effector
-    bridges removed (the contract's adapters replace them, ADR-0022 R18) -- ONE edit. Returns the removed
-    rows (``package/executable``)."""
+    bridges removed (the contract's adapters replace them, ADR-0022 R18), the legacy per-backend grasp
+    adapters R23 would refuse next to its bindings back to their defaults -- ONE edit. Returns the removed bridge rows
+    (``package/executable``)."""
+    from .eef_suggest import legacy_sim_adapters        # here: eef_suggest reads this module
     GripperKind(kind)
     removed: List[str] = []
+    replaced = legacy_sim_adapters(c.project, contract.get('adapters') or {})
 
     def mutate(d):
         g = d['robot']['gripper']
         g['kind'] = kind
         g['contract'] = copy.deepcopy(contract)
         g.pop('actuation', None)                   # 'contract': the gripper's pre-validator sets it
+        # a legacy per-backend grasp adapter that disagrees with its binding (R23) back to its default; any other
+        # kept, Gazebo's weld always (ROS2ML-SYNC D5)
+        sim = g.get('sim_grasp_adapter')
+        if isinstance(sim, dict):
+            for backend in replaced:
+                sim.pop(backend, None)
         dep = d.setdefault('deployment', {})
         keep = []
         for row in dep.get('bridges') or []:

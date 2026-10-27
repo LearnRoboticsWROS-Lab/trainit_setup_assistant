@@ -46,7 +46,8 @@ from pydantic import BaseModel, Field
 
 from ..catalog import (EEF_ADAPTER_ROWS, EEF_CAPABILITY_TOKENS, EEF_INTERFACES,
                        EEF_PSEUDO_JOINT_TOPIC)
-from .enums import Backend, GripperJointTarget, GripperKind, StrEnum
+from .enums import (DEFAULT_SIM_GRASP_ADAPTER, Backend, GripperJointTarget, GripperKind, SimGraspAdapter,
+                    StrEnum)
 
 # --- the closed vocabularies (shared token for token with trainit_interfaces, TMR and the
 # hardware layer: the token-parity test pins them against the ADR's token file) -------------------
@@ -559,6 +560,19 @@ def derive_device(gripper, named_states=(), srdf_states=None,
         bindings={Backend(b): _binding(Backend(b), value, stage_topic)
                   for b, value in contract.adapters.items()},
         contract=contract)
+
+
+def legacy_grasp_adapter_disagrees(backend: Backend, legacy, binding_adapter: str) -> bool:
+    """ADR-0022 R23: a legacy per-backend grasp adapter (ADR-0010) next to a contract binding on that backend
+    must be the backend's default, or 'none' where the binding is 'none'. Gazebo's (its LinkAttacher weld)
+    stays authoritative and is never compared; an unset one never disagrees. The one rule the generator's
+    refusal and the Composer's adoption read."""
+    if backend is Backend.GAZEBO or legacy is None:
+        return False
+    allowed = {DEFAULT_SIM_GRASP_ADAPTER[backend]}
+    if binding_adapter == 'none':
+        allowed.add(SimGraspAdapter.NONE)
+    return legacy not in allowed
 
 
 def pseudo_joint_topic_default(cell_namespace: str) -> str:

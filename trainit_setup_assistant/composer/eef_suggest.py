@@ -85,6 +85,13 @@ def _bindings(project: CanonicalProject, kind: str, interfaces: List[str], facts
                           'end-effector command fails there)')
             continue
         missing = [key for key in info['requires'] if not facts.get(key)]
+        if 'flavour' in info['binding_keys'] and m != Backend.GAZEBO.value and not facts.get('flavour'):
+            # only on gazebo does the generator read the flavour (the base config's controller type, ADR-0022
+            # D2.B); elsewhere a binding without it is refused (R15) -- ROS2ML-SYNC D4
+            out[m] = 'none'
+            decide.append(f"{m}: '{row}' serves it once its controller flavour is declared ({{adapter: {row}, "
+                          "flavour: position | effort}): bind it when that cell is set up, or keep 'none'")
+            continue
         if missing:
             out[m] = 'none'
             decide.append(f"{m}: '{row}' needs {', '.join(missing)}, which TSA did not find: bind it with "
@@ -130,14 +137,22 @@ def suggest_contract(project: CanonicalProject) -> Suggestion:
     note_verify = ('verification: off (confirming a grasp needs a grasp sensor on every deployed backend: the '
                    'mock simulates one, Isaac needs a stage status topic) -- turn it on where you have one')
     actuated = [j for j in tool_joints if j not in _mimic_followers(project)] if len(tool_joints) >= 2 else tool_joints
+    # The grasp-signal topic is no suction evidence next to a GripperCommand jaw when a deployed Gazebo welds on
+    # it (LinkAttacher, ADR-0012: whatever the gripper; the ROS2ML course's Robotiq 2F-85, ROS2ML-SYNC D4). Elsewhere
+    # (an Isaac SurfaceGripper cell) it still is.
+    suction_named = legacy_suction or any(w in names for w in SUCTION_WORDS) or {'on', 'off'} <= set(states)
+    jaw = g.controller_type == 'GripperCommand' and bool(g.command_joint)
+    from ..model.enums import SimGraspAdapter
+    gazebo_weld = (Backend.GAZEBO in project.deployment.modes
+                   and g.grasp_adapter_for(Backend.GAZEBO) is SimGraspAdapter.LINK_ATTACHER)
 
-    if topic or legacy_suction or any(w in names for w in SUCTION_WORDS) or {'on', 'off'} <= set(states):
+    if suction_named or (topic and not (jaw and gazebo_weld)):
         contract = {'actuator': {'command_interface': 'set_bool'}, 'verification': verification}
         why = (f"the stage's command '{topic}'" if topic else
                'the legacy suction bridge (catalog)' if legacy_suction else "the end effector's names / states")
         sources.append(f'a binary suction command (set_bool): {why}')
         kind, interfaces = 'suction', ['set_bool']
-    elif g.controller_type == 'GripperCommand' and g.command_joint:
+    elif jaw:
         # a GripperCommand controller decides first: a MoveIt hand group often lists a mimic finger too
         contract = {'actuator': {'command_interface': 'gripper_command', 'result_policy': 'succeeded_or_stalled'},
                     'verification': verification}
@@ -184,7 +199,32 @@ def suggest_contract(project: CanonicalProject) -> Suggestion:
     sources.append(note_verify)
     if removes:
         sources.append('the legacy end-effector bridges are replaced by the adapters (ADR-0022 R18)')
+    reset = legacy_sim_adapters(project, contract['adapters'])
+    if reset:
+        sources.append('adopting resets ' + ', '.join(f"sim_grasp_adapter.{b} '{v}'" for b, v in reset.items())
+                       + " to the backend's default: it disagrees with that binding (R23); Gazebo's weld stays")
     return Suggestion(kind, contract, sources, decide, removes)
 
 
-__all__ = ['SUCTION_WORDS', 'Suggestion', 'suggest_contract']
+def legacy_sim_adapters(project: CanonicalProject, adapters: dict) -> Dict[str, str]:
+    """The legacy per-backend grasp adapters (ADR-0010) a contract with these ``adapters`` (its bindings, as
+    written) makes R23 refuse -- the ones adoption resets to the backend's default; any other is kept. A key
+    that names no backend is left alone (an old hand edit)."""
+    from ..model.end_effector import legacy_grasp_adapter_disagrees
+    from ..model.enums import SimGraspAdapter
+    out = {}
+    for backend, value in (project.robot.gripper.sim_grasp_adapter or {}).items():
+        try:
+            b, legacy = Backend(backend), SimGraspAdapter(value)
+        except ValueError:
+            continue
+        binding = adapters.get(b.value)
+        if binding is None:
+            continue                                           # not deployed / not bound: R23 reads no other
+        adapter = binding.get('adapter') if isinstance(binding, dict) else binding
+        if legacy_grasp_adapter_disagrees(b, legacy, adapter):
+            out[b.value] = getattr(value, 'value', value)
+    return out
+
+
+__all__ = ['SUCTION_WORDS', 'Suggestion', 'legacy_sim_adapters', 'suggest_contract']

@@ -485,8 +485,72 @@ def test_a_two_finger_moveit_hand_with_a_gripper_command_controller_is_a_jaw(tmp
     s = suggest_contract(p)
     assert s.kind == 'parallel' and s.contract['actuator']['command_interface'] == 'gripper_command'
     assert s.contract['adapters'] == {'mock': 'trainit_mock', 'isaac': 'none', 'gazebo': 'ros2_control',
-                                      'real': 'ros2_control'}                 # from the catalog's rows
+                                      'real': 'none'}                         # from the catalog's rows
     assert any(line.startswith('isaac:') for line in s.decide)
+    # real: ros2_control needs its flavour declared (only gazebo's is read from the base config) -- never a
+    # binding R15 refuses (ROS2ML-SYNC D4)
+    assert any(line.startswith("real: 'ros2_control' serves it once its controller flavour is declared")
+               for line in s.decide)
+
+
+def _course_like_jaw(tmp_path, **gripper):
+    """A Robotiq-2F-85-like jaw on a GripperCommand controller in a Gazebo cell that sends its LinkAttacher
+    weld on the grasp-signal topic (the ROS2ML course cell), with the legacy grasp adapters of TSA v6."""
+    (tmp_path / 'config').mkdir(parents=True)
+    (tmp_path / 'config' / 'robot.srdf').write_text(SRDF_HAND)
+    (tmp_path / 'config' / 'ros2_controllers.yaml').write_text(
+        'controller_manager:\n  ros__parameters:\n    hand_controller:\n'
+        '      type: position_controllers/GripperActionController\n')
+    p = legacy_project(**{**dict(kind='parallel', actuation='joint_position', controller_type='GripperCommand',
+                                 controller_name='hand_controller', action_ns='gripper_cmd',
+                                 command_joint='finger_joint1', eef_group_name='hand', eef_name='hand',
+                                 open_state='open', closed_state='close'), **gripper})
+    p.robot.base_moveit_config_path = str(tmp_path)
+    p.deployment.modes = [type(p.deployment.modes[0])(m) for m in ('mock', 'isaac', 'gazebo', 'real')]
+    p.scene.gripper_cmd_topic = '/gripper_cmd'
+    p.robot.gripper.sim_grasp_adapter = _legacy_adapters(mock='link_attacher', isaac='surface_gripper', real='none',
+                                                         gazebo='link_attacher')
+    return p
+
+
+def _legacy_adapters(**by_backend):
+    from trainit_setup_assistant.model.enums import SimGraspAdapter
+    return {k: SimGraspAdapter(v) for k, v in by_backend.items()}
+
+
+def _plain(adapters):
+    return {k: getattr(v, 'value', v) for k, v in adapters.items()}
+
+
+def test_a_grasp_signal_topic_does_not_make_a_gripper_command_jaw_a_suction_cup(tmp_path):
+    """ROS2ML-SYNC D4: the course cell's '/gripper_cmd' is its Gazebo weld signal, not a suction command."""
+    s = suggest_contract(_course_like_jaw(tmp_path))
+    assert s.kind == 'parallel' and s.contract['actuator']['command_interface'] == 'gripper_command'
+    assert s.contract['adapters']['gazebo'] == 'ros2_control'
+    # a suction name still decides first, GripperCommand or not (a suction action server is one)
+    s = suggest_contract(_course_like_jaw(tmp_path / 'b', eef_group_name='suction', eef_name='suction'))
+    assert s.kind == 'suction'
+    # an Isaac SurfaceGripper cell whose only evidence is its stage topic stays a suction cup, even behind a
+    # GripperCommand action server: no Gazebo weld reads that topic there (python review S1)
+    p = _course_like_jaw(tmp_path / 'c', command_joint='tool_joint', eef_group_name='tool', eef_name='tool')
+    p.deployment.modes = [type(p.deployment.modes[0])(m) for m in ('mock', 'isaac')]
+    s = suggest_contract(p)
+    assert s.kind == 'suction' and s.contract['adapters']['isaac']['stage_cmd_topic'] == '/gripper_cmd'
+
+
+def test_adopting_resets_the_legacy_grasp_adapters_but_the_gazebo_weld(tmp_path):
+    """ROS2ML-SYNC D5: TSA v6's sim_grasp_adapter.mock 'link_attacher' disagrees with a 'trainit_mock' binding
+    (R23): adopting resets every backend's but Gazebo's, says so, and leaves no binding / legacy problem."""
+    from trainit_setup_assistant.generator.eef_contract import eef_contract_problems
+    c = Composer(apply_template(_course_like_jaw(tmp_path), 'pick_and_place'))   # a student's first program
+    s = suggest_contract(c.project)
+    assert any("adopting resets sim_grasp_adapter.mock 'link_attacher'" in line for line in s.sources)
+    eef_ops.adopt_contract(c, s.kind, s.contract)
+    assert _plain(c.project.robot.gripper.sim_grasp_adapter) == {
+        'isaac': 'surface_gripper', 'real': 'none', 'gazebo': 'link_attacher'}     # the defaults kept, the weld kept
+    # no binding problem (R15) and no legacy disagreement (R23); this sample's description has no jaw joint,
+    # so the description rules (R5, R9) are the fixture's, not the adoption's
+    assert [p for p in eef_contract_problems(c.project) if 'R23' in p or 'R15' in p] == []
 
 
 def test_a_whole_project_edit_is_the_program_and_the_end_effector_only():
@@ -673,3 +737,22 @@ def test_a_jaw_suggestion_says_what_does_not_resolve(tmp_path):
     assert s.kind == 'parallel'
     assert any(d.startswith('the controller action') for d in s.decide)
     assert any("give no value for joint 'finger_joint'" in d for d in s.decide)
+
+
+def test_adopting_resets_only_what_r23_refuses_and_undo_restores_it(tmp_path):
+    """Python review S2/S3: a deliberate 'none' next to a 'none' binding, a backend not deployed and a key that
+    names no backend are kept (R23 reads none of them); one undo brings the legacy map back."""
+    p = _course_like_jaw(tmp_path)
+    p.deployment.modes = [type(p.deployment.modes[0])(m) for m in ('mock', 'isaac', 'gazebo')]     # no real
+    p.robot.gripper.sim_grasp_adapter = _legacy_adapters(mock='link_attacher', isaac='none', real='link_attacher',
+                                                         gazebo='link_attacher')
+    p.robot.gripper.sim_grasp_adapter['sim'] = p.robot.gripper.sim_grasp_adapter['mock']      # an old hand edit
+    c = Composer(apply_template(p, 'pick_and_place'))
+    before = _plain(c.project.robot.gripper.sim_grasp_adapter)
+    s = suggest_contract(c.project)
+    assert s.contract['adapters']['isaac'] == 'none'
+    eef_ops.adopt_contract(c, s.kind, s.contract)
+    assert _plain(c.project.robot.gripper.sim_grasp_adapter) == {
+        'isaac': 'none', 'real': 'link_attacher', 'gazebo': 'link_attacher', 'sim': 'link_attacher'}   # mock reset
+    c.undo()
+    assert _plain(c.project.robot.gripper.sim_grasp_adapter) == before and c.project.robot.gripper.contract is None

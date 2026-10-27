@@ -52,7 +52,7 @@ from ..model.end_effector import (IMPLIED_CAPABILITIES, NAME_TOKEN,
                                   NEVER_EVIDENCE, SET_BOOL_TARGETS, CommandInterface,
                                   ControllerFlavour, Device, DeviceActuator, DeviceBinding,
                                   DeviceSite, EndEffectorCapability, derive_device,
-                                  pseudo_joint_topic_default)
+                                  legacy_grasp_adapter_disagrees, pseudo_joint_topic_default)
 from ..model.enums import (DEFAULT_SIM_GRASP_ADAPTER, AppType, Backend, EndEffectorActuation,
                            GripperJointTarget, GripperKind, PolicyMode, SimGraspAdapter,
                            ToolActionKind)
@@ -1349,15 +1349,11 @@ class _Checks:
             out.append(f'{_prefix(23)}: controller_name "{g.controller_name}" next to a composite '
                        'contract with no gripper_command action of that controller.')
         for backend in dev.bindings:
-            if backend is Backend.GAZEBO:
-                continue                               # authoritative for the Gazebo weld only
             got = g.sim_grasp_adapter.get(backend.value)
-            if got is None:
-                continue
-            allowed = {DEFAULT_SIM_GRASP_ADAPTER[backend]}
-            if dev.bindings[backend].adapter == 'none':
-                allowed.add(SimGraspAdapter.NONE)
-            if got not in allowed:
+            if legacy_grasp_adapter_disagrees(backend, got, dev.bindings[backend].adapter):
+                allowed = {DEFAULT_SIM_GRASP_ADAPTER[backend]}
+                if dev.bindings[backend].adapter == 'none':
+                    allowed.add(SimGraspAdapter.NONE)
                 out.append(f'{_prefix(23)}: sim_grasp_adapter.{backend.value} "{got.value}" '
                            f'disagrees with the {backend.value} binding '
                            f'"{dev.bindings[backend].adapter}" (expected '

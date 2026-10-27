@@ -19,7 +19,7 @@ own robot.
 > them, a verified lift and a recovery step when the bin stalls. PLC actuation and
 > policies are architecture seams (present, not yet active). A course is included.
 
-> **Version.** `8.2.0`, the product label "TSA v8" (the Canonical Task Program complete: M3; the Application
+> **Version.** `8.2.1`, the product label "TSA v8" (the Canonical Task Program complete: M3; the Application
 > Composer: I0; a pose's taught joint configuration: ADR-0028). What each release changed is in
 > [Version notes](#version-notes), near the end.
 
@@ -1110,6 +1110,11 @@ so a bare `trainit_generate` is not found.
 > moves reach a pose in the configuration nearest the taught one (or the start state) or refuse
 > (`CONFIGURATION_UNREACHABLE`). Capture TCP + joints records it; the live check and R-I0-05 follow the rule. A
 > project without it: its bundles unchanged but the manifest's provenance.
+>
+> `8.2.1` (found by the ROS2ML-SYNC Gazebo verification): a task program may name a named state the PROJECT
+> adds on an existing MoveIt config (the generator appends it to the bundle's SRDF; R-M3-05 refused it), and
+> such a state's values are the bundle SRDF's (the config's own where both name one); R-I0-05 says what the
+> runtime does (the configuration nearest the start). Bundles unchanged but the manifest's provenance.
 
 ## Licence
 

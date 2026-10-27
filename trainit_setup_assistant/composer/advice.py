@@ -50,8 +50,9 @@ def configuration_advice(project: CanonicalProject) -> List[str]:
             move, after = step.move, (what(steps[i]) if i < len(steps) else '')
             if move is not None and move.type in (MotionType.PTP, MotionType.FREE) and move.to in poses and after:
                 out.append(f"R-I0-05: task '{task}' step {here}: {move.type.value.upper()} to the TCP pose "
-                           f"'{move.to}' before {after}: IK chooses the joint configuration when it runs and it "
-                           'can change between cycles; give the pose its configuration (Step 7: Capture TCP + joints '
+                           f"'{move.to}' before {after}: the run takes the joint configuration nearest where the "
+                           'robot starts this move, so another start (a retry, another previous step) can reach '
+                           'it in another one; give the pose its configuration (Step 7: Capture TCP + joints '
                            'records it), or move to a JOINT waypoint taught at that pose')
             if step.fallback is not None:
                 for b, body in enumerate(step.fallback.bodies, start=1):

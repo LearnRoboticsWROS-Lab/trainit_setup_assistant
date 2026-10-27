@@ -294,21 +294,42 @@ def _fmt(v: float) -> str:
 
 # --- the robot facts --------------------------------------------------------------------------------
 
+def _base_named_states(project: CanonicalProject) -> Optional[Dict[str, Dict[str, float]]]:
+    """The planning group's named states in the base MoveIt config's SRDF, ``{name: {joint: value}}``
+    (``{}`` without a base config); None when the base config has no readable SRDF (unknown, not wrong)."""
+    robot = project.robot
+    if not robot.base_moveit_config_path:
+        return {}
+    from pathlib import Path
+    from ..robotmodel.srdf_reader import read_srdf
+    srdfs = sorted((Path(robot.base_moveit_config_path) / 'config').glob('*.srdf'))
+    if not srdfs:
+        return None
+    try:
+        return {st.name: dict(st.joint_values)
+                for st in read_srdf(srdfs[0].read_text()).states_for(robot.planning_group.name)}
+    except Exception:                                          # noqa: BLE001 - unknown, not wrong
+        return None
+
+
+def _bundle_named_states(project: CanonicalProject,
+                         base: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:
+    """``base`` plus the project's own named states of the planning group it lacks: what the bundle's
+    SRDF will hold. The generator appends a project state missing from the copied SRDF and keeps the
+    SRDF's own where both name one (``scene_loader_moveit_config_pkg._rewrite_srdf``); a state is the
+    group's only when it names the group (both generators write ``group=""`` as given: no group's)."""
+    group = project.robot.planning_group.name
+    out = dict(base)
+    for st in project.robot.named_states:
+        if st.group == group and st.name not in out:
+            out[st.name] = dict(st.joint_values)
+    return out
+
+
 def _named_states(project: CanonicalProject) -> Optional[set]:
     """The named states of the planning group the bundle's SRDF will have; None = unknown."""
-    robot = project.robot
-    group = robot.planning_group.name
-    if robot.base_moveit_config_path:
-        from pathlib import Path
-        from ..robotmodel.srdf_reader import read_srdf
-        srdfs = sorted((Path(robot.base_moveit_config_path) / 'config').glob('*.srdf'))
-        if not srdfs:
-            return None
-        try:
-            return {s.name for s in read_srdf(srdfs[0].read_text()).states_for(group)}
-        except Exception:                                      # noqa: BLE001 - unknown, not wrong
-            return None
-    return {s.name for s in robot.named_states if not s.group or s.group == group}
+    base = _base_named_states(project)
+    return None if base is None else set(_bundle_named_states(project, base))
 
 
 class _Frames:
@@ -343,25 +364,11 @@ class _Frames:
 
 
 def named_state_values(project: CanonicalProject) -> Dict[str, Dict[str, float]]:
-    """The planning group's named states, ``{name: {joint: value}}``: the base MoveIt config's SRDF when the
-    project has one (what the bundle's SRDF will hold), the project's own named states merged over it --
-    of THIS group only (an SRDF often has a 'home' for the gripper too)."""
-    robot = project.robot
-    group = robot.planning_group.name
-    out: Dict[str, Dict[str, float]] = {}
-    if robot.base_moveit_config_path:
-        from pathlib import Path
-        from ..robotmodel.srdf_reader import read_srdf
-        srdfs = sorted((Path(robot.base_moveit_config_path) / 'config').glob('*.srdf'))
-        try:
-            if srdfs:
-                out = {st.name: dict(st.joint_values) for st in read_srdf(srdfs[0].read_text()).states_for(group)}
-        except Exception:  # noqa: BLE001 - unreadable: the project's own states only
-            out = {}
-    for st in robot.named_states:
-        if not st.group or st.group == group:
-            out[st.name] = dict(st.joint_values)
-    return out
+    """The planning group's named states, ``{name: {joint: value}}``, as the bundle's SRDF will hold them:
+    the base MoveIt config's SRDF when the project has one, plus the project's own states it lacks -- of
+    THIS group only (an SRDF often has a 'home' for the gripper too). An unreadable SRDF: the project's
+    own states, a best effort (the generator then copies that SRDF unmerged)."""
+    return _bundle_named_states(project, _base_named_states(project) or {})
 
 
 # --- the planner ----------------------------------------------------------------------------------

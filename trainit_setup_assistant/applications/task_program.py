@@ -34,7 +34,7 @@ at run time.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..catalog import declared_providers, provider_defaults, tmr_planner_registry
@@ -102,6 +102,9 @@ class Target:
     frame: str = ''                              # '' = the robot's base frame
     tcp: str = ''                                # '' = the robot's tip link
     derivation: str = ''                         # a relative target's: "w1 + ... along ..."
+    # ADR-0028: the joint configuration a pose is reached in (the group's joints, rad), and its source
+    configuration: Optional[Tuple[float, ...]] = None
+    configuration_from: str = ''
 
     def keys(self) -> Dict[str, object]:
         """The waypoint's task_parameters keys, in the order bt_params writes them."""
@@ -113,6 +116,8 @@ class Target:
                 out['frame'] = self.frame
             if self.tcp:
                 out['tcp'] = self.tcp
+            if self.configuration is not None:
+                out['configuration'] = list(self.configuration)
         elif self.named:
             out['named'] = self.named
         else:
@@ -337,6 +342,28 @@ class _Frames:
         return None
 
 
+def named_state_values(project: CanonicalProject) -> Dict[str, Dict[str, float]]:
+    """The planning group's named states, ``{name: {joint: value}}``: the base MoveIt config's SRDF when the
+    project has one (what the bundle's SRDF will hold), the project's own named states merged over it --
+    of THIS group only (an SRDF often has a 'home' for the gripper too)."""
+    robot = project.robot
+    group = robot.planning_group.name
+    out: Dict[str, Dict[str, float]] = {}
+    if robot.base_moveit_config_path:
+        from pathlib import Path
+        from ..robotmodel.srdf_reader import read_srdf
+        srdfs = sorted((Path(robot.base_moveit_config_path) / 'config').glob('*.srdf'))
+        try:
+            if srdfs:
+                out = {st.name: dict(st.joint_values) for st in read_srdf(srdfs[0].read_text()).states_for(group)}
+        except Exception:  # noqa: BLE001 - unreadable: the project's own states only
+            out = {}
+    for st in robot.named_states:
+        if not st.group or st.group == group:
+            out[st.name] = dict(st.joint_values)
+    return out
+
+
 # --- the planner ----------------------------------------------------------------------------------
 
 class _Planner:
@@ -353,6 +380,7 @@ class _Planner:
         self._limits_problem: Optional[str] = None
         self._limits_read = False
         self._cycles = set()
+        self._named: Optional[Dict[str, Dict[str, float]]] = None   # ADR-0028: read once, when a pose names one
         self._capture_keys: Dict[str, Dict[str, str]] = {}
         # vNext M3.6: the task_parameters entries the manipulation idioms derive, in program order
         self.bound: Dict[str, Tuple[Dict[str, object], List[str]]] = {}
@@ -457,8 +485,45 @@ class _Planner:
             t = self._relative(wp, chain)
             if t is None:
                 return None
+        if wp.configuration is not None:
+            values = self._configuration(wp)
+            if values is not None:
+                t = replace(t, configuration=values, configuration_from=wp.configuration)
         self.targets[name] = t
         return t
+
+    def _configuration(self, wp: TaskWaypoint) -> Optional[Tuple[float, ...]]:
+        """The joint values of the configuration a pose names (ADR-0028): a joint waypoint of the program
+        -- its joints, or its named state's values for every joint of the planning group."""
+        where = f"waypoint '{wp.name}' configuration '{wp.configuration}'"
+        ref = self.waypoints.get(wp.configuration)
+        if ref is None:
+            self.refuse(f"R-M3-03: {where}: no waypoint is named '{wp.configuration}' (a configuration is a joint "
+                        'waypoint of the program: Capture TCP + joints records one)')
+            return None
+        if ref.type is not WaypointType.JOINT:
+            self.refuse(f"R-M3-05: {where}: '{wp.configuration}' is a tcp target -- a configuration is a JOINT "
+                        'waypoint (the joints the pose was taught with)')
+            return None
+        joints = list(self.robot.planning_group.joints)
+        if ref.joints is not None:
+            if len(ref.joints) != len(joints):
+                self.refuse(f"R-M3-05: {where}: '{wp.configuration}' has {len(ref.joints)} joint value(s), and "
+                            f"planning group '{self.robot.planning_group.name}' has {len(joints)}")
+                return None
+            return tuple(float(v) for v in ref.joints)
+        values = self._named_states().get(ref.named) or {}
+        if any(j not in values for j in joints):
+            self.refuse(f"R-M3-05: {where}: named state '{ref.named}' has no value for every joint of planning "
+                        f"group '{self.robot.planning_group.name}'")
+            return None
+        return tuple(float(values[j]) for j in joints)
+
+    def _named_states(self) -> Dict[str, Dict[str, float]]:
+        """The planning group's named states (the base MoveIt config's SRDF, the project's over it)."""
+        if self._named is None:
+            self._named = named_state_values(self.project)
+        return self._named
 
     def _relative(self, wp: TaskWaypoint, chain: Tuple[str, ...]) -> Optional[Target]:
         rel = wp.relative
@@ -1282,6 +1347,9 @@ class _Planner:
                                        'orientation': list(t.orientation)}
             if t.frame:
                 keys['frame'] = t.frame
+            if role == roles[0] and t.configuration is not None:   # roles[0]: the PreGrasp / PreRelease (a PTP)
+                # ADR-0028: the PTP to the PreGrasp / PreRelease in the configuration the target was taught in
+                keys['configuration'] = list(t.configuration)
             self._bind(mp.waypoint, keys, mp, f"{role} of task '{task}' step {index}: {text} (resolved by TSA)")
         return True
 
@@ -1873,6 +1941,9 @@ class _Planner:
                 lines = []
                 if t.derivation:
                     lines.append(f'{wp.name} = {t.derivation} (a relative target, resolved by TSA)')
+                if t.configuration is not None:
+                    lines.append(f"configuration = '{t.configuration_from}' (ADR-0028: a ptp / free move reaches "
+                                 'the pose in the joint configuration nearest it, or refuses)')
                 used = uses.get(name, [])
                 if used:
                     keys.update(_move_keys(used[0]))
@@ -2330,7 +2401,8 @@ def _steps_xml(steps: Sequence[StepPlan], indent: str) -> List[str]:
     return out
 
 
-__all__ = ['CAPTURE_PREFIX', 'MIN_MOVE_SCALING', 'percent', 'task_tree_id', 'MovePlan', 'PathPlan', 'PlannedEvent',
+__all__ = ['CAPTURE_PREFIX', 'MIN_MOVE_SCALING', 'named_state_values',
+           'percent', 'task_tree_id', 'MovePlan', 'PathPlan', 'PlannedEvent',
            'CandidateSet', 'TaskSummary', 'iter_plans',
            'ProgramPlan', 'ProgramRefusals', 'StepPlan',
            'PATH_START_TOLERANCE', 'TMR_BASE_PROFILE', 'Target', 'TaskProgramApplication', 'plan_program',

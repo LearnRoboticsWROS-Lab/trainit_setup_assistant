@@ -388,6 +388,9 @@ TMR_FLOORS = {
     'DetectCandidates': ('2.5.0', 'cb4d1a2',
                          'DetectCandidates (a grasp-candidate set; trainit_interfaces >= 0.2.0 through TMR)'),
     'SetWaypointFromCandidate': ('2.5.0', 'cb4d1a2', "SetWaypointFromCandidate (a grasp idiom's targets)"),
+    # ADR-0028: a pose waypoint's taught joint configuration (the entry key `configuration`) is honoured
+    # since 5635584 (TMR 2.6.0); an older TMR ignores the key -- the configuration silently dropped
+    'pose_configuration': ('2.6.0', '5635584', "a pose's taught joint configuration (ADR-0028)"),
 }
 # The TMR_FLOORS rows only a CANONICAL package can be given -- one whose bt_params carry the
 # end-effector contract's eef block (ADR-0022, its amendment M2.7; ADR-0021 amendment G0): a
@@ -400,7 +403,7 @@ EEF_CONTRACT_CAPABILITIES = ('VerifyGrasp', 'CommandActuator', 'detect_fault', '
 # had before them.
 TASK_PROGRAM_CAPABILITIES = ('FollowPath', 'waypoint_canonical_keys', 'move_goal_tolerance',
                              'ProcessEvent', 'detect_trigger', 'follow_path_range', 'path_events',
-                             'DetectCandidates', 'SetWaypointFromCandidate')
+                             'DetectCandidates', 'SetWaypointFromCandidate', 'pose_configuration')
 
 
 # --- the end-effector ADAPTER rows (ADR-0022 D6) ------------------------------------------------

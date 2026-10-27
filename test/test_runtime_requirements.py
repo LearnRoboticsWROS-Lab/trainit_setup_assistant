@@ -117,6 +117,8 @@ PINNED_FLOORS = {
     # vNext M3.6 (ADR-0026): the grasp-candidate contract's nodes, TMR 2.5.0
     'DetectCandidates': ('2.5.0', 'cb4d1a2'),
     'SetWaypointFromCandidate': ('2.5.0', 'cb4d1a2'),
+    # ADR-0028: a pose's taught joint configuration, TMR 2.6.0 (5635584)
+    'pose_configuration': ('2.6.0', '5635584'),
 }
 
 
@@ -1450,7 +1452,7 @@ def test_1_a_snapshot_capability_is_not_a_dependency(bundles):
     names = {dep for rel, text in files.items() if rel.endswith('package.xml')
              for _t, dep, _a in _deps(text)}
     assert not names & {'trainit_perception', 'trainit_policy_runtime', 'moveit_servo'}
-    assert snap['derived_with']['trainit_motion_runtime'] == '2.5.1'      # refreshed in vNext I0 (TMR 2.5.1)
+    assert snap['derived_with']['trainit_motion_runtime'] == '2.6.0'      # refreshed for ADR-0028 (TMR 2.6.0)
     assert {v for rel, text in files.items() if rel.endswith('package.xml')
             for v, _c in _tmr_lines(text)} == {'1.4.0'}
 
@@ -1663,3 +1665,18 @@ def test_5_the_installed_components_do_not_move_a_requirement():
             for xml in here.glob('*/package.xml'):
                 assert not {'9.9.9', '0.0.1'} & set(re.findall(r'\d+\.\d+\.\d+',
                                                                xml.read_text())), xml
+
+
+# --- ADR-0028: a pose's taught joint configuration ----------------------------------------------------
+
+def test_a_pose_with_a_taught_configuration_needs_tmr_2_6_0_and_one_without_keeps_its_floor():
+    """An older TMR ignores the entry key `configuration` and the taught configuration is dropped silently: a
+    package whose bt_params carry it declares TMR >= 2.6.0; the same package without the key keeps its floor."""
+    tree = _tree('<MoveWaypoint waypoint="w1"/>')
+    entry = '      w1: {type: tcp, position: [0.4, 0.0, 0.3], orientation: [1.0, 0.0, 0.0, 0.0], profile: transit'
+    without = '/**:\n  ros__parameters:\n    task_parameters:\n' + entry + '}\n'
+    with_key = '/**:\n  ros__parameters:\n    task_parameters:\n' + entry + ', configuration: [0.1, 0.2]}\n'
+    plain = rr.use_of(trees={'t.xml': tree}, bt_params=[without])
+    taught = rr.use_of(trees={'t.xml': tree}, bt_params=[with_key])
+    assert 'pose_configuration' not in plain.capabilities and rr.requirement(plain).version == '2.2.0'
+    assert 'pose_configuration' in taught.capabilities and rr.requirement(taught).version == '2.6.0'

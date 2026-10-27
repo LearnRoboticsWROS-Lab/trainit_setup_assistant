@@ -155,14 +155,21 @@ def summary(wp: dict) -> str:
     if k == 'TCP':
         p, r = mm(wp.get('position') or [0, 0, 0]), rpy_deg(wp.get('orientation') or [0, 0, 0, 1])
         frame = f" in {wp['frame']}" if wp.get('frame') else ''
-        return (f'XYZ ({p[0]:g}, {p[1]:g}, {p[2]:g}) mm · RPY ({r[0]:g}, {r[1]:g}, {r[2]:g})°{frame}')
+        return (f'XYZ ({p[0]:g}, {p[1]:g}, {p[2]:g}) mm · RPY ({r[0]:g}, {r[1]:g}, {r[2]:g})°{frame}'
+                + _configuration(wp))
     if k == 'Joints':
         return 'joints (' + ', '.join(f'{v:g}' for v in joints_deg(wp.get('joints') or [])) + ')°'
     if k == 'Named':
         return f"named state '{wp['named']}' (MoveIt config)"
     rel = wp['relative']
     offs = ', '.join(f'{a} {rel[a] * 1000.0:g} mm' for a in ('dx', 'dy', 'dz') if rel.get(a))
-    return f"relative to '{rel['to']}' along {rel['frame']}" + (f': {offs}' if offs else ' (no offset)')
+    return (f"relative to '{rel['to']}' along {rel['frame']}" + (f': {offs}' if offs else ' (no offset)')
+            + _configuration(wp))
+
+
+def _configuration(wp: dict) -> str:
+    """ADR-0028: the configuration a pose is reached in, when it names one."""
+    return f" · configuration '{wp['configuration']}'" if wp.get('configuration') else ''
 
 
 __all__ = ['captured_joint_waypoint', 'captured_tcp_waypoint', 'clean_quaternion', 'edited_joints',

@@ -19,8 +19,8 @@ own robot.
 > them, a verified lift and a recovery step when the bin stalls. PLC actuation and
 > policies are architecture seams (present, not yet active). A course is included.
 
-> **Version.** `8.1.0`, the product label "TSA v8" (the Canonical Task Program complete: M3; the Application
-> Composer: I0). What each release changed is in
+> **Version.** `8.2.0`, the product label "TSA v8" (the Canonical Task Program complete: M3; the Application
+> Composer: I0; a pose's taught joint configuration: ADR-0028). What each release changed is in
 > [Version notes](#version-notes), near the end.
 
 ---
@@ -648,9 +648,11 @@ Composer** -- the SAME canonical program as the YAML below, never a second model
   (objects show CURRENT, SNAPSHOT, STALE or MANUAL).
 - **Waypoints** -- in mm and degrees; **taught** from the running robot: move it with RViz's
   MotionPlanning gizmo, Plan, Execute, then **Capture TCP**, **Capture joints** or **Capture TCP + joints**
-  (the pose AND the configuration that reaches it, `X` / `X_j`: a PTP to `X_j` reaches the pose the same way
-  every cycle). Optional **Preview in RViz** (tick MotionPlanning > "External Comm."), tried from several
-  IK starts.
+  (the pose AND the configuration that reaches it, `X` / `X_j`, with `X`'s **Configuration** set to `X_j`: a PTP
+  or free move to the pose then reaches it in that joint configuration every cycle, or refuses -- ADR-0028; the
+  TCP and relative editors set or clear it). Without a configuration a PTP / free move to a pose takes the
+  configuration nearest where the robot is (TMR 2.6.0). Optional **Preview in RViz** (tick MotionPlanning >
+  "External Comm."), tried from several IK starts.
 - **Check the waypoints (live)** -- before Generate, with the planning environment running: MoveIt's IK, FK
   and state validity of every waypoint, and of the program's motions **along their way** (a PTP's
   joint-space line, a LIN's Cartesian line, a grasp's or release's own approach and retract), so a PTP
@@ -1101,6 +1103,13 @@ so a bare `trainit_generate` is not found.
 > `trainit_motion_runtime` 2.5.0); Capture TCP + joints; the live checks of the waypoints, the motions and
 > the end effector. `grasp_attach_mode: attach_box` (a held part as a box in the planning scene) needs
 > `trainit_motion_runtime` 2.5.1 (2.5.0's attach was refused by move_group).
+>
+> `8.2.0` (ADR-0028): a TCP or relative waypoint may name the joint waypoint it was taught with
+> (`configuration: w1_j`); the bundle entry carries the joint values (and a grasp's PreGrasp / a release's
+> PreRelease at that target), and the package then declares `trainit_motion_runtime >= 2.6.0`, whose PTP / free
+> moves reach a pose in the configuration nearest the taught one (or the start state) or refuse
+> (`CONFIGURATION_UNREACHABLE`). Capture TCP + joints records it; the live check and R-I0-05 follow the rule. A
+> project without it: its bundles unchanged but the manifest's provenance.
 
 ## Licence
 

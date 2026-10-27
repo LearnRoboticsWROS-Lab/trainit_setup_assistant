@@ -655,7 +655,7 @@ def test_j_a_template_file_that_does_not_parse_keeps_its_old_floor():
     legacy = requirement(use_of(trees=[broken], launches=[]))
     assert legacy.version == '1.7.0'                     # unchanged by the M3.3 rows
     program = requirement(use_of(trees=[broken + ' <SubTree ID="task_x"'], launches=[]))
-    assert program.version == '2.5.0'                    # the newest task-program row (vNext M3.6)
+    assert program.version == '2.6.0'                    # the newest task-program row (ADR-0028)
 
 
 # --- O. refused before generation ---------------------------------------------------------------

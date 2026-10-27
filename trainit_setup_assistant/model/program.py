@@ -284,7 +284,9 @@ class TaskWaypoint(_Strict):
 
     tcp    ``position`` [x, y, z] (m) + ``orientation`` [qx, qy, qz, qw] in ``frame`` (default the
            robot's base frame), for ``tcp`` (default the robot's tip link); or ``relative`` to
-           another waypoint (it then inherits that waypoint's frame and TCP)
+           another waypoint (it then inherits that waypoint's frame and TCP). ``configuration``
+           (ADR-0028): a JOINT waypoint naming the configuration the pose was taught in -- a PTP or
+           free move reaches the pose in it, or is refused (what "Capture TCP + joints" records)
     joint  ``joints`` (rad, one per joint of the planning group) or ``named`` (a named state)
     """
 
@@ -297,9 +299,11 @@ class TaskWaypoint(_Strict):
     frame: Optional[str] = None
     tcp: Optional[str] = None
     relative: Optional[RelativeTarget] = None
+    configuration: Optional[str] = None
 
     _keys = _strict_keys(WAYPOINT_HINTS, 'a waypoint')
     _name_ok = _checked('name', _waypoint_name, 'waypoint name')
+    _configuration_ok = _checked('configuration', _waypoint_name, 'configuration')
 
     @validator('type', pre=True)
     def _where_type(cls, v):  # noqa: N805
@@ -318,7 +322,7 @@ class TaskWaypoint(_Strict):
         where = f"waypoint '{name}'"
         pose = values.get('position') is not None or values.get('orientation') is not None
         if values.get('type') is WaypointType.JOINT:
-            given = [k for k in ('position', 'orientation', 'frame', 'tcp', 'relative')
+            given = [k for k in ('position', 'orientation', 'frame', 'tcp', 'relative', 'configuration')
                      if values.get(k) is not None]
             if given:
                 raise ValueError(f'R-M3-02: {where} is a joint target: {", ".join(given)} belong to '

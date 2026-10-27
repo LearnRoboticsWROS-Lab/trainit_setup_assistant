@@ -37,6 +37,7 @@ import pytest
 pytestmark = pytest.mark.skipif(os.environ.get('TRAINIT_LAUNCH_TEST') != '1',
                                 reason='opt-in: set TRAINIT_LAUNCH_TEST=1 (builds and launches)')
 
+_NO_SOLUTION = 'no collision-free joint solution for the pose'   # TMR 2.6.0's resolver (ADR-0028)
 DATA = Path(__file__).resolve().parent / 'data' / 'm3_7'
 PREFIX = 'm37'
 DOMAIN = 76
@@ -80,7 +81,10 @@ class CompositionLaunch:
         self.moves = re.findall(r"\]: MoveWaypoint '(\w+)' \(", self.runner)
         self.verify_lines = [line for line in self.runner.splitlines() if 'VerifyGrasp' in line]
         # the retry's two tries: the only motions MoveIt may refuse
-        self.plan_failed = [line for line in self.runner.splitlines() if 'PLAN FAILED' in line]
+        # TMR 2.6.0 (ADR-0028): a PTP to a pose with no IK solution is refused by the runtime's own resolver
+        # (NO_IK_SOLUTION, the plan phase: the same TARGET failure) before Pilz is asked
+        self.plan_failed = [line for line in self.runner.splitlines()
+                            if 'PLAN FAILED' in line or _NO_SOLUTION in line]
         self.never = sorted(n for n in NEVER if n in self.runner or n in self.bringup)
         for line in (f'[runner] events {self.events}', f'[runner] moves {self.moves}',
                      f'[runner] VerifyGrasp lines {len(self.verify_lines)}',
@@ -172,7 +176,7 @@ def test_e2e_the_calls_and_control_steps_run_in_the_programs_order(e2e):
     # the retry's two tries are the only refused targets: Pilz PTP finds no IK solution (code -31),
     # a TARGET failure -- no fault is written or latched (exit 0 above)
     assert len(run.plan_failed) == 2, _why(e2e)
-    assert all('planner=PTP, code=-31' in line for line in run.plan_failed), _why(e2e)
+    assert all('planner=PTP, code=-31' in line or _NO_SOLUTION in line for line in run.plan_failed), _why(e2e)
 
 
 def test_e2e_no_log_names_a_refusal_a_failed_motion_a_fault_or_a_contact(e2e):

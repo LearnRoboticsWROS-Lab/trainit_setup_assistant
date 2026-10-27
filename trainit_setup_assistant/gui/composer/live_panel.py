@@ -141,7 +141,13 @@ class LivePanel(QWidget):
             return self._error(f'Capture TCP: {exc} — start the planning environment (Step 4) first')
         name = self._name()
         spec = pose.captured_tcp_waypoint(name, position, orientation)
-        return self._commit(spec, f'TCP {robot.base_frame} -> {robot.tip_link}')
+        old = next((w for w in self._composer().document().get('waypoints') or [] if w['name'] == name), None)
+        what = f'TCP {robot.base_frame} -> {robot.tip_link}'
+        if old and old.get('configuration'):
+            # ADR-0028: never dropped silently -- the live check says whether the new pose is still reached near it
+            spec['configuration'] = old['configuration']
+            what += f"; its configuration '{old['configuration']}' kept (Capture TCP + joints re-teaches both)"
+        return self._commit(spec, what)
 
     def capture_joints(self) -> Optional[str]:
         robot = self.ctrl.project.robot
@@ -175,6 +181,7 @@ class LivePanel(QWidget):
         name = self._name()
         tcp = pose.captured_tcp_waypoint(name, position, orientation)
         js = pose.captured_joint_waypoint(f'{name}_j', [values[j] for j in joints])
+        tcp['configuration'] = js['name']           # ADR-0028: a PTP / free move reaches the pose in it
         old = {w['name']: w for w in self._composer().document().get('waypoints') or []}
         if not self._kind_change_accepted([tcp, js], old):
             return None
@@ -188,8 +195,8 @@ class LivePanel(QWidget):
                  for w in (tcp, js)]
         self.message.setStyleSheet('color:#2e7d32;')
         self.message.setText(f"Captured the robot's CURRENT TCP and joints: {' and '.join(notes)} — "
-                             f"{pose.summary(tcp)}; a PTP to '{js['name']}' reaches it with this configuration "
-                             '(Undo reverts both)')
+                             f"{pose.summary(tcp)}; a PTP to '{name}' or to '{js['name']}' reaches it in this "
+                             'configuration (Undo reverts both)')
         self._changed(name)
         return name
 

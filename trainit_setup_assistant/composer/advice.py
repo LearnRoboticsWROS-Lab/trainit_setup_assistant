@@ -32,7 +32,8 @@ def configuration_advice(project: CanonicalProject) -> List[str]:
     if not app.is_task_program():
         return []
     program = app.program
-    poses = {w.name for w in program.waypoints if w.type != WaypointType.JOINT}
+    # ADR-0028: a pose that names its configuration is reached the same way every cycle -- not flagged
+    poses = {w.name for w in program.waypoints if w.type != WaypointType.JOINT and not w.configuration}
     out: List[str] = []
 
     def what(step) -> str:
@@ -50,8 +51,8 @@ def configuration_advice(project: CanonicalProject) -> List[str]:
             if move is not None and move.type in (MotionType.PTP, MotionType.FREE) and move.to in poses and after:
                 out.append(f"R-I0-05: task '{task}' step {here}: {move.type.value.upper()} to the TCP pose "
                            f"'{move.to}' before {after}: IK chooses the joint configuration when it runs and it "
-                           'can change between cycles; move to a JOINT waypoint taught at that pose (Step 7: '
-                           'Capture TCP + joints)')
+                           'can change between cycles; give the pose its configuration (Step 7: Capture TCP + joints '
+                           'records it), or move to a JOINT waypoint taught at that pose')
             if step.fallback is not None:
                 for b, body in enumerate(step.fallback.bodies, start=1):
                     walk(task, body, f'{here}.{b}')

@@ -269,6 +269,9 @@ def use_of(trees: Texts = (), bt_params: Texts = (), launches: Texts = (),
         if any(entry.get('profile') in tolerant and entry.get('motion', 'free') in _MGI_MOTIONS
                for entry in entries):
             used.add('move_goal_tolerance')
+        # ADR-0028: a pose's taught joint configuration (TMR 2.6.0)
+        if any('configuration' in entry for entry in entries):
+            used.add('pose_configuration')
     if path_events:
         used.add('path_events')
     canonical |= 'eef_block' in used

@@ -673,6 +673,8 @@ def waypoint_refs(doc: dict):
         rel = w.get('relative')
         if isinstance(rel, dict) and isinstance(rel.get('to'), str):
             yield f"waypoint '{w.get('name')}'", rel['to'], _setter(rel, 'to')
+        if isinstance(w.get('configuration'), str):          # ADR-0028: the configuration a pose was taught in
+            yield f"waypoint '{w.get('name')}' (its configuration)", w['configuration'], _setter(w, 'configuration')
     for p in doc.get('paths', []):
         where = f"path '{p.get('name')}'"
         states = p.get('states') or []

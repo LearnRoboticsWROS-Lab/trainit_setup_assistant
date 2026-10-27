@@ -20,7 +20,7 @@ import math
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from ..applications.task_program import PATH_START_TOLERANCE, Target, resolve_targets
+from ..applications.task_program import PATH_START_TOLERANCE, Target, named_state_values, resolve_targets
 from ..model.enums import MotionType
 from ..model.program import CONTROL_KINDS
 from ..model.project import CanonicalProject
@@ -56,28 +56,6 @@ def _mm(p: Sequence[float]) -> str:
 def _angle(a: Sequence[float], b: Sequence[float]) -> float:
     dot = abs(sum(x * y for x, y in zip(a, b)))
     return 2.0 * math.acos(min(1.0, dot))
-
-
-def named_state_values(project: CanonicalProject) -> Dict[str, Dict[str, float]]:
-    """The planning group's named states, ``{name: {joint: value}}``: the base MoveIt config's SRDF when the
-    project has one (what the bundle's SRDF will hold), the project's own named states merged over it --
-    of THIS group only (an SRDF often has a 'home' for the gripper too)."""
-    robot = project.robot
-    group = robot.planning_group.name
-    out: Dict[str, Dict[str, float]] = {}
-    if robot.base_moveit_config_path:
-        from pathlib import Path
-        from ..robotmodel.srdf_reader import read_srdf
-        srdfs = sorted((Path(robot.base_moveit_config_path) / 'config').glob('*.srdf'))
-        try:
-            if srdfs:
-                out = {st.name: dict(st.joint_values) for st in read_srdf(srdfs[0].read_text()).states_for(group)}
-        except Exception:  # noqa: BLE001 - unreadable: the project's own states only
-            out = {}
-    for st in robot.named_states:
-        if not st.group or st.group == group:
-            out[st.name] = dict(st.joint_values)
-    return out
 
 
 def _joint_values(project: CanonicalProject, t: Target, named: Dict[str, Dict[str, float]]) -> Optional[List[float]]:
@@ -118,6 +96,21 @@ def _path_starts(project: CanonicalProject) -> List[Tuple[str, str, str]]:
     for task in program.tasks:
         walk(task.steps)
     return list(dict.fromkeys(out))
+
+
+# TMR's DEFAULT configuration_tolerance (pose_configuration.hpp kDefaultConfigurationTolerance; a test pins the
+# two). The check is advisory: a runner that tightens the parameter can refuse what it passed (ADR-0028 item 6).
+CONFIGURATION_TOLERANCE_RAD = math.pi / 2
+
+
+def _farthest(q: Sequence[float], ref: Sequence[float]) -> Tuple[float, int]:
+    """The largest joint difference between two configurations, a joint's 2*pi turns ignored (the runtime
+    moves each joint to its equivalent nearest the reference), and on which joint. An approximation: the
+    runtime keeps an equivalent within the joint's bounds only (TSA does not read them), so for a joint limited
+    to +-pi the check can pass a solution the run refuses."""
+    diffs = [abs((a - b + math.pi) % (2 * math.pi) - math.pi) for a, b in zip(q, ref)]
+    worst = max(range(len(diffs)), key=lambda i: diffs[i]) if diffs else 0
+    return (diffs[worst] if diffs else 0.0), worst
 
 
 MAX_SEEDS = 4
@@ -176,7 +169,7 @@ def check_waypoints(project: CanonicalProject, ik: IK, fk: FK, valid: VALID,
         if t is None or t.type != 'tcp':
             continue
         frame = t.frame or robot.base_frame
-        seed_name = wp.name + JOINT_SUFFIX
+        seed_name = wp.configuration or wp.name + JOINT_SUFFIX   # ADR-0028: the configuration it names
         where = f"'{wp.name}'" + (f' = {t.derivation}' if t.derivation else '') + f' {_mm(t.position)}'
         # A numerical IK finds what lies near where it starts: one start that fails proves nothing (the same
         # pose next to the bin wall was collision-free from the taught configuration and "in collision" from
@@ -184,12 +177,23 @@ def check_waypoints(project: CanonicalProject, ik: IK, fk: FK, valid: VALID,
         # joint waypoints, then move_group's current state, before saying no.
         seeds = _seeds([joint_values.get(seed_name), previous] + list(joint_values.values()) + [None])
         try:
-            found = None
+            taught = joint_values.get(wp.configuration) if wp.configuration else None
+            found, far = None, None
             for seed in seeds:
                 found = ik(frame, t.position, t.orientation, seed, True)
-                if found is not None:
+                if found is None:
+                    continue
+                # ADR-0028: as the runtime, a solution near the configuration the pose names, from any seed
+                far = _farthest(found, taught) if taught is not None else None
+                if far is None or far[0] <= CONFIGURATION_TOLERANCE_RAD:
                     break
-            if found is not None:
+            if far is not None and far[0] > CONFIGURATION_TOLERANCE_RAD:
+                # what TMR refuses (CONFIGURATION_UNREACHABLE): the pose is not reached near its configuration
+                gap = f'joint {far[1] + 1} {far[0]:.2f} rad away'
+                out.append(CheckLine(False, wp.name, f"{where}: not reached near its configuration "
+                                                     f"'{wp.configuration}' ({gap}): the run refuses it -- teach "
+                                                     'both again with Capture TCP + joints'))
+            elif found is not None:
                 previous = found
                 from_seed = (f" (from the configuration of '{seed_name}')"
                              if seed is not None and seed == joint_values.get(seed_name) else '')
@@ -324,8 +328,10 @@ def check_motions(project: CanonicalProject, ik: IK, fk: FK, valid: VALID) -> Li
         return None, (f"named state '{entry.get('named')}' has no value for every joint of planning group "
                       f"'{group}'")
 
-    def solve_tcp(entry, seed) -> Optional[List[float]]:
+    def solve_tcp(entry, seed, honours: bool = False) -> Optional[List[float]]:
         frame = entry.get('frame') or robot.base_frame
+        if honours and entry.get('configuration') is not None:   # ADR-0028: a ptp / free move, from the taught one
+            seed = [float(v) for v in entry['configuration']]
         found = ik(frame, entry['position'], entry['orientation'], seed, True)
         return found if found is not None else ik(frame, entry['position'], entry['orientation'], seed, False)
 
@@ -408,6 +414,8 @@ def check_motions(project: CanonicalProject, ik: IK, fk: FK, valid: VALID) -> Li
         elif at.q is None:
             # where the robot is is unknown: resume only where the configuration is known -- a TCP waypoint
             # taught with its joints (X / X_j), never an IK branch chosen from move_group's current state
+            if entry.get('configuration') is not None and mp.motion in ('ptp', 'free'):
+                return _At(solve_tcp(entry, None, True), name)  # ADR-0028: known, whatever came before
             pair = plan.entries.get(mp.waypoint + JOINT_SUFFIX) if mp.waypoint not in bound else None
             q = joint_values(pair)[0] if pair and pair.get('type') == 'joint' else None
             return _At(q, name)
@@ -425,8 +433,16 @@ def check_motions(project: CanonicalProject, ik: IK, fk: FK, valid: VALID) -> Li
             if res.hits:
                 collided(mp, at, name, 'LIN', res.hits)
             return _At(res.q, name)
+        honours = mp.motion in ('ptp', 'free')                 # ADR-0028: LIN / CIRC ignore a configuration
         if q is None:
-            q = solve_tcp(entry, at.q)
+            q = solve_tcp(entry, at.q, honours)
+            far = (_farthest(q, entry['configuration'])
+                   if honours and q is not None and entry.get('configuration') is not None else None)
+            if far is not None and far[0] > CONFIGURATION_TOLERANCE_RAD:
+                say(key, CheckLine(False, wp, f'{mp.where}: {name} is not reached near its taught configuration '
+                                              f'(joint {far[1] + 1} {far[0]:.2f} rad away): the run refuses it '
+                                              '(CONFIGURATION_UNREACHABLE) -- teach the pose and its joints again'))
+                return _At(None, name)
             if q is None:
                 fix = ('change the standoff / retract, or teach the target elsewhere' if mp.waypoint in bound else
                        'teach it again, or go there through a joint waypoint')
@@ -505,5 +521,5 @@ def summary(lines: List[CheckLine]) -> str:
     return head
 
 
-__all__ = ['CheckLine', 'JOINT_SUFFIX', 'NotDecided', 'check_motions', 'check_waypoints', 'named_state_values',
-           'summary']
+__all__ = ['CONFIGURATION_TOLERANCE_RAD', 'CheckLine', 'JOINT_SUFFIX', 'NotDecided', 'check_motions',
+           'check_waypoints', 'named_state_values', 'summary']

@@ -25,6 +25,17 @@ from ...composer.ops import ComposerError
 KINDS = ('TCP', 'Joints', 'Named', 'Relative')
 
 
+NO_CONFIGURATION = '(none: nearest where the robot is)'
+
+
+def _set_configuration(spec: dict, chosen: str) -> None:
+    """ADR-0028: the configuration the editor shows, written or removed."""
+    if chosen in ('', NO_CONFIGURATION):
+        spec.pop('configuration', None)
+    else:
+        spec['configuration'] = chosen
+
+
 def _spin(lo: float, hi: float, decimals: int = 2, suffix: str = '') -> QDoubleSpinBox:
     s = QDoubleSpinBox()
     s.setRange(lo, hi)
@@ -113,6 +124,12 @@ class WaypointsPanel(QWidget):
         self.quaternion = QLabel('')
         self.quaternion.setStyleSheet('color:#777777;')
         f.addRow('Stored (qx, qy, qz, qw)', self.quaternion)
+        # ADR-0028: the joint configuration the pose is reached in (a PTP / free move honours it or refuses)
+        self.configuration = QComboBox()
+        self.configuration.setToolTip('The joint waypoint this pose was taught with (Capture TCP + joints records '
+                                      'it): a PTP or free move reaches the pose in that configuration, or refuses. '
+                                      'None: the configuration nearest where the robot is.')
+        f.addRow('Configuration', self.configuration)
         self.forms['TCP'] = w
         self.stack.addWidget(w)
 
@@ -146,6 +163,10 @@ class WaypointsPanel(QWidget):
             orow.addWidget(QLabel(lbl))
             orow.addWidget(s)
         f.addRow('Offset', orow)
+        # ADR-0028: a relative pose names its own configuration (it never inherits its reference's)
+        self.rel_configuration = QComboBox()
+        self.rel_configuration.setToolTip(self.configuration.toolTip())
+        f.addRow('Configuration', self.rel_configuration)
         self.forms['Relative'] = w
         self.stack.addWidget(w)
 
@@ -210,6 +231,7 @@ class WaypointsPanel(QWidget):
             # what the fields REALLY show (a spin clamps an out-of-range value): untouched = kept exact
             self._shown.update(mm=[s.value() for s in self.xyz], rpy=[s.value() for s in self.rpy])
             self.quaternion.setText(', '.join(f'{q:.6f}' for q in wp.get('orientation') or []))
+            self._fill_configuration(self.configuration, wp)
         elif k == 'Joints':
             self._joint_rows(wp.get('joints') or [])
         elif k == 'Named':
@@ -228,6 +250,17 @@ class WaypointsPanel(QWidget):
             for s, key in zip(self.offsets, ('dx', 'dy', 'dz')):
                 s.setValue(round(float(rel.get(key, 0.0)) * 1000.0, 2))
             self._shown['offsets'] = [s.value() for s in self.offsets]
+            self._fill_configuration(self.rel_configuration, wp)
+
+    def _fill_configuration(self, combo, wp: dict) -> None:
+        """The joint waypoints a pose can name as its configuration (ADR-0028), the current one selected (kept
+        even when no joint waypoint has that name any more: the validator says so)."""
+        combo.clear()
+        combo.addItem(NO_CONFIGURATION)
+        combo.addItems([w['name'] for w in self.waypoints() if pose.kind(w) in ('Joints', 'Named')])
+        if wp.get('configuration') and combo.findText(wp['configuration']) < 0:
+            combo.addItem(wp['configuration'])
+        combo.setCurrentText(wp.get('configuration') or NO_CONFIGURATION)
 
     def _joint_rows(self, values) -> None:
         while self.joint_form.rowCount():
@@ -288,6 +321,7 @@ class WaypointsPanel(QWidget):
             out = pose.tcp_waypoint(wp['name'], position, orientation, self.frame.text().strip() or None)
             if wp.get('tcp'):
                 out['tcp'] = wp['tcp']
+            _set_configuration(out, self.configuration.currentText())
             return out
         if k == 'Joints':
             return pose.joint_waypoint(wp['name'], pose.edited_joints(
@@ -304,6 +338,7 @@ class WaypointsPanel(QWidget):
                 rel.pop(key, None)
             else:
                 rel[key] = round(entered / 1000.0, pose.POSITION_DIGITS) + 0.0
+        _set_configuration(out, self.rel_configuration.currentText())
         return out
 
     def apply(self) -> bool:

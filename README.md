@@ -19,7 +19,7 @@ own robot.
 > them, a verified lift and a recovery step when the bin stalls. PLC actuation and
 > policies are architecture seams (present, not yet active). A course is included.
 
-> **Version.** `8.2.2`, the product label "TSA v8" (the Canonical Task Program complete: M3; the Application
+> **Version.** `8.2.3`, the product label "TSA v8" (the Canonical Task Program complete: M3; the Application
 > Composer: I0; a pose's taught joint configuration: ADR-0028). What each release changed is in
 > [Version notes](#version-notes), near the end.
 
@@ -1121,6 +1121,14 @@ so a bare `trainit_generate` is not found.
 > LinkAttacher weld is not a suction command), and a `ros2_control` binding only where its flavour is known
 > (gazebo; elsewhere `none`, to decide); Adopt resets the legacy per-backend grasp adapters but Gazebo's weld
 > (they disagreed with the contract's bindings, R23). Bundles unchanged but the manifest's provenance.
+>
+> `8.2.3` (found by simulating a ROS2ML student who updates): a Gazebo cell's grasp bridge
+> (`<project>_trainit_config/scripts/link_attacher_bridge.py`) is generated executable -- `colcon build
+> --symlink-install` links the install tree to it, and a non-executable one stopped the `gazebo` bring-up with
+> "executable ... not found on the libexec directory"; the bridge now logs the LinkAttacher plugin's answer to
+> every weld and release, tries a refused one once more, then reports it as an error with the plugin's reason
+> (a part never held was invisible, and the cycle still ended SUCCESS). Gazebo bundles: that script's bytes and
+> mode; the others unchanged but the manifest's provenance.
 
 ## Licence
 

@@ -19,7 +19,7 @@ own robot.
 > them, a verified lift and a recovery step when the bin stalls. PLC actuation and
 > policies are architecture seams (present, not yet active). A course is included.
 
-> **Version.** `8.2.3`, the product label "TSA v8" (the Canonical Task Program complete: M3; the Application
+> **Version.** `8.3.0`, the product label "TSA v8" (the Canonical Task Program complete: M3; the Application
 > Composer: I0; a pose's taught joint configuration: ADR-0028). What each release changed is in
 > [Version notes](#version-notes), near the end.
 
@@ -865,6 +865,13 @@ loop, retry and alternative, with no condition, variable or expression of their 
   `test/data/m3_7/decompositions/`.
 - The application types `gluing`, `follow_path`, `waypoint_replay` and `cnc` -- names that never
   generated a bundle -- are refused at load: each is a Canonical Task Program.
+- **Step ids** (TSA 8.3, D18, ADR-0030): any step may carry an optional `id` -- a name you choose, unique
+  within its task (control bodies included), e.g. `- {id: pick, grasp: {...}}`. It names that application
+  step in the runtime's execution events (`trainit/execution_events`: entered, exited with its status, a
+  grasp step's attempt and candidate), which a TrainIt data recorder can trigger on. Ids are written in
+  `project.yaml` (the Composer keeps a step's id when you edit the step). A step with an id runs inside
+  `<Sequence name="trainit_step:<id>:<kind>">` in the generated tree; a step without one -- and so every
+  project that names none -- generates exactly the tree it did before.
 
 ## Running a generated bundle
 
@@ -1129,6 +1136,11 @@ so a bare `trainit_generate` is not found.
 > every weld and release, tries a refused one once more, then reports it as an error with the plugin's reason
 > (a part never held was invisible, and the cycle still ended SUCCESS). Gazebo bundles: that script's bytes and
 > mode; the others unchanged but the manifest's provenance.
+>
+> `8.3.0` (D0.5, decision D18, ADR-0030): a task step may carry an optional canonical `id` (a name, unique
+> within its task); an identified step is generated inside `<Sequence name="trainit_step:<id>:<kind>">`, the
+> carrier TMR's execution-event observer reads. Projects without step ids: bundles unchanged but the manifest's
+> provenance.
 
 ## Licence
 

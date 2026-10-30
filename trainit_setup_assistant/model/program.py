@@ -1151,11 +1151,29 @@ def _task_call(value: Any, what: str):
     return value if value is None else _name(value, what)
 
 
+STEP_ID_KEY = 'id'
+
+
+def step_mapping_kind(step: Any) -> Optional[str]:
+    """The one kind key of a step MAPPING (``{move: ...}``, ``{id: approach, grasp: ...}``), its optional
+    ``id`` aside; ``None`` when it is not exactly one kind."""
+    if not isinstance(step, dict):
+        return None
+    kinds = [k for k in step if k != STEP_ID_KEY]
+    return kinds[0] if len(kinds) == 1 else None
+
+
 class TaskStep(_Strict):
     """One step of a task: exactly one of ``move``, ``path`` (a path's name), ``process``,
     ``dwell``, ``detect``, ``grasp``, ``release``, ``tool``, ``task`` (a task's name: a call),
-    ``repeat``, ``retry`` or ``fallback``."""
+    ``repeat``, ``retry`` or ``fallback``.
 
+    ``id`` (optional, D18 / ADR-0024 amendment, D0.5): the step's CANONICAL id, chosen by the user, unique
+    within its task (control bodies included), stable across reordering. It names the application step in
+    the runtime's execution events (ADR-0030); a step without one emits none, and a project without any
+    generates byte-identical trees."""
+
+    id: Optional[str] = None
     move: Optional[MoveStep] = None
     path: Optional[str] = None
     process: Optional[ProcessStep] = None
@@ -1170,6 +1188,7 @@ class TaskStep(_Strict):
     fallback: Optional[FallbackStep] = None
 
     _keys = _strict_keys(STEP_HINTS, 'a step')
+    _id = _checked('id', lambda v, w: v if v is None else _name(v, w), 'step id')
     _path = _checked('path', lambda v, w: v if v is None else _name(v, w), 'path step')
     _task = _checked('task', _task_call, 'task call')
 
@@ -1256,6 +1275,18 @@ class Task(_Strict):
                 if d.name in seen:
                     raise ValueError(f"R-M3-02: task '{values.get('name')}' declares {what[:-1]} '{d.name}' twice")
                 seen.add(d.name)
+        return values
+
+    @root_validator(skip_on_failure=True)
+    def _step_ids_once(cls, values):  # noqa: N805
+        seen = {}
+        for label, step in walk_steps(values.get('steps') or []):
+            if step.id is None:
+                continue
+            if step.id in seen:
+                raise ValueError(f"R-M3-02: task '{values.get('name')}' names two steps '{step.id}' (steps "
+                                 f'{seen[step.id]} and {label}): a step id is unique within its task')
+            seen[step.id] = label
         return values
 
     def calls(self) -> List[Tuple[str, str]]:
@@ -1532,7 +1563,7 @@ def _place(loc, data) -> str:
             step = child
             for x in idx:
                 step = step[x] if isinstance(step, list) and x < len(step) else None
-            kind = next(iter(step), None) if isinstance(step, dict) and len(step) == 1 else None
+            kind = step_mapping_kind(step)
             label = '.'.join([label] + [str(x + 1) for x in idx])
             parts[at] = f'step {label}' + (f' ({kind})' if kind else '')
             node, i = (step.get(kind) if kind else step), i + 1 + nested
@@ -1549,7 +1580,7 @@ def _place(loc, data) -> str:
             continue
         if key == 'steps' and i + 1 < len(loc) and isinstance(loc[i + 1], int):
             step = child[loc[i + 1]] if isinstance(child, list) and loc[i + 1] < len(child) else None
-            kind = next(iter(step), None) if isinstance(step, dict) and len(step) == 1 else None
+            kind = step_mapping_kind(step)
             parts.append(f'step {loc[i + 1] + 1}' + (f' ({kind})' if kind else ''))
             label, at = str(loc[i + 1] + 1), len(parts) - 1
             node, i = (step.get(kind) if kind else step), i + 2
@@ -1600,4 +1631,4 @@ __all__ = ['AnchorWhen', 'CAPTURE_KEY', 'CHANNEL_KINDS', 'DetectSource', 'Detect
            'PathEvent', 'PathGenerator', 'PathSegment', 'ProcessEventSpec', 'ProcessStep', 'RelativeFrame',
            'RelativeTarget', 'RuntimeSettings', 'STEP_KINDS', 'Task', 'TaskProgram', 'TaskStep',
            'TaskWaypoint', 'CONTROL_KINDS', 'FallbackStep', 'RepeatStep', 'RetryStep', 'TaskData',
-           'TaskDataType', 'walk_steps']
+           'TaskDataType', 'walk_steps', 'STEP_ID_KEY', 'step_mapping_kind']

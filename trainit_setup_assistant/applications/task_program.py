@@ -62,6 +62,9 @@ PATH_START_TOLERANCE = (0.005, 0.035)
 TMR_BASE_PROFILE = 'default'
 TREE_FILE = 'task_program.xml'
 MAIN_TREE = 'MainTree'
+# D18 / ADR-0030: a step with a canonical id runs inside <Sequence name="trainit_step:<id>:<kind>">: the carrier
+# the runner's execution-event observer reads (BT.CPP's own `name` attribute: no custom attribute, no port).
+STEP_NAME_PREFIX = 'trainit_step:'
 # vNext M3.5: a capture's default blackboard key, numbered per task in execution order
 CAPTURE_PREFIX = 'captures'
 # the blackboard names the runner itself sets (bt_context.hpp): no capture may write them
@@ -183,6 +186,7 @@ class StepPlan:
     # vNext M3.7: the step's label in its task (3, 3.2, 3.2.1), a call's task, a control step's count
     # (repeat cycles, retry attempts) and the plans of its body (repeat, retry) or alternatives (fallback)
     label: str = ''
+    step_id: Optional[str] = None                # D18: the step's canonical id, when the user gave one
     call: Optional[str] = None
     count: Optional[int] = None
     bodies: List[List['StepPlan']] = field(default_factory=list)
@@ -1661,6 +1665,7 @@ class _Planner:
         program = self.program
         out: List[StepPlan] = []
         captures = self._counters.setdefault(task.name, [0])     # vNext M3.5: the task's next captures.<n>
+        ids = {(f'{prefix}.{i}' if prefix else str(i)): step.id for i, step in enumerate(steps, start=1) if step.id}
         for i, step in enumerate(steps, start=1):
             index = f'{prefix}.{i}' if prefix else str(i)
             kind = step.kind()
@@ -1722,6 +1727,8 @@ class _Planner:
                     out.append(sp)
                 if kind in ('grasp', 'release'):
                     flow.at, flow.why = None, ''
+        for sp in out:                               # D18: every plan carries its step's label
+            sp.step_id = ids.get(sp.label)
         return out
 
     def _plan_call(self, task, index: str, callee: str, flow: _Flow) -> StepPlan:
@@ -2391,8 +2398,12 @@ def _steps_xml(steps: Sequence[StepPlan], indent: str) -> List[str]:
     called task reads and writes the application's one blackboard, so its data is bound by name), a
     repeat or retry around its body, a fallback around its alternatives."""
     out: List[str] = []
-    inner = indent + '  '
+    base = indent
     for sp in steps:
+        indent = base + '  ' if sp.step_id else base       # D18: an identified step is wrapped, nothing else
+        inner = indent + '  '
+        if sp.step_id:
+            out.append(f'{base}<Sequence name="{STEP_NAME_PREFIX}{sp.step_id}:{sp.kind}">')
         if sp.kind in _CONTROL_XML:
             tag, port = _CONTROL_XML[sp.kind]
             out.append(f'{indent}<{tag} {port}="{sp.count}">')
@@ -2405,6 +2416,8 @@ def _steps_xml(steps: Sequence[StepPlan], indent: str) -> List[str]:
             out.append(f'{indent}</Fallback>')
         else:
             out += [f'{indent}{node}' for node in (sp.nodes or [sp.xml])]
+        if sp.step_id:
+            out.append(f'{base}</Sequence>')
     return out
 
 

@@ -4,7 +4,7 @@
 # test_catalog.py fails when a registry moves and this file does not (vNext M1, M2.1).
 catalog_version: 1
 derived_with:
-  trainit_setup_assistant: 8.2.3
+  trainit_setup_assistant: 8.3.0
   trainit_motion_runtime: 2.6.2
   trainit_perception: 0.5.0
   trainit_policy_runtime: 0.1.0

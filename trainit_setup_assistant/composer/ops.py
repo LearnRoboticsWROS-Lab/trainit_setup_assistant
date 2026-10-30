@@ -30,7 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..model.enums import AppType
 from ..model.io import project_to_dict
-from ..model.program import describe_load_error
+from ..model.program import STEP_ID_KEY, describe_load_error, step_mapping_kind
 from ..model.project import CanonicalProject
 from .diagnostics import Diagnostic, parse_load_error
 
@@ -55,10 +55,11 @@ def _refuse(message: str) -> None:
 
 
 def step_kind(step: dict) -> str:
-    """The one kind of a step mapping (``move``, ``path``, ..., ``fallback``)."""
-    if not isinstance(step, dict) or len(step) != 1:
+    """The one kind of a step mapping (``move``, ``path``, ..., ``fallback``), its optional ``id`` aside."""
+    kind = step_mapping_kind(step)
+    if kind is None:
         _refuse('R-M3-02: a step is exactly one kind')
-    return next(iter(step))
+    return kind
 
 
 def step_bodies(step: dict) -> List[list]:
@@ -502,7 +503,11 @@ class Composer:
             steps, i = _slot(_task(doc, task), label)
             if i >= len(steps):
                 _refuse(f"R-M3-03: task '{task}' has no step {_text(label)}")
-            steps[i] = step
+            old = steps[i]
+            # D18: the editor's spec carries no id; a step keeps the one it has (bindings stay valid)
+            kept = {STEP_ID_KEY: old[STEP_ID_KEY]} if isinstance(old, dict) and STEP_ID_KEY in old \
+                and STEP_ID_KEY not in step else {}
+            steps[i] = {**kept, **step}
         self.edit(mutate)
 
     def delete_step(self, task: str, label: Label) -> None:

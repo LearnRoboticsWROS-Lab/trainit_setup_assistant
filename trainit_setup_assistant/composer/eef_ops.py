@@ -19,7 +19,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from ..catalog import EEF_BRIDGE_ROLES
 from ..model.end_effector import DEFAULT_ACTUATOR_ID, DEFAULT_DEVICE_ID, DEFAULT_SITE_ID
 from ..model.enums import GripperKind
-from .ops import Composer, _refuse, walk
+from .ops import Composer, _refuse, step_kind, walk
 
 LEGACY_ROLE = 'eef_legacy_bridge'
 
@@ -85,7 +85,7 @@ def references(c: Composer) -> Iterator[Tuple[str, dict, str]]:
     for task in doc.get('tasks') or []:
         for label, step in walk(task.get('steps') or []):
             where = f"task '{task.get('name')}' step {'.'.join(map(str, label))}"
-            kind = next(iter(step))
+            kind = step_kind(step)
             body = step[kind] or {}
             if kind in ('grasp', 'release'):
                 yield where, body, 'grasp/release'
@@ -100,7 +100,7 @@ def _fix_steps(app: dict, fix) -> None:
     ``edit_project`` mutation): a grasp / release body, a tool step's actuate / verify / close / open body."""
     for task in app.get('tasks') or []:
         for _label, step in walk(task.get('steps') or []):
-            kind = next(iter(step))
+            kind = step_kind(step)
             body = step[kind]
             if kind in ('grasp', 'release') and body is not None:
                 fix('grasp/release', body)

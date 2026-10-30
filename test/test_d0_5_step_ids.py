@@ -112,6 +112,16 @@ def test_the_tree_with_ids_is_the_golden_byte_for_byte():
         'the D0.5 step-id golden changed: show the owner the diff before updating it'
 
 
+def test_tmrs_copy_of_the_golden_is_this_golden_byte_for_byte():
+    """ADR-0030 Decision 6: the TSA -> TMR carrier (grammar v1) is pinned on ONE artefact; TMR's observer test runs
+    its byte copy. Checked when both repositories are in this workspace."""
+    tmr = Path(__file__).resolve().parents[2] / 'trainit_motion_runtime'
+    copy = tmr / 'test' / 'data' / 'd0_5' / 'task_program.xml'
+    if not copy.is_file():
+        pytest.skip(f'{copy} is not in this workspace')
+    assert copy.read_bytes() == GOLDEN.read_bytes(), 'update TMR test/data/d0_5/task_program.xml with this golden'
+
+
 def test_the_same_id_in_two_tasks_is_allowed():
     C.build(with_ids([('cell_cycle', [0], 'begin'), ('go_home', [0], 'begin')]))
 

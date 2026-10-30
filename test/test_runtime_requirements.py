@@ -1452,7 +1452,7 @@ def test_1_a_snapshot_capability_is_not_a_dependency(bundles):
     names = {dep for rel, text in files.items() if rel.endswith('package.xml')
              for _t, dep, _a in _deps(text)}
     assert not names & {'trainit_perception', 'trainit_policy_runtime', 'moveit_servo'}
-    assert snap['derived_with']['trainit_motion_runtime'] == '2.6.2'      # refreshed for TMR 2.6.2 (ROS2ML-SYNC D7)
+    assert snap['derived_with']['trainit_motion_runtime'] == '2.7.0'      # refreshed for TMR 2.7.0 (D0.5, ExecutionEvent)
     assert {v for rel, text in files.items() if rel.endswith('package.xml')
             for v, _c in _tmr_lines(text)} == {'1.4.0'}
 

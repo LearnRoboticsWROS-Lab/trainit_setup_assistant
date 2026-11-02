@@ -14,6 +14,7 @@ from .deployment import DeploymentSpec
 from .perception import PerceptionSpec
 from .robot import RobotSpec
 from .scene import SceneSpec
+from .enums import AppType
 from .task import ApplicationSpec
 
 # 2: adds the top-level ``perception`` block + ``Waypoint.vision`` (TSA v4, D-015).
@@ -24,6 +25,11 @@ SCHEMA_VERSION = 2
 # and re-saves it even when it drops the contract it cannot read, so a 3 without a contract tells
 # this TSA the file lost one (R19). A project without a contract keeps the number it has.
 SCHEMA_VERSION_EEF_CONTRACT = 3
+# 4: written IF AND ONLY IF the application is a Canonical Task Program (vNext M3.3, ADR-0024,
+# R-M3-01): its sections are strict and new, so a TSA that cannot read them refuses the file by its
+# number (and by the application type) instead of dropping them. A task program may carry an
+# end-effector contract: the number stays 4.
+SCHEMA_VERSION_TASK_PROGRAM = 4
 
 
 class BundleSpec(BaseModel):
@@ -75,8 +81,25 @@ class CanonicalProject(BaseModel):
     # skip_on_failure: required by pydantic 2.x for a post root_validator, accepted by 1.x.
     @root_validator(skip_on_failure=True)
     def _schema_version_follows_the_contract(cls, values):
-        """``schema_version`` 3 if and only if an end-effector contract exists (ADR-0022 D6):
-        a contract loads as 3 whatever number its file had; a 3 without one is refused (R19)."""
+        """``schema_version`` 4 if and only if the application is a Canonical Task Program (vNext
+        M3.3, R-M3-01: the file must say 4, a 4 without one is refused); otherwise 3 if and only if
+        an end-effector contract exists (ADR-0022 D6): a contract loads as 3 whatever number its
+        file had; a 3 without one is refused (R19)."""
+        application = values.get('application')
+        if application is not None and application.type is AppType.TASK_PROGRAM:
+            if values.get('schema_version') != SCHEMA_VERSION_TASK_PROGRAM:
+                raise ValueError(
+                    'R-M3-01: a Canonical Task Program (application type task_program) is '
+                    f"schema_version: {SCHEMA_VERSION_TASK_PROGRAM}, the file says "
+                    f"{values.get('schema_version')!r}: set schema_version: "
+                    f'{SCHEMA_VERSION_TASK_PROGRAM}')
+            return values
+        if values.get('schema_version') == SCHEMA_VERSION_TASK_PROGRAM:
+            kind = getattr(application, 'type', None)
+            raise ValueError(
+                f'R-M3-01: schema_version {SCHEMA_VERSION_TASK_PROGRAM} is the Canonical Task '
+                f"Program's, but this application is '{getattr(kind, 'value', kind)}': a template "
+                'application is schema_version 2 (3 with an end-effector contract)')
         robot = values.get('robot')
         has_contract = bool(robot is not None and robot.gripper.contract is not None)
         if has_contract:

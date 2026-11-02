@@ -70,7 +70,9 @@ def launch_setup(context, *args, **kwargs):
 {% endif %}
 
     params, mc = build_move_group_params(
-        robot_name=ROBOT_NAME, moveit_config_package=MOVEIT_CONFIG_PACKAGE, use_isaac=use_isaac{% if gazebo_supported %}, backend=mode{% endif %})
+        robot_name=ROBOT_NAME, moveit_config_package=MOVEIT_CONFIG_PACKAGE, use_isaac=use_isaac{% if gazebo_supported %}, backend=mode{% endif %}{% if start_tolerance is defined and start_tolerance is not none %},
+        # the application's start-state tolerance (application.runtime.allowed_start_tolerance)
+        trajectory_execution={"trajectory_execution.allowed_start_tolerance": {{ start_tolerance | fmtnum }}}{% endif %})
 
     moveit_share = get_package_share_directory(MOVEIT_CONFIG_PACKAGE)
     ros2_controllers_path = os.path.join(moveit_share, "config", "ros2_controllers.yaml")

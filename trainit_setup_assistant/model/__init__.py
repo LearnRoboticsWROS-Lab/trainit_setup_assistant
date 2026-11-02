@@ -28,22 +28,25 @@ from .enums import (
     WaypointRole,
     WaypointType,
 )
-from .deployment import DeploymentSpec, LaunchNodeSpec, RealIncludeSpec
+from .deployment import DeploymentSpec, IsaacBinding, LaunchNodeSpec, RealIncludeSpec
 from .end_effector import (AdapterBinding, CommandInterface, ControllerFlavour, Device,
                            EndEffectorAdapter, EndEffectorCapability, EndEffectorContract,
                            EvidenceClass, FollowJointTrajectoryActuator, GraspSiteSpec,
                            GripperCommandActuator, JointPositions, ResultPolicy, SceneSignal,
                            SetBoolActuator, VerificationSpec, derive_device)
 from .external_node import INPUT_ROLES, ExternalNodeSpec
-from .io import load_project, project_to_dict, save_project
+from .io import load_project, project_to_dict, project_yaml, save_project
 from .perception import (CANDIDATE_RULE_TERMS, DEFAULT_INPUT_TOPICS, METHOD_PROVIDES,
                          TERM_NEEDS, CameraSpec,
                          DetectorSpec, PerceptionSpec, RelativeBinding, VisionBinding,
                          candidate_rule_refusal, computable_rules, computable_terms,
                          effective_candidate_rule, missing_candidate_terms,
                          preferred_candidate_rule)
+from .program import (DenseSource, Dwell, MoveStep, PathDef, PathGenerator, PathSegment,
+                      RelativeFrame, RelativeTarget, RuntimeSettings, Task, TaskProgram, TaskStep,
+                      TaskWaypoint)
 from .project import (BundleSpec, CanonicalProject, ProjectMeta, SCHEMA_VERSION,
-                      SCHEMA_VERSION_EEF_CONTRACT)
+                      SCHEMA_VERSION_EEF_CONTRACT, SCHEMA_VERSION_TASK_PROGRAM)
 from .robot import (
     ArmControllerSpec,
     DescriptionSource,
@@ -59,7 +62,9 @@ from .robot import (
     RobotSpec,
     normalize_cell_namespace,
 )
-from .scene import Payload, SceneObject, SceneSpec
+from .motion import (GoalTolerance, MotionConstraints, MotionIntent, MotionProfile,
+                     PathContinuity, ProviderChoices, ProviderId)
+from .scene import Payload, SceneObject, SceneProvenance, SceneSpec
 from .task import (ApplicationSpec, BinPickingSpec, DetectPoint, MotionSegment,
                    PolicyStep, ToolAction, Waypoint, effective_planner)
 
@@ -81,6 +86,7 @@ __all__ = [
     'GripperSpec',
     'ArmControllerSpec',
     'normalize_cell_namespace',
+    'SceneProvenance',
     'SceneSpec',
     'SceneObject',
     'Payload',
@@ -92,6 +98,7 @@ __all__ = [
     'ToolAction',
     'PolicyStep',
     'DeploymentSpec',
+    'IsaacBinding',
     'LaunchNodeSpec',
     'RealIncludeSpec',
     # perception (TSA v4, D-015)
@@ -164,6 +171,31 @@ __all__ = [
     'SceneSignal',
     'Device',
     'derive_device',
+    # the canonical motion request and its provider (vNext M3.2, ADR-0025); the resolution is
+    # model.capabilities
+    'GoalTolerance',
+    'MotionConstraints',
+    'MotionIntent',
+    'MotionProfile',
+    'PathContinuity',
+    'ProviderChoices',
+    'ProviderId',
+    # the Canonical Task Program (vNext M3.3, ADR-0024); its validation and generation are
+    # applications.task_program
+    'SCHEMA_VERSION_TASK_PROGRAM',
+    'TaskProgram',
+    'TaskWaypoint',
+    'RelativeTarget',
+    'RelativeFrame',
+    'MoveStep',
+    'Dwell',
+    'TaskStep',
+    'Task',
+    'PathDef',
+    'PathSegment',
+    'PathGenerator',
+    'DenseSource',
+    'RuntimeSettings',
     # io
     'load_project',
     'save_project',

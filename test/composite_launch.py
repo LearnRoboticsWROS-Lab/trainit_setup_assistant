@@ -558,12 +558,22 @@ class CompositeLaunch:
         time.sleep(SETTLE_S)
         for ns, robot, p in CELLS:
             o = self.obs[ns]
-            o['pubs'] = {}
-            for topic in (f'{ns}/joint_states', f'{ns}/eef/{DEV}/joint_states',
-                          f'{ns}/eef/{DEV}/state'):
-                pubs = sorted(f'{i.node_namespace.rstrip("/")}/{i.node_name}'
-                              for i in node.get_publishers_info_by_topic(topic))
-                o['pubs'][topic] = pubs
+            # vNext M3.7 (fresh-machine run 2): ONE snapshot of the graph could miss a publisher DDS had
+            # not announced yet (2 CPUs: /r1's joint_state_broadcaster, active and publishing moments
+            # later). The graph is read until it shows K1's expected publishers or 30 s pass -- the
+            # verdict below is unchanged, only the moment it is judged waits for discovery.
+            expected = sorted([f'{ns}/joint_state_broadcaster', f'{ns}/mock_eef_adapter'])
+            end = time.monotonic() + 30.0
+            while True:
+                o['pubs'] = {}
+                for topic in (f'{ns}/joint_states', f'{ns}/eef/{DEV}/joint_states',
+                              f'{ns}/eef/{DEV}/state'):
+                    o['pubs'][topic] = sorted(f'{i.node_namespace.rstrip("/")}/{i.node_name}'
+                                              for i in node.get_publishers_info_by_topic(topic))
+                if o['pubs'][f'{ns}/joint_states'] == expected or time.monotonic() > end:
+                    break
+                time.sleep(0.5)
+            for topic, pubs in o['pubs'].items():
                 self.say(f'[{ns or "/"}] publishers of {topic}: {pubs or "(none)"}')
             states = []
             for _ in range(60):

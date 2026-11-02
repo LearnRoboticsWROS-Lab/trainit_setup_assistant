@@ -57,6 +57,29 @@ def continuous_everywhere(project, dev: Device) -> bool:
                                    [Backend(m) for m in project.deployment.modes])
 
 
+def close_nodes(dev: Device, site: Optional[str]) -> List[str]:
+    """A grip's close (ADR-0022 D4): ``CloseGripper``, then ``VerifyGrasp held`` when the contract requires grasp
+    confirmation -- the grasp idiom's actuation and a task program's ``tool close``."""
+    lines = [f'<CloseGripper {eef_attrs(dev, site)}/>']
+    if dev.require_grasp_confirmation:
+        lines.append(verify_grasp(dev, site, 'held'))
+    return lines
+
+
+def open_nodes(project, dev: Device, site: Optional[str], held_guard: bool) -> List[str]:
+    """A grip's open (ADR-0022 D4): [``VerifyGrasp held`` first -- ``held_guard``: the RELEASE idiom, reached with a
+    part in the gripper, when grasps are confirmed and the state is continuous everywhere] + ``OpenGripper`` +
+    [``VerifyGrasp released`` when release confirmation is required]. A plain ``tool open`` has no held guard: it
+    is valid with nothing held, e.g. at a cycle start (ADR-0024 amendment I0)."""
+    lines = []
+    if held_guard and dev.require_grasp_confirmation and continuous_everywhere(project, dev):
+        lines.append(verify_grasp(dev, site, 'held'))
+    lines.append(f'<OpenGripper {eef_attrs(dev, site)}/>')
+    if dev.require_release_confirmation:
+        lines.append(verify_grasp(dev, site, 'released'))
+    return lines
+
+
 def action_nodes(action, project, dev: Device, gate: Gate = None,
                  verify_after_grasp: bool = True) -> List[str]:
     """The canonical nodes of one tool action, one per line, unindented."""

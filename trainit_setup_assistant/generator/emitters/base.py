@@ -89,9 +89,12 @@ class GenContext:
         shown = raw if raw in ('', '.') else self.portable(path, directory=directory)
         self.manifest.warn(render(shown), local=render(raw))
 
-    def copy_file(self, src: Union[str, Path], rel_dest: str) -> Path:
+    def copy_file(self, src: Union[str, Path], rel_dest: str, make_executable: bool = False) -> Path:
+        """Copy a file byte-identically. The copy is written, not cloned, so it never keeps the
+        source's mode: pass make_executable=True for anything installed with install(PROGRAMS)."""
         data = Path(src).read_bytes()
-        return self.write_bytes(rel_dest, data, COPY, source=self.portable(src))
+        return self.write_bytes(rel_dest, data, COPY, source=self.portable(src),
+                                make_executable=make_executable)
 
     def written(self, prefix: str, suffix: str = '') -> Dict[str, str]:
         """The text of every file THIS generation rendered or generated (never a COPY) whose

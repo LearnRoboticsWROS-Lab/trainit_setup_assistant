@@ -1,0 +1,37 @@
+# TrainIt Application Composer template: Pick and place.
+# Grasp a part at a taught pick, release it at a taught place (approach, standoff, retract).
+# The waypoint values are PLACEHOLDERS: re-teach them on your robot (Step 7: move the robot in RViz,
+# then Capture TCP / Capture joints). Pure canonical data: no template-specific runtime.
+template: {title: Pick and place, description: 'Grasp a part at a taught pick, release it at a taught place (approach,
+    standoff, retract).'}
+application:
+  type: task_program
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 20, acceleration: 20}
+  waypoints:
+  - {name: home, type: joint, named: home}
+  - name: pick
+    position: [0.45, 0.25, 0.055]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  - name: place
+    position: [0.45, -0.25, 0.055]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  tasks:
+  - name: pick_and_place
+    steps:
+    - move: {to: home, type: ptp, profile: transit}
+    - grasp:
+        at: pick
+        standoff_m: 0.15
+        profile: transit
+        approach_profile: approach
+        retract: {dz: 0.15}
+    - release:
+        at: place
+        standoff_m: 0.15
+        profile: transit
+        approach_profile: approach
+        retract: {dz: 0.15}
+    - move: {to: home, type: ptp, profile: transit}
+  main_task: pick_and_place

@@ -1,0 +1,43 @@
+# M3_DESIGN §19 A -- MACHINE TENDING, as a Canonical Task Program (a generation test, never shipped).
+# Load a raw part into a machine, start its cycle, unload the finished part -- a production cycle.
+# What tending adds to pick and place is ONE machine handshake: an `external` process event on the
+# machine's LOGICAL channel now, a PLC handshake (P0) later. No MachineTendingTask, no machine model.
+# Merged into the M3.7 composition cell (test_m3_7_decompositions.py).
+application:
+  type: task_program
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 20, acceleration: 20}
+  waypoints:                   # base_link, tool down
+    - {name: home, type: joint, named: home}
+    - {name: part_pick, position: [0.4, 0.25, 0.1], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: machine_approach, position: [0.3, -0.3, 0.35], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: machine_load, position: [0.3, -0.3, 0.15], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: out_place, position: [0.5, 0.0, 0.12], orientation: [1.0, 0.0, 0.0, 0.0]}
+  tasks:
+    - name: tend
+      description: the production cycle -- load, run the machine, unload -- until stopped
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+        - repeat:
+            cycles: -1
+            body:
+              - task: load_machine
+              - process: {kind: external, channel: machine_cycle_start}
+              - dwell: {ms: 500}                       # P0 replaces it with the machine's handshake
+              - task: unload_machine
+    - name: load_machine
+      steps:
+        - grasp: {at: part_pick, standoff_m: 0.05, profile: transit, approach_profile: approach,
+                  retract: {dz: 0.1}}
+        - move: {to: machine_approach, type: ptp, profile: transit}
+        - release: {at: machine_load, standoff_m: 0.1, profile: transit, approach_profile: approach,
+                    retract: {along_approach: 0.2}}
+    - name: unload_machine
+      steps:
+        - grasp: {at: machine_load, standoff_m: 0.1, profile: transit, approach_profile: approach,
+                  retract: {along_approach: 0.2}}
+        - release: {at: out_place, standoff_m: 0.05, profile: transit, approach_profile: approach,
+                    retract: {dz: 0.1}}
+        - move: {to: home, type: ptp, profile: transit}
+  main_task: tend

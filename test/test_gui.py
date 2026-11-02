@@ -286,6 +286,8 @@ def test_wizard_mvp_flow_offscreen(qapp):
     wiz.base_page.project_name.setText('fr30_cell')
     wiz.base_page.base_pkg.setText('fr30_eef_moveit_config')
     wiz.base_page.base_path.setText(FR30_BASE)
+    assert not wiz.base_page.validatePage()          # vNext I0: the first Next loads and SHOWS the robot
+    assert 'Planning group' in wiz.base_page.summary.text()
     assert wiz.base_page.validatePage()
     assert ctrl.project.robot.robot_name == 'fr30_eef'
     assert 'pre_pick20' in ctrl.robot_summary()['named_states']
@@ -368,6 +370,8 @@ def test_wizard_usd_mapping_builds_baseline_scene(qapp):
     wiz.base_page.project_name.setText('fr30_cell')
     wiz.base_page.base_pkg.setText('fr30_eef_moveit_config')
     wiz.base_page.base_path.setText(FR30_BASE)
+    assert not wiz.base_page.validatePage()          # vNext I0: the first Next loads and SHOWS the robot
+    assert 'Planning group' in wiz.base_page.summary.text()
     assert wiz.base_page.validatePage()
 
     sp = wiz.scene_page
@@ -819,7 +823,7 @@ def test_step4_gazebo_in_dropdown_and_selecting_adds_it(qapp):
     assert 'gazebo' in items                                     # Step-4 dropdown offers gazebo
     mp.mode.setCurrentText('gazebo')                             # user change -> set_mode
     assert Backend.GAZEBO in ctrl.project.deployment.modes
-    assert 'mode:=gazebo' in mp.procedure.toPlainText()          # procedure reflects gazebo
+    assert '(gazebo)' in mp.procedure.text()                     # the procedure reflects gazebo
 
 
 def test_base_ingest_adds_gazebo_to_modes(tmp_path):
@@ -984,7 +988,7 @@ def test_cell_namespace_is_offered_where_the_robot_is_configured(qapp):
     bp.project_file.setText(EXAMPLE)
     bp.cell_ns.setText('r3')
     bp._on_ns_edited('r3')                    # what typing emits (setText does not)
-    assert bp.validatePage()
+    assert bp.load() and bp.validatePage()   # vNext I0: Load shows the robot first
     assert ctrl.cell_namespace() == '/r3'
     assert bp.cell_ns.text() == '/r3'         # shown back canonicalised
     assert '/r3' in bp.summary.text()
@@ -1006,14 +1010,14 @@ def test_opening_a_project_does_not_silently_un_namespace_it(qapp):
         bp = wiz.base_page
         bp.project_file.setText(saved)
         assert bp.cell_ns.text() == ''        # nothing typed
-        assert bp.validatePage()
+        assert bp.load() and bp.validatePage()   # vNext I0: Load shows the robot first
         assert fresh.cell_namespace() == '/r3'
         assert bp.cell_ns.text() == '/r3'     # and now it is shown
 
         # typing an empty value over it DOES clear it (an explicit choice)
         bp.cell_ns.setText('')
         bp._on_ns_edited('')
-        assert bp.validatePage()
+        assert bp.load() and bp.validatePage()   # vNext I0: Load shows the robot first
         assert fresh.cell_namespace() == ''
 
 

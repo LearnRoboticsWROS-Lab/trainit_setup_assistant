@@ -36,6 +36,8 @@ in ``DetectObject``, which reads as a perception fault and is a configuration on
 ``topic_parameters``    role -> the PARAMETER NAME this node reads that role from, for
                         a node that takes its inputs as parameters
 ``remappings``          ``from -> to``, for a node whose subscriptions are hardcoded
+``detect_service``      the node serves ``/perception/<name>/detect`` (std_srvs/Trigger), the
+                        contract's on-demand service a capture calls (vNext M3.5)
 ======================  ==========================================================
 
 Two deliberate omissions, both because the field already exists elsewhere:
@@ -97,6 +99,11 @@ class ExternalNodeSpec(BaseModel):
     # ``from -> to`` for a node whose subscriptions are hardcoded. Sorted by the generator
     # before it is written, because the same project must produce the same bytes.
     remappings: Dict[str, str] = Field(default_factory=dict)
+    # vNext M3.5 (R-M3-16): the node serves the perception contract's on-demand service at EXACTLY
+    # ``/perception/<detector>/detect`` (std_srvs/Trigger; the capture calls that name, and reads
+    # ``/perception/<detector>/detections``), so a task program may CAPTURE with it. Declared, never
+    # assumed: TSA cannot see what another package's node serves. Generates nothing.
+    detect_service: bool = False
 
     def missing(self) -> Tuple[str, ...]:
         """The required fields that are empty, in declaration order.

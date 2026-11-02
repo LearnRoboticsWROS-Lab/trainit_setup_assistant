@@ -250,5 +250,10 @@ def test_gazebo_link_attacher_bridge_generated_from_step7(tmp_path):
     launch = (out / 'ur5_trainit_config' / 'launch' / 'bringup.launch.py').read_text()
     assert 'link_attacher_bridge.py' in launch
     assert "'ee_link': 'wrist_3_link'" in launch and "'object_model': 'red_cube'" in launch
-    assert (out / 'ur5_trainit_config' / 'scripts' / 'link_attacher_bridge.py').is_file()
+    bridge = out / 'ur5_trainit_config' / 'scripts' / 'link_attacher_bridge.py'
+    assert bridge.is_file()
     assert 'link_attacher_bridge.py' in (out / 'ur5_trainit_config' / 'CMakeLists.txt').read_text()
+    # installed with install(PROGRAMS): `colcon build --symlink-install` (what the ROS2ML lab's
+    # build runs) links the install tree to this file, so its own mode is what ros2 launch sees
+    # -- a 644 copy failed with "executable ... not found on the libexec directory" (D6)
+    assert os.access(bridge, os.X_OK), 'the generated LinkAttacher bridge is not executable'

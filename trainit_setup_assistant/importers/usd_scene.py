@@ -100,9 +100,14 @@ def read_ros2_bool_topics(usd_path: str, exclude=()) -> List[str]:
 
 
 def read_cell_prims(usd_path: str, base_prim: Optional[str] = None,
-                    robot_hint: Optional[str] = None) -> List[dict]:
+                    robot_hint: Optional[str] = None, robot_prim: Optional[str] = None,
+                    base_frame: str = 'base_link') -> List[dict]:
     """Top-level cell prims (excluding robot, physics, unresolvable) with base-aligned
-    poses. Each: {name, group, position[xyz], orientation[xyzw]}."""
+    poses. Each: {name, group, position[xyz], orientation[xyzw]}.
+
+    vNext I0.1: ``robot_prim`` (the project's ``deployment.isaac.robot_prim``) names the robot
+    explicitly -- its subtree is excluded and, without a ``base_prim``, the base is
+    ``<robot_prim>/<base_frame>``; the name heuristics are only the fallback of an unbound stage."""
     if not usd_available():
         raise RuntimeError('USD import needs pxr / usd-core')
     from pxr import Usd, UsdGeom
@@ -111,7 +116,9 @@ def read_cell_prims(usd_path: str, base_prim: Optional[str] = None,
     if not world or not world.IsValid():
         world = stage.GetPseudoRoot()
 
-    bp = base_prim or _guess_base_prim(stage, robot_hint)
+    if base_prim is None and robot_prim:
+        base_prim = f'{robot_prim.rstrip("/")}/{base_frame}'
+    bp = base_prim or _guess_base_prim(stage, base_frame, robot_hint)
     binv = None
     robot_root = None
     read_cell_prims.base_prim_ok = False      # surfaced by the wizard: a miss is silent
@@ -123,7 +130,9 @@ def read_cell_prims(usd_path: str, base_prim: Optional[str] = None,
             binv = UsdGeom.Xformable(bprim).ComputeLocalToWorldTransform(
                 Usd.TimeCode.Default()).GetInverse()
         parts = bp.strip('/').split('/')
-        if len(parts) >= 2:
+        if robot_prim:
+            robot_root = robot_prim.rstrip('/')
+        elif len(parts) >= 2:
             robot_root = '/' + '/'.join(parts[:2])   # /World/<robot>
 
     # local-frame extents, so a primitive collision shape can be derived per prim

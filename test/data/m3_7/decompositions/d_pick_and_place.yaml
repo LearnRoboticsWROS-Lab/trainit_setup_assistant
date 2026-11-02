@@ -1,0 +1,25 @@
+# M3_DESIGN §19 D -- PICK AND PLACE, as a Canonical Task Program (a generation test, never shipped):
+# the public sample's pick_and_place template (examples/ur5e_suction/project.yaml) re-expressed with
+# moves, a grasp and a release at the SAME taught poses -- pick (0.45, 0.25, 0.055), place
+# (0.45, -0.25, 0.055), 15 cm standoff and retract (the template's post_pick / post_place). Merged
+# into the PUBLIC SAMPLE's cell and compared SEMANTICALLY with the template's tree
+# (test_m3_7_decompositions.py). It replaces nothing: the template and its bytes stay as they are.
+application:
+  type: task_program
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 20, acceleration: 20}
+  waypoints:                   # base_link, tool down: the template's pick and place
+    - {name: home, type: joint, named: home}
+    - {name: pick, position: [0.45, 0.25, 0.055], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: place, position: [0.45, -0.25, 0.055], orientation: [1.0, 0.0, 0.0, 0.0]}
+  tasks:
+    - name: pick_and_place
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+        - grasp: {at: pick, standoff_m: 0.15, profile: transit, approach_profile: approach,
+                  retract: {dz: 0.15}}
+        - release: {at: place, standoff_m: 0.15, profile: transit, approach_profile: approach,
+                    retract: {dz: 0.15}}
+        - move: {to: home, type: ptp, profile: transit}
+  main_task: pick_and_place

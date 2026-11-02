@@ -212,7 +212,8 @@ class SceneLoaderMoveitConfigEmitter(Emitter):
             from pathlib import Path as _P
             _kit = (_P(__file__).parents[2] / 'resources' / 'gazebo_cell_kit' /
                     'scripts' / 'link_attacher_bridge.py')
-            ctx.copy_file(str(_kit), f'{pkg}/scripts/link_attacher_bridge.py')
+            ctx.copy_file(str(_kit), f'{pkg}/scripts/link_attacher_bridge.py',
+                          make_executable=True)          # installed with install(PROGRAMS)
         ctx.render_to(f'{pkg}/launch/bringup.launch.py',
                       'moveit_config/scene_loader_bringup.launch.py.j2',
                       robot_name=robot.robot_name,

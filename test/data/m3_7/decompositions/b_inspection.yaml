@@ -1,0 +1,47 @@
+# M3_DESIGN §19 B -- INSPECTION, as a Canonical Task Program (a generation test, never shipped).
+# Validation B's scan (a path stopping at three states for a capture) as a reusable task that GIVES its
+# three captures, called by the cycle. No InspectionTask: a path, process events and captures.
+# Merged into the M3.7 composition cell (test_m3_7_decompositions.py).
+perception:
+  detectors:
+    - name: inspection_cam
+      method: custom
+      params: {class_id: part}
+      continuous: false
+      external_node: {package: m37_camera, executable: camera, detect_service: true}
+application:
+  type: task_program
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    inspect: {speed: 20, acceleration: 20, tcp_velocity_mps: 0.1}
+  waypoints:                   # base_link, tool down
+    - {name: home, type: joint, named: home}
+    - {name: inspection_start, position: [0.45, 0.2, 0.3], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: w1, position: [0.45, 0.1, 0.3], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: w2, position: [0.45, 0.0, 0.3], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: w3, position: [0.45, -0.1, 0.3], orientation: [1.0, 0.0, 0.0, 0.0]}
+  paths:
+    - name: inspection_scan
+      states: [inspection_start, w1, w2, w3]
+      segments: [{type: lin}, {type: lin}, {type: lin}]
+      profile: inspect
+      events:
+        - {at: {state: w1}, kind: capture, detector: inspection_cam}    # -> captures.0
+        - {at: {state: w2}, kind: capture, detector: inspection_cam}    # -> captures.1
+        - {at: {state: w3}, kind: capture, detector: inspection_cam}    # -> captures.2
+  tasks:
+    - name: inspection_cycle
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+        - task: inspect_part
+        - move: {to: home, type: ptp, profile: transit}
+    - name: inspect_part
+      description: scan the part, three captures
+      outputs: [{name: captures.0, type: capture}, {name: captures.1, type: capture},
+                {name: captures.2, type: capture}]
+      steps:
+        - move: {to: inspection_start, type: ptp, profile: transit}
+        - process: {kind: process_on, channel: inspection_light}
+        - path: inspection_scan
+        - process: {kind: process_off, channel: inspection_light}
+  main_task: inspection_cycle

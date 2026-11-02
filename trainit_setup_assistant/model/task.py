@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, root_validator, validator
 
 from .enums import (
+    DEPRECATED_APP_TYPES,
+    deprecated_app_type_refusal,
     AppType,
     CalibrationFrame,
     ExecutionMode,
@@ -24,6 +26,7 @@ from .enums import (
     WaypointType,
 )
 from .perception import RelativeBinding, VisionBinding
+from .program import PROGRAM_KEYS, TaskProgram
 
 
 class Waypoint(BaseModel):
@@ -251,6 +254,52 @@ class ApplicationSpec(BaseModel):
     # existing project.yaml keeps its behaviour untouched.
     loop_start: Optional[str] = None
     loop_end: Optional[str] = None
+    # vNext M3.3 (ADR-0024): the Canonical Task Program of a ``task_program`` application, None for
+    # a template application. In project.yaml its sections sit directly under ``application:``
+    # (providers, motion_profiles, waypoints, paths, tasks, main_task, runtime); the pre-validator
+    # below moves them here, so the template fields above stay at their defaults and unused.
+    program: Optional[TaskProgram] = None
+
+    @root_validator(pre=True)
+    def _task_program_sections(cls, values):  # noqa: N805
+        """A ``task_program`` application holds the program's sections and nothing else (R-M3-01: a
+        task program does not mix with a template's waypoints, segments, tool actions, policies or
+        loop); any other application keeps reading as before -- a stray ``program`` key is ignored,
+        as every unknown key of this model always was."""
+        if not isinstance(values, dict):
+            return values
+        token = getattr(values.get('type'), 'value', values.get('type'))
+        if isinstance(token, str) and token in DEPRECATED_APP_TYPES:      # M3 decision 7 (TSA 8.0)
+            raise ValueError(deprecated_app_type_refusal(token))
+        if token != AppType.TASK_PROGRAM.value:
+            values = dict(values)
+            values.pop('program', None)
+            return values
+        if set(values) <= {'type', 'program'} and isinstance(values.get('program'), TaskProgram):
+            return values                     # built in code: ApplicationSpec(type=..., program=...)
+        sections = {k: v for k, v in values.items() if k in PROGRAM_KEYS}
+        foreign = [k for k in values if k != 'type' and k not in PROGRAM_KEYS]
+        if foreign:
+            from .program import PROGRAM_HINTS
+            raise ValueError('R-M3-01: a Canonical Task Program (application type task_program): '
+                             + '; '.join(PROGRAM_HINTS.get(k, f"has no '{k}' (its sections are "
+                                                              f"{', '.join(PROGRAM_KEYS)})")
+                                         for k in foreign))
+        return {'type': values['type'], 'program': sections}
+
+    @root_validator(skip_on_failure=True)
+    def _program_iff_task_program(cls, values):  # noqa: N805
+        is_program = values.get('type') is AppType.TASK_PROGRAM
+        if is_program and values.get('program') is None:
+            raise ValueError('R-M3-01: a task_program application needs its program: tasks and a '
+                             'main_task at least')
+        if not is_program and values.get('program') is not None:
+            raise ValueError(f"R-M3-01: only a task_program application has a program (this one is "
+                             f"'{values.get('type')}')")
+        return values
+
+    def is_task_program(self) -> bool:
+        return self.type is AppType.TASK_PROGRAM
 
     def segment_for(self, waypoint_name: str) -> Optional[MotionSegment]:
         """The incoming segment for a waypoint, if any."""

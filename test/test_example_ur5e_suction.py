@@ -170,14 +170,17 @@ def _fk(urdf: ET.Element, q: dict, link: str) -> np.ndarray:
 def test_the_committed_sample_names_no_machine_path_and_is_no_package():
     files = sorted(p for p in EXAMPLE.rglob('*') if p.is_file())
     names = {p.relative_to(EXAMPLE).as_posix() for p in files}
-    assert names == {'README.md', 'project.yaml', f'urdf/{TOP}', f'urdf/{TOOL}'}, names
+    # vNext M3.3: task_program.yaml, the same cell as a Canonical Task Program (Validation A)
+    assert names == {'README.md', 'project.yaml', 'task_program.yaml', f'urdf/{TOP}',
+                     f'urdf/{TOOL}'}, names
     assert not any(p.name == 'package.xml' for p in files)      # colcon and rosdep never see it
     for f in files:
         text = f.read_text(errors='replace')
         for needle in _machine_paths(str(PKG)):
             assert needle not in text, (f.relative_to(EXAMPLE).as_posix(), needle)
-    desc = yaml.safe_load((EXAMPLE / 'project.yaml').read_text())['robot']['description']
-    assert desc == {'urdf_dir': 'urdf', 'top_xacro': TOP}   # relative; no meshes_dir: UR's own
+    for project in ('project.yaml', 'task_program.yaml'):
+        desc = yaml.safe_load((EXAMPLE / project).read_text())['robot']['description']
+        assert desc == {'urdf_dir': 'urdf', 'top_xacro': TOP}, project   # relative; UR's meshes
     for name in (TOP, TOOL):
         text = (URDF_DIR / name).read_text()
         assert set(re.findall(r'\$\(find ([^)\s]+)\)', text)) <= {'ur_description'}, name

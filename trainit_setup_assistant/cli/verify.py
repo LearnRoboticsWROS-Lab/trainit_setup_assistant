@@ -36,6 +36,7 @@ def main(argv=None) -> int:
     try:
         from ..generator import Orchestrator
         from ..model import load_project
+        from ..model.paths import resolve_project_paths
         from ..verify import colcon_build_bundle, compare_bundle, detect_packages
         from ..verify.equivalence import APP, DESCRIPTION, MOVEIT
     except ImportError as exc:
@@ -47,6 +48,9 @@ def main(argv=None) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f'error: cannot load {args.project}: {exc}', file=sys.stderr)
         return 2
+    project, path_notes = resolve_project_paths(project, args.project)   # vNext I0.0
+    for note in path_notes:
+        print(f'warning: {note}', file=sys.stderr)
 
     gen_packages = {
         DESCRIPTION: project.bundle.description_package,

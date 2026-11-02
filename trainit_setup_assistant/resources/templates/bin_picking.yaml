@@ -1,0 +1,65 @@
+# TrainIt Application Composer template: Bin picking.
+# Detect parts, grasp the best candidate, retry the next one, try a recovery when the bin stalls.
+# The waypoint values are PLACEHOLDERS: re-teach them on your robot (Step 7: move the robot in RViz,
+# then Capture TCP / Capture joints). Pure canonical data: no template-specific runtime.
+template: {title: Bin picking, description: 'Detect parts, grasp the best candidate, retry the next one, try a recovery
+    when the bin stalls.'}
+application:
+  type: task_program
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 20, acceleration: 20}
+  waypoints:
+  - {name: home, type: joint, named: home}
+  - name: bin_view
+    position: [0.45, 0.25, 0.3]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  - name: place
+    position: [0.3, -0.3, 0.15]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  tasks:
+  - name: empty_the_bin
+    description: pick parts until the program is stopped; a stalled bin is agitated
+    steps:
+    - move: {to: home, type: ptp, profile: transit}
+    - repeat:
+        cycles: -1
+        body:
+        - fallback:
+            bodies:
+            - - retry:
+                  attempts: 3
+                  body:
+                  - move: {to: bin_view, type: ptp, profile: transit}
+                  - detect:
+                      detector: bin_cam
+                      source: detections
+                      approach: [0.0, 0.0, -1.0]
+                      keep: 1
+                      out: ranked
+                  - {task: pick_best}
+              - {task: place_part}
+            - - process: {kind: process_on, channel: bin_agitator}
+              - dwell: {ms: 1500}
+              - process: {kind: process_off, channel: bin_agitator}
+  - name: pick_best
+    inputs:
+    - {name: ranked, type: candidates}
+    steps:
+    - grasp:
+        candidates: ranked
+        index: 0
+        orientation_from: bin_view
+        standoff_m: 0.05
+        profile: transit
+        approach_profile: approach
+        retract: {along_approach: 0.1}
+  - name: place_part
+    steps:
+    - release:
+        at: place
+        standoff_m: 0.05
+        profile: transit
+        approach_profile: approach
+        retract: {dz: 0.08}
+  main_task: empty_the_bin

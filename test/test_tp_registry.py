@@ -763,7 +763,8 @@ def test_the_refresh_refuses_a_release_its_package_xml_does_not_declare(tp_catal
 
 def test_an_invalid_tmr_registry_leaves_tps_snapshot_alone_too(tp_catalog, capsys):
     tp_catalog.tmr.write_bytes(tp_catalog.tmr.read_bytes().replace(
-        b'schema_version: 1', b'schema_version: 2'))
+        b'schema_version: 2', b'schema_version: 3'))
+    assert b'schema_version: 3' in tp_catalog.tmr.read_bytes()
     tp_catalog.tp['detector_methods']['color_mask']['parameters']['h']['max'] = 180
     before = _tree(tp_catalog.here)
     assert refresh_tool.main([]) == 2

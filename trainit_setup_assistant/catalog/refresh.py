@@ -47,9 +47,9 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from . import (REFRESH, REGISTRY_FILE, TP_REGISTRY_FILE, missing_required_modes,
-               parse_planner_registry, parse_tp_registry, tp_drift, tp_registry_text,
-               tp_tier_problems, tp_vocabulary_problems)
+from . import (REFRESH, REGISTRY_FILE, TP_REGISTRY_FILE, missing_capability_vocabulary,
+               missing_required_modes, parse_planner_registry, parse_tp_registry, tp_drift,
+               tp_registry_text, tp_tier_problems, tp_vocabulary_problems)
 
 SNAPSHOT_FILE = 'snapshot.yaml'
 HEADER = (
@@ -204,6 +204,7 @@ def _validate_registry(data: bytes, where: str) -> dict:
     try:
         registry = parse_planner_registry(data, where)
         missing = missing_required_modes(registry)
+        vocabulary = missing_capability_vocabulary(registry)
     except RuntimeError as exc:
         raise Refused(str(exc)) from exc
     except Exception as exc:                                    # noqa: BLE001 - a broken registry
@@ -213,6 +214,9 @@ def _validate_registry(data: bytes, where: str) -> dict:
         raise Refused(f'{where} no longer offers {missing}, which TSA\'s own code names (the '
                       'default planner of a project file, the D-016 vision rule): change TSA '
                       'first, then refresh')
+    if vocabulary:
+        raise Refused(f'{where} no longer declares {vocabulary}, which TSA\'s capability '
+                      'resolution names (model/capabilities.py): change TSA first, then refresh')
     return registry
 
 

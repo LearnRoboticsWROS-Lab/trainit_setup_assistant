@@ -48,7 +48,9 @@ def launch_setup(context, *args, **kwargs):
             PythonLaunchDescriptionSource(
                 os.path.join(cfg_share, "launch", "bringup.launch.py")),
             launch_arguments={"mode": mode, "rviz": rviz{% if gazebo_supported %},
-                              "world": LaunchConfiguration("world").perform(context){% endif %}}.items()),
+                              "world": LaunchConfiguration("world").perform(context){% endif %}{% if start_tolerance is defined and start_tolerance is not none %},
+                              # application.runtime.allowed_start_tolerance (rad)
+                              "start_tolerance": "{{ start_tolerance | fmtnum }}"{% endif %}}.items()),
     ]
 {% if has_policies %}
     if LaunchConfiguration("policy").perform(context).lower() in ("true", "1"):

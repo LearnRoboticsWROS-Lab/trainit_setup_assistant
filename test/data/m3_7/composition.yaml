@@ -1,0 +1,147 @@
+# The M3.7 COMPOSITION program (vNext M3.7, ADR-0024): a Canonical Task Program made of several tasks,
+# task calls and the three control steps, on the public UR5e sample cell (its robot, its end-effector
+# contract -- grasp and release CONFIRMED, the mock adapter -- and its scene). No detector: it runs on
+# mock with nothing but the cell. It is the final canonical composition end-to-end of M3
+# (test_m3_7_composition_launch.py) and the base cell of the M3.7 tests.
+#
+#   cell_cycle   home -> conveyor on -> 2 x [task transfer] -> conveyor off ->
+#                fallback( retry 2 x [ptp to out_of_reach]  <- beyond the arm's reach: the planner refuses
+#                                                              the target twice (a TARGET failure, no fault)
+#                        | task go_home )                    <- so the second alternative runs
+#   transfer     grasp at the taught `pick` -> release at the taught `place`
+#   go_home      home, a dwell
+#
+# Generate it FROM THIS DIRECTORY (its urdf path is relative to it):
+#     trainit_generate composition.yaml -o <workspace>/src/m37
+schema_version: 4
+project_name: m37_composition
+
+bundle:
+  description_package: m37_description
+  moveit_config_package: m37_trainit_config
+  app_package: m37_app
+
+meta:                          # written into the three generated package.xml files: put yours
+  maintainer_name: TrainIt sample user
+  maintainer_email: user@example.com
+  license: Apache-2.0
+  version: 0.1.0
+
+robot:
+  robot_name: ur5e_suction
+  description:
+    urdf_dir: ../../../examples/ur5e_suction/urdf   # the public sample's, relative to this directory
+    top_xacro: ur5e_suction.urdf.xacro
+  base_frame: base_link
+  tip_link: tcp
+  planning_group:
+    name: ur_manipulator
+    base_link: base_link
+    tip_link: tcp              # the cup lip: every TCP waypoint below is a pose of this link
+    joints: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint,
+             wrist_3_joint]
+  gripper:
+    kind: suction
+    eef_parent_link: tcp       # the grasp site's TCP: the short form derives it from this link
+    contract:
+      actuator: {command_interface: set_bool}
+      verification: {require_grasp_confirmation: true, require_release_confirmation: true}
+      adapters: {mock: trainit_mock}
+  named_states:
+    - name: home               # tool down, TCP at about (0.49, 0.13, 0.39) m
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                     wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+    - name: above_pick         # TCP at (0.45, 0.25, 0.205), tool down: 15 cm above the pick
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.2452, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -1.3256}
+    - name: above_place        # TCP at (0.45, -0.25, 0.205), tool down: 15 cm above the place
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: -0.769, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -2.3398}
+  joint_limits:
+    per_joint:                 # velocity under the URDF's pi rad/s (Pilz refuses more than the
+                               # URDF); acceleration: ur_moveit_config's 5.0
+      shoulder_pan_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      shoulder_lift_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      elbow_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_1_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_2_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_3_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+  ompl:
+    projection_evaluator: joints(shoulder_pan_joint,shoulder_lift_joint)
+  initial_positions: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                      wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+  # The self-collision matrix: the 11 pairs of ur_moveit_config's srdf/ur_macro.srdf.xacro
+  # (Apache-2.0), transcribed, plus the tool's one: the cup body touches the flange face.
+  disable_collisions:
+    - {link1: base_link, link2: base_link_inertia, reason: Adjacent}
+    - {link1: base_link_inertia, link2: shoulder_link, reason: Adjacent}
+    - {link1: tool0, link2: wrist_1_link, reason: Never}
+    - {link1: tool0, link2: wrist_2_link, reason: Never}
+    - {link1: tool0, link2: wrist_3_link, reason: Adjacent}
+    - {link1: forearm_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: forearm_link, link2: wrist_1_link, reason: Adjacent}
+    - {link1: shoulder_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_2_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_3_link, reason: Never}
+    - {link1: wrist_2_link, link2: wrist_3_link, reason: Adjacent}
+    - {link1: suction_body, link2: wrist_3_link, reason: Adjacent}
+
+scene:
+  objects:                     # the table top is 5 mm under the robot base (its mesh starts at 0)
+    - {id: table, shape: box, dims: [1.2, 1.2, 0.05], frame: base_link,
+       position: [0.3, 0.0, -0.03]}
+
+deployment:
+  modes: [mock]
+  default_mode: mock
+
+application:
+  type: task_program
+
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 20, acceleration: 20}
+
+  waypoints:                   # base_link, tool down
+    - {name: home, type: joint, named: home}
+    - {name: pick, position: [0.4, 0.15, 0.1], orientation: [1.0, 0.0, 0.0, 0.0]}
+    - {name: place, position: [0.3, -0.3, 0.15], orientation: [1.0, 0.0, 0.0, 0.0]}
+    # 1.5 m from the base: beyond the UR5e's reach (TSA does not judge reach; MoveIt does, at run time)
+    - {name: out_of_reach, position: [1.5, 0.0, 0.3], orientation: [1.0, 0.0, 0.0, 0.0]}
+
+  tasks:
+    - name: cell_cycle
+      description: two parts from the pick to the place, then a recovery to home
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+        - process: {kind: process_on, channel: conveyor}
+        - repeat:
+            cycles: 2
+            body:
+              - task: transfer
+        - process: {kind: process_off, channel: conveyor}
+        - fallback:
+            bodies:
+              - - retry:
+                    attempts: 2
+                    body:
+                      - move: {to: out_of_reach, type: ptp, profile: transit}
+              - - task: go_home
+
+    - name: transfer
+      description: one part from the pick to the place
+      steps:
+        - grasp: {at: pick, standoff_m: 0.05, profile: transit, approach_profile: approach,
+                  retract: {dz: 0.05}}
+        - release: {at: place, standoff_m: 0.05, profile: transit, approach_profile: approach,
+                    retract: {dz: 0.05}}
+
+    - name: go_home
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+        - dwell: {ms: 200}
+
+  main_task: cell_cycle

@@ -7,7 +7,7 @@ works without a sourced ROS environment.
 """
 
 from .camera_capture import LiveCameraCapture
-from .capture import LiveCapture
+from .capture import LiveCapture, joint_states_topic
 from .planning_scene_client import PlanningScenePublisher
 
-__all__ = ['LiveCameraCapture', 'LiveCapture', 'PlanningScenePublisher']
+__all__ = ['LiveCameraCapture', 'LiveCapture', 'PlanningScenePublisher', 'joint_states_topic']

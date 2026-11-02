@@ -1,0 +1,61 @@
+# TrainIt Application Composer template: Inspection.
+# A path stopping at inspection points, a light switched on, a camera capture at each stop.
+# The waypoint values are PLACEHOLDERS: re-teach them on your robot (Step 7: move the robot in RViz,
+# then Capture TCP / Capture joints). Pure canonical data: no template-specific runtime.
+template: {title: Inspection, description: 'A path stopping at inspection points, a light switched on, a camera
+    capture at each stop.'}
+application:
+  type: task_program
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    inspect: {speed: 20, acceleration: 20, tcp_velocity_mps: 0.1}
+  waypoints:
+  - {name: home, type: joint, named: home}
+  - name: inspection_start
+    position: [0.45, 0.2, 0.3]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  - name: w1
+    position: [0.45, 0.1, 0.3]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  - name: w2
+    position: [0.45, 0.0, 0.3]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  - name: w3
+    position: [0.45, -0.1, 0.3]
+    orientation: [1.0, 0.0, 0.0, 0.0]
+  paths:
+  - name: inspection_scan
+    states: [inspection_start, w1, w2, w3]
+    segments:
+    - {type: lin}
+    - {type: lin}
+    - {type: lin}
+    profile: inspect
+    events:
+    - at: {state: w1}
+      kind: capture
+      detector: inspection_cam
+    - at: {state: w2}
+      kind: capture
+      detector: inspection_cam
+    - at: {state: w3}
+      kind: capture
+      detector: inspection_cam
+  tasks:
+  - name: inspection_cycle
+    steps:
+    - move: {to: home, type: ptp, profile: transit}
+    - {task: inspect_part}
+    - move: {to: home, type: ptp, profile: transit}
+  - name: inspect_part
+    description: scan the part, three captures
+    outputs:
+    - {name: captures.0, type: capture}
+    - {name: captures.1, type: capture}
+    - {name: captures.2, type: capture}
+    steps:
+    - move: {to: inspection_start, type: ptp, profile: transit}
+    - process: {kind: process_on, channel: inspection_light}
+    - {path: inspection_scan}
+    - process: {kind: process_off, channel: inspection_light}
+  main_task: inspection_cycle

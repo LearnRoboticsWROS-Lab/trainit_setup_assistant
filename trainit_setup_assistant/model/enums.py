@@ -106,10 +106,36 @@ class AppType(StrEnum):
     # candidate index, a holding check after the lift, and a gated stall recovery. The
     # three things a LINEAR sequence cannot do, each one measured rather than supposed.
     BIN_PICKING = 'bin_picking'
+    # vNext M3.3 (ADR-0024): the CANONICAL application -- not a template. Its waypoints, motion
+    # profiles, paths and tasks are a Canonical Task Program (model.program), in schema_version 4.
+    TASK_PROGRAM = 'task_program'
+    # DEPRECATED (TSA 8.0, M3 decision 7): four application NAMES that never had a model or a template
+    # and never generated a bundle. They stay members (old code and saved data name them) but a project
+    # that says one is REFUSED at load, naming task_program: each is a composition of the canonical
+    # steps, never a type of its own (DEPRECATED_APP_TYPES).
     GLUING = 'gluing'
     FOLLOW_PATH = 'follow_path'
     WAYPOINT_REPLAY = 'waypoint_replay'
     CNC = 'cnc'
+
+
+# M3 decision 7 (TSA 8.0): the removed application tokens, and what each one is in a Canonical Task
+# Program. A refusal at load, never a silent rewrite; every other token loads exactly as before.
+DEPRECATED_APP_TYPES = {
+    'gluing': 'a path with process events on a logical channel (process_on / process_off, set_value)',
+    'follow_path': "a 'path' step (states and lin / circ segments, or a dense generator)",
+    'waypoint_replay': "'move' steps to taught waypoints (in a 'repeat' for a cycle)",
+    'cnc': ("machine tending: moves, 'grasp' / 'release', an 'external' process event on the machine's "
+            "channel, 'task' calls"),
+}
+
+
+def deprecated_app_type_refusal(token: str, where: str = 'application.type') -> str:
+    """The load refusal of a removed application token (M3 decision 7)."""
+    return (f"{where} '{token}' is no longer an application type (TSA 8.0): it never generated a bundle, "
+            f'and the same application is a Canonical Task Program -- {DEPRECATED_APP_TYPES[token]}. Set '
+            "'application.type: task_program' and 'schema_version: 4', and write its waypoints, paths and "
+            'tasks (README: Canonical Task Program)')
 
 
 # trainit_perception's vocabulary, from TSA's committed snapshot of it -- never the installed TP

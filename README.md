@@ -1,4 +1,4 @@
-# TrainIt Setup Assistant (TSA v7)
+# TrainIt Setup Assistant (TSA v8)
 
 Configure a robotic **manipulation application** against a faithful RViz/MoveIt
 environment and generate a **self-contained ROS 2 bundle** that runs on the TrainIt
@@ -14,12 +14,13 @@ to a running sample cell in four steps, every command ready to paste, and a fift
 own robot.
 
 > The headline product target is **camera-driven bin-picking with learned policies**.
-> v7 ships **blind pick-and-place**, **vision-guided motion** (2D colour-mask perception,
+> v8 ships **blind pick-and-place**, **vision-guided motion** (2D colour-mask perception,
 > live-tuned) and **bin picking** — the emptying loop: ranked candidates, a retry over
 > them, a verified lift and a recovery step when the bin stalls. PLC actuation and
 > policies are architecture seams (present, not yet active). A course is included.
 
-> **Version.** `7.8.1`, the product label "TSA v7". What each release changed is in
+> **Version.** `8.3.0`, the product label "TSA v8" (the Canonical Task Program complete: M3; the Application
+> Composer: I0; a pose's taught joint configuration: ADR-0028). What each release changed is in
 > [Version notes](#version-notes), near the end.
 
 ---
@@ -635,7 +636,247 @@ dependency, not a GUI extra). Only `python_qt_binding` is GUI-specific: the head
    `<robot>_description` + a README. Build it and run — one command brings up the
    cell, one runs the app.
 
+## The Application Composer (Step 7, TSA 8.1)
+
+A task program is authored in the wizard: Step 6 starts one from a template (simple motion, pick and
+place, machine tending, inspection, process path, bin picking), and Step 7 is the **Application
+Composer** -- the SAME canonical program as the YAML below, never a second model:
+
+- **Overview** -- robot, MoveIt config, deployment, world, robot binding, scene, tools, sensors,
+  application, validation; and what is live: *the robot state is LIVE; the static planning environment is
+  DERIVED from the deployment world; dynamic / actuated world-state synchronization is future work*
+  (objects show CURRENT, SNAPSHOT, STALE or MANUAL).
+- **Waypoints** -- in mm and degrees; **taught** from the running robot: move it with RViz's
+  MotionPlanning gizmo, Plan, Execute, then **Capture TCP**, **Capture joints** or **Capture TCP + joints**
+  (the pose AND the configuration that reaches it, `X` / `X_j`, with `X`'s **Configuration** set to `X_j`: a PTP
+  or free move to the pose then reaches it in that joint configuration every cycle, or refuses -- ADR-0028; the
+  TCP and relative editors set or clear it). Without a configuration a PTP / free move to a pose takes the
+  configuration nearest where the robot is (TMR 2.6.0). Optional **Preview in RViz** (tick MotionPlanning >
+  "External Comm."), tried from several IK starts.
+- **Check the waypoints (live)** -- before Generate, with the planning environment running: MoveIt's IK, FK
+  and state validity of every waypoint, and of the program's motions **along their way** (a PTP's
+  joint-space line, a LIN's Cartesian line, a grasp's or release's own approach and retract), so a PTP
+  that crosses a fixture between two good waypoints is found before the run. It computes only: nothing
+  plans or moves.
+- **End effector** -- what the tool exposes and how each deployment drives it (the ADR-0022 contract):
+  **Suggest** a contract from the MoveIt config and the world (a suction cup, a controlled jaw such as a
+  GripperCommand gripper, or a multi-actuator tool), **Adopt** it as one undoable edit (the legacy
+  end-effector bridges are replaced by the adapters), then edit the actuators, their named targets
+  (typed, or captured from the robot's joints), the grasp sites, the verification and the adapter of
+  each deployment. **Check the end effector (live)** reads the adapter's state and endpoints (read-only:
+  TSA never commands the tool).
+- **Paths** (LIN / CIRC, stop or blend), **Profiles**, **Tasks** (the tree is the program's nesting:
+  repeat, retry, try alternatives, run task; process, capture, detect, grasp, release, **Close gripper**,
+  **Open gripper** -- the tool where the robot is, no motion -- and tool steps), and **YAML** (what a save
+  writes; a hand edit is reloaded).
+- Editor warnings beside the validator's refusals: `R-I0-05` (a PTP to a TCP pose before Cartesian motion:
+  reach it through a joint waypoint) and `R-I0-06` (a grasp, and no object of the cell scene is a grasp
+  target: nothing attaches to the tool in the planning scene).
+- Every edit is validated by the canonical model; the diagnostics locate each problem (double click to
+  go to it) and suggest a misspelt name.
+- Step 4 builds and starts the planning environment (and Isaac on the bound stage); Step 8 builds,
+  starts and runs the generated bundle and shows `BT finished: ...`. Every command is shown before it
+  runs; the bundle never needs TSA.
+- A GUI save over a project with YAML comments warns and keeps the file as `<project>.bak` first.
+
+## A Canonical Task Program (YAML)
+
+Besides the three templates, a project can describe its robot program directly:
+`application.type: task_program` (`schema_version: 4`). It reads like a robot program -- WHERE
+the robot goes (waypoints), HOW it gets there (move and path steps), with which limits (motion
+profiles) -- and TSA checks every reference, frame, provider and limit before it writes a file.
+It is written in `project.yaml` (the wizard shows it, validates it and never rewrites it). The
+example is the public sample cell's `examples/ur5e_suction/task_program.yaml`; its application
+(the file also gives the path a goal tolerance and sets `runtime.allowed_start_tolerance`):
+
+```yaml
+application:
+  type: task_program
+  motion_profiles:                       # reusable limits; % of the joint limits, TCP in m/s
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 30, acceleration: 30, tcp_velocity_mps: 0.1}   # the smaller limit wins
+    process: {speed: 20, acceleration: 20, tcp_velocity_mps: 0.08}
+  waypoints:                             # WHERE -- never how
+    - {name: home, type: joint, named: home}
+    - {name: w1, frame: base, position: [-0.45, -0.25, 0.30], orientation: [0.0, 1.0, 0.0, 0.0]}
+    - {name: w2, relative: {to: w1, frame: tool, dz: 0.20}}   # 200 mm along the tool axis
+    - {name: w2b, frame: base, position: [-0.45, 0.0, 0.05], orientation: [0.0, 1.0, 0.0, 0.0]}
+    - {name: w3, frame: base, position: [-0.45, 0.25, 0.10], orientation: [0.0, 1.0, 0.0, 0.0]}
+    - {name: w4, frame: base, position: [-0.45, 0.25, 0.30], orientation: [0.0, 1.0, 0.0, 0.0]}
+  paths:                                 # several waypoints as ONE motion
+    - name: sweep
+      states: [w1, w2, w3, w4]
+      segments: [{type: lin, blend_radius_m: 0.02}, {type: circ, via: w2b, blend_radius_m: 0.02},
+                 {type: lin}]            # the last segment never blends
+      continuity: blend                  # or stop: halt at every state
+      profile: process
+  tasks:
+    - name: validation_a
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+        - move: {to: w1, type: ptp, profile: transit}
+        - move: {to: w2, type: lin, profile: approach}
+        - move: {to: w3, type: circ, via: w2b, profile: approach}
+        - move: {to: w4, type: lin, profile: approach}
+        - move: {to: home, type: ptp, profile: transit}
+        - move: {to: w1, type: ptp, profile: transit}   # a path starts where the robot is
+        - path: sweep
+        - move: {to: home, type: ptp, profile: transit}
+  main_task: validation_a
+```
+
+No provider is named: each motion gets the registry's default (`pilz_ptp`, `pilz_lin`,
+`pilz_circ`, `pilz_sequence` for a path, `ompl` for `type: free`), and the bundle says which one
+in comments, in `config/paths.yaml` and in its `README.md`. To choose, set
+`application.providers` (`ptp`, `free`, `path`, `dense_path`), or `provider:` on a ptp/free move
+or a path; a provider that cannot do what the step asks (a blend, a TCP limit, a tolerance) is
+refused with the step, the missing capability and the providers that have it. The generated
+`<robot>_app` holds `config/bt_params.yaml` (`task_parameters`: each waypoint and the move that
+reaches it), `config/paths.yaml`, `config/motion_profiles.yaml` and `bt_trees/task_program.xml`
+(one BehaviorTree per task: one `MoveWaypoint` per move, one `FollowPath` per path). It needs
+`trainit_motion_runtime` 2.2.0 (2.4.0 with process events, 2.5.0 with manipulation steps). Not in this
+version: a TCP other than the tip link, a dense path read from a file, a `check` step.
+
+**Process events and captures (7.11.0).** A task coordinates motion, process actions and perception
+with the same generic vocabulary -- an inspection, a dispensing or a gluing program is a composition,
+never a step type of its own:
+
+```yaml
+  paths:
+    - name: inspection_scan
+      states: [inspection_start, w1, w2, w3]
+      segments: [{type: lin}, {type: lin}, {type: lin}]
+      profile: inspect
+      events:                  # the robot STOPS at the anchor; the event is blocking
+        - {at: {state: w1}, kind: capture, detector: inspection_cam}    # -> captures.0
+        - {at: {state: w2}, kind: capture, detector: inspection_cam}    # -> captures.1
+        - {at: {segment: 2, when: end}, kind: capture, detector: inspection_cam}
+  tasks:
+    - name: inspect
+      steps:
+        - move: {to: inspection_start, type: ptp, profile: transit}
+        - process: {kind: process_on, channel: inspection_light}        # a LOGICAL channel id
+        - path: inspection_scan
+        - process: {kind: process_off, channel: inspection_light}
+```
+
+An event's `kind` is `process_on`, `process_off`, `set_value` (`value`), `external` (a logical
+action, no acknowledgement) -- each on a `channel` that is a LOGICAL id (`dispenser`,
+`washer_start`), never a ROS topic, a hardware address or a controller symbol -- or `capture`
+(`detector`, optional `out`, `class_id`, `timeout_ms`) or, on a path, `dwell` (`ms`). A path event is
+anchored at a state (`after_arrival`, the default, or `before_departure`) or at a segment's `start` /
+`end`; one inside a segment (a fraction, a distance, a time) or `sync: async` is refused before any
+file (R-M3-09). A capture triggers its detector on demand and keeps only a result taken after it
+began, on the blackboard as `captures.<n>` (counted per task in execution order) -- nothing is
+recorded. The path stays ONE path of `config/paths.yaml`; the tree runs it as event-free
+`FollowPath` runs with the event nodes between them. A program with channel events runs the ROS
+process controller (`<channel>/process_enabled | process_value`, latched). The inspection example is
+`test/data/m3_5/validation_b.yaml`.
+
+**Manipulation (7.12.0).** A pick and place reads as three steps; any grasp producer feeds the same
+grasp (ADR-0026):
+
+```yaml
+  waypoints:
+    - {name: pick_nominal, position: [0.4, 0.0, 0.3], orientation: [1, 0, 0, 0]}   # how the tool is held
+    - {name: place, position: [0.3, -0.3, 0.15], orientation: [1, 0, 0, 0]}
+  tasks:
+    - name: pick_and_place
+      steps:
+        - detect: {detector: grasp_provider, source: candidates}       # -> the candidate set
+        - grasp:                                                       # the best candidate of it
+            orientation_from: pick_nominal
+            standoff_m: 0.05
+            profile: transit             # the PreGrasp transfer (PTP)
+            approach_profile: approach   # the Approach and the Retract (LIN)
+            retract: {along_approach: 0.1}
+        - release: {at: place, standoff_m: 0.05, profile: transit, approach_profile: approach,
+                    retract: {dz: 0.08}}
+```
+
+- `detect`: `source: candidates` reads a grasp producer's candidates
+  (`trainit_interfaces/GraspCandidateArray`); `source: detections` projects a detector's detections onto
+  the same contract (approach = -surface normal, into the surface; `approach: [x, y, z]`, base axes,
+  when a detection has no fitted normal). `keep` (1), `out` (default `candidates`), `class_id`
+  (detections), `timeout_ms`.
+- `grasp`: PreGrasp (PTP) -> Approach (LIN) -> close the grip -> verify as the end-effector contract
+  requires -> Retract (LIN, `along_approach` or `dz`). From a candidate set (`candidates`, default the
+  task's latest detect; `index`, default 0, the best): the PreGrasp is `standoff_m` (else the
+  candidate's own) back along the candidate's approach; the tool's orientation is `align_approach`
+  -- the `orientation_from` waypoint (a pose in the base frame) tilted only as much as needed for its
+  +Z to travel along the approach; a reference pointing exactly against the approach is refused. At
+  a taught target (`at`), the approach is the target's own tool +Z (`target_local`). `eef` / `site`
+  default to the contract's only device and site; the site's TCP must be the tip link.
+- `release`: at a taught target, the same idiom with the grip opened and the release verified as the
+  contract requires. `tool`: `actuate: {actuator, target}` (a named target; a grip is opened and closed
+  by grasp and release) or `verify: {site?, expect: held | released}`.
+- A failed verification stops the task. The reference example is `test/data/m3_6/validation_c.yaml`
+  (and `validation_c_detections.yaml`: the same grasp fed by a detector).
+
+**Task composition (8.0.0).** A program of several tasks: a task CALLS another, and three control
+steps say how often and in which order a BODY of steps runs -- an automation engineer's subroutine,
+loop, retry and alternative, with no condition, variable or expression of their own:
+
+```yaml
+  tasks:
+    - name: cell_cycle
+      description: two parts from the pick to the place, then a recovery to home
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+        - repeat:                        # the body, 2 times (-1: until a step fails or you stop it)
+            cycles: 2
+            body:
+              - task: transfer           # call: transfer's steps run, then the next step
+        - fallback:                      # alternatives, in order, until one succeeds
+            bodies:
+              - - retry:                 # the body again from its first step when one fails
+                    attempts: 2          # tries at most, the first included
+                    body:
+                      - tool: {verify: {expect: held}}
+              - - task: go_home
+    - name: transfer
+      steps:
+        - grasp: {at: pick, standoff_m: 0.05, profile: transit, approach_profile: approach, retract: {dz: 0.05}}
+        - release: {at: place, standoff_m: 0.05, profile: transit, approach_profile: approach, retract: {dz: 0.05}}
+    - name: go_home
+      steps: [{move: {to: home, type: ptp, profile: transit}}, {dwell: {ms: 200}}]
+  main_task: cell_cycle
+```
+
+- A step inside a body is the same step as anywhere else (same checks, same refusals, same nodes); it
+  is named by its label: `3.1` (step 1 of the body of step 3), `5.2.1` (step 1 of the SECOND
+  alternative of the fallback at step 5).
+- A failing step fails its body: a `repeat` stops with that failure, a `retry` runs the body again while
+  tries are left, a `fallback` runs its next alternative. ANY failure counts -- a verification verdict,
+  a target the planner cannot reach, a motion fault (an end-effector fault stays latched: the run still
+  ends with exit code 3).
+- `inputs` / `outputs` (`{name, type}`, type `candidates` -- a detect step's set -- or `capture`) are the
+  data a task takes and gives, BY NAME: the application has one blackboard, so a called task reads the
+  set its caller holds under that name. TSA checks every call: the input is held there, what the called
+  grasps need of it (`keep`, a standoff for projected detections), an output the task produces on every
+  way it succeeds; a set a called task writes without declaring it is not held after the call; the
+  calls form no cycle (`a -> b -> a` is refused, naming the chain). The main task takes no input.
+- `config/tasks.yaml` is the manifest: each task's tree (`task_<name>`), description, inputs and
+  outputs. Nothing reads it to run the program (`MainTree` runs `main_task`); it is the seam for a later
+  task server. A task is ONE BehaviorTree, called with `SubTree`; the control steps are
+  BehaviorTree.CPP's `Repeat`, `RetryUntilSuccessful` and `Fallback`. No new runtime: the floors are the
+  steps' own. The example is `test/data/m3_7/composition.yaml`; the six M3 decompositions (machine
+  tending, inspection, a process path, pick and place, bin picking, bottle nesting) are
+  `test/data/m3_7/decompositions/`.
+- The application types `gluing`, `follow_path`, `waypoint_replay` and `cnc` -- names that never
+  generated a bundle -- are refused at load: each is a Canonical Task Program.
+- **Step ids** (TSA 8.3, D18, ADR-0030): any step may carry an optional `id` -- a name you choose, unique
+  within its task (control bodies included), e.g. `- {id: pick, grasp: {...}}`. It names that application
+  step in the runtime's execution events (`trainit/execution_events`: entered, exited with its status, a
+  grasp step's attempt and candidate), which a TrainIt data recorder can trigger on. Ids are written in
+  `project.yaml` (the Composer keeps a step's id when you edit the step). A step with an id runs inside
+  `<Sequence name="trainit_step:<id>:<kind>">` in the generated tree; a step without one -- and so every
+  project that names none -- generates exactly the tree it did before.
+
 ## Running a generated bundle
+
+A bundle is plain ROS 2 packages: it runs on TMR, MoveIt and the robot's controllers, and none of
+its packages depends on `trainit_setup_assistant`. TSA is needed only to generate or regenerate it.
 
 **The first time**, install what the bundle needs. From the workspace whose `src/` holds the
 bundle, with TrainIt sourced (Install, step 2):
@@ -709,28 +950,29 @@ the plugin reason above.
 
 ## CLIs (headless)
 
-Each runs as `ros2 run trainit_setup_assistant <command>`: an `ament_python` package installs
-its commands under `lib/trainit_setup_assistant`, not on `PATH`.
+Each runs as `ros2 run trainit_setup_assistant <command>` in a sourced workspace: an
+`ament_python` package installs its commands under `lib/trainit_setup_assistant`, not on `PATH`,
+so a bare `trainit_generate` is not found.
 
-- `trainit_generate <project.yaml> -o <dir>` — generate the bundle. A project without an
+- `ros2 run trainit_setup_assistant trainit_generate <project.yaml> -o <dir>` — generate the bundle. A project without an
   end-effector contract needs no ROS. One with a contract compiles its robot description first
   (R9), so it needs `xacro` and a sourced environment that finds every package the description
   uses (`ur_description`, for the public sample). A relative path in a project resolves against
   the current directory, not against the project file. A `<dir>` that is not empty is refused;
   `--force` deletes it first.
-- `trainit_verify <project.yaml> --golden <dir> [--build]` — equivalence + optional build.
-- `trainit_compute_collisions <project.yaml> [--write]` — the self-collision matrix
+- `ros2 run trainit_setup_assistant trainit_verify <project.yaml> --golden <dir> [--build]` — equivalence + optional build.
+- `ros2 run trainit_setup_assistant trainit_compute_collisions <project.yaml> [--write]` — the self-collision matrix
   (`robot.disable_collisions`), from the MoveIt Setup Assistant's `collisions_updater`, so it
   needs ROS: printed, or with `--write` saved into the project, which rewrites the file without
   its comments.
-- `trainit_isaac_kit --into <dir>` — copies the reusable Isaac-cell tooling (the stage validator,
+- `ros2 run trainit_setup_assistant trainit_isaac_kit --into <dir>` — copies the reusable Isaac-cell tooling (the stage validator,
   the collision-mesh exporter and two Script Node templates) into an existing `<cell>_isaac`
   package; a file already there is kept unless `--force`.
-- `trainit_setup_assistant` — the Qt wizard.
+- `ros2 run trainit_setup_assistant trainit_setup_assistant` — the Qt wizard.
 
 ## Version notes
 
-> **Version note.** The package version is `7.8.1` and the product label is "TSA v7" —
+> **Version note.** The package version is `8.0.0` and the product label is "TSA v8" —
 > one number, deliberately. TSA was called v6 in commits while `package.xml` said 4.3.1,
 > so the two were already telling different stories; the jump is cosmetic (nothing in the
 > generated output changes with it) and is taken once so it is never ambiguous again
@@ -812,6 +1054,101 @@ its commands under `lib/trainit_setup_assistant`, not on `PATH`.
 > config, the released MoveIt manager the copied file names. On a machine set up by Install alone,
 > `rosdep` over a 7.8.0 bundle left it out, and move_group could not load its controller manager.
 > Only that `package.xml` (an `exec_depend` and its two-line comment) and the manifest change.
+>
+> `7.9.0` (vNext M3.2, ADR-0025): TSA reads TMR's planner registry at schema 2 (TMR 2.2.0's motion
+> provider rows, their capability tokens and the default row per motion kind) and resolves a
+> motion request against it: what the request requires, which provider it resolves to (its own
+> choice, the application's, the registry default -- never a fallback) and a refusal before any
+> file when the provider cannot honour it, naming the request, the token and the provider
+> (`model/motion.py`, `model/capabilities.py`). Not yet used by any project file (M3.3's
+> `task_program`): every generated byte is unchanged but the manifest's `capability_snapshot`.
+>
+> `7.10.0` (vNext M3.3, ADR-0024): the Canonical Task Program -- `application.type: task_program`,
+> `schema_version: 4` (see [A Canonical Task Program](#a-canonical-task-program-yaml)):
+> waypoints, motion profiles, paths and tasks of move, path and dwell steps, validated and resolved
+> against TMR's providers before any file, generated as `task_parameters`, `config/paths.yaml`,
+> `config/motion_profiles.yaml` and one BehaviorTree per task (needs `trainit_motion_runtime`
+> 2.2.0). The wizard is YAML-first for it: it shows and validates a task program and never rewrites
+> it. A template project's generated bytes are unchanged but the manifest's provenance
+> (`generator_version`, `capability_snapshot`).
+>
+> `7.11.0` (vNext M3.5, ADR-0024): process-path semantics in a task program -- the `process` step,
+> a path's `events` and the `capture` event (see above): validated and refused before any file
+> (anchors at states and segment boundaries only, blocking only, a logical channel id, a triggerable
+> detector), generated as `ProcessEvent`, `DetectObject trigger="true"`, `Sleep` and
+> `FollowPath from= to=` runs, with `paths.yaml` recording where a path stops; needs
+> `trainit_motion_runtime` 2.4.0 when used. `perception.detectors[].external_node.detect_service`
+> declares an external detector's on-demand service. A program without events and every template
+> bundle: unchanged but the manifest's provenance.
+>
+> `7.12.0` (vNext M3.6, ADR-0026): manipulation in a task program -- the `detect`, `grasp`, `release`
+> and `tool` steps and `relative.frame: target_local` (see above): validated and refused before any
+> file, generated as `DetectCandidates`, `SetWaypointFromCandidate`, the idioms' `MoveWaypoint`s and
+> the end-effector contract's nodes, each idiom motion a derived `task_parameters` entry
+> `<task>__s<i>_<role>`; needs `trainit_motion_runtime` 2.5.0 when used (which brings
+> `trainit_interfaces` 0.2.0). A program without manipulation steps and every template bundle:
+> unchanged but the manifest's provenance.
+>
+> `8.0.0` (vNext M3.7, ADR-0024; M3 decisions 6 and 7): task composition in a task program -- `task`
+> calls, `inputs` / `outputs` bound by name, `repeat` / `retry` / `fallback`, an acyclic call graph, the
+> `config/tasks.yaml` manifest (see above); a product label, as 7.0.0 was. BREAKING, by decision 7: the
+> application types `gluing`, `follow_path`, `waypoint_replay` and `cnc` -- which never generated a
+> bundle -- are refused at load, naming `task_program`. A task program's bundle gains
+> `config/tasks.yaml` (and its README a row for it); no new TMR floor. Every template bundle: unchanged
+> but the manifest's provenance.
+>
+> `8.1.0` (vNext I0, the Application Composer; ADR-0027): Step 7 authors a task program (waypoints taught
+> from the live robot, paths, profiles, the task tree, the process / camera / tool / manipulation steps,
+> located diagnostics, the YAML view); Step 6 starts one from an installed template; Steps 4 and 8 build,
+> launch and observe (ADR-0027: TSA launches and observes, never runs the motion). Additive: optional
+> `deployment.isaac` (the Isaac world and robot binding) and `scene.provenance` (where the planning scene
+> was imported from), written only when set; a relative path in a project now resolves beside the
+> project file (the current directory: a deprecated fallback with a warning). Every bundle of an
+> unchanged project: unchanged but the manifest's provenance. From the owner's acceptance: the End
+> effector section (the ADR-0022 contract authored in the GUI) and the task step `tool: {close: {}}` /
+> `tool: {open: {}}` (ADR-0024 amendment I0: the grasp's / release's actuation where the robot is; needs
+> `trainit_motion_runtime` 2.5.0); Capture TCP + joints; the live checks of the waypoints, the motions and
+> the end effector. `grasp_attach_mode: attach_box` (a held part as a box in the planning scene) needs
+> `trainit_motion_runtime` 2.5.1 (2.5.0's attach was refused by move_group).
+>
+> `8.2.0` (ADR-0028): a TCP or relative waypoint may name the joint waypoint it was taught with
+> (`configuration: w1_j`); the bundle entry carries the joint values (and a grasp's PreGrasp / a release's
+> PreRelease at that target), and the package then declares `trainit_motion_runtime >= 2.6.0`, whose PTP / free
+> moves reach a pose in the configuration nearest the taught one (or the start state) or refuse
+> (`CONFIGURATION_UNREACHABLE`). Capture TCP + joints records it; the live check and R-I0-05 follow the rule. A
+> project without it: its bundles unchanged but the manifest's provenance.
+>
+> `8.2.1` (found by the ROS2ML-SYNC Gazebo verification): a task program may name a named state the PROJECT
+> adds on an existing MoveIt config (the generator appends it to the bundle's SRDF; R-M3-05 refused it), and
+> such a state's values are the bundle SRDF's (the config's own where both name one); R-I0-05 says what the
+> runtime does (the configuration nearest the start). Bundles unchanged but the manifest's provenance.
+>
+> `8.2.2` (found by simulating a ROS2ML student): the End effector section's Suggest proposes a controlled jaw
+> (`gripper_command`) for a GripperCommand gripper even when the cell sends a grasp-signal topic (a Gazebo
+> LinkAttacher weld is not a suction command), and a `ros2_control` binding only where its flavour is known
+> (gazebo; elsewhere `none`, to decide); Adopt resets the legacy per-backend grasp adapters but Gazebo's weld
+> (they disagreed with the contract's bindings, R23). Bundles unchanged but the manifest's provenance.
+>
+> `8.2.3` (found by simulating a ROS2ML student who updates): a Gazebo cell's grasp bridge
+> (`<project>_trainit_config/scripts/link_attacher_bridge.py`) is generated executable -- `colcon build
+> --symlink-install` links the install tree to it, and a non-executable one stopped the `gazebo` bring-up with
+> "executable ... not found on the libexec directory"; the bridge now logs the LinkAttacher plugin's answer to
+> every weld and release, tries a refused one once more, then reports it as an error with the plugin's reason
+> (a part never held was invisible, and the cycle still ended SUCCESS). Gazebo bundles: that script's bytes and
+> mode; the others unchanged but the manifest's provenance.
+>
+> `8.3.0` (D0.5, decision D18, ADR-0030): a task step may carry an optional canonical `id` (a name, unique
+> within its task); an identified step is generated inside `<Sequence name="trainit_step:<id>:<kind>">`, the
+> carrier TMR's execution-event observer reads. Projects without step ids: bundles unchanged but the manifest's
+> provenance.
+
+## Licence
+
+Apache-2.0: [`LICENSE`](LICENSE). The other TrainIt Community repositories
+([`trainit_community.repos`](trainit_community.repos)) are Apache-2.0 too. A generated bundle
+carries the licence its project's `meta.license` names (Apache-2.0 by default). Third-party
+packages a bundle uses (MoveIt, BehaviorTree.CPP, a robot's description) keep their own licences;
+none is redistributed here.
 
 ## For maintainers
 

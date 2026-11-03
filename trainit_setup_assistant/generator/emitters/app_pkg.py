@@ -194,6 +194,16 @@ class AppEmitter(Emitter):
                       detectors=detector_nodes,
                       external_detectors=external_detectors)
 
+        # --- TrainIt D0.8: the data recorder's configuration, one file per recordable mode, and the
+        # recorder in the bring-up (robot slot). Nothing when the project records no live data, so a
+        # project without data_collection is byte-identical.
+        from ..data_collection import FILE_PATTERN, recording_documents, recording_yaml
+        recordings = recording_documents(project)
+        for mode, document in recordings.items():
+            ctx.generate_to(f'{pkg}/' + FILE_PATTERN.format(mode=mode), recording_yaml(mode, document),
+                            source='data_collection')
+        data_modes_py = repr(tuple(recordings)) if recordings else ''
+
         if robot.base_moveit_config_path:
             # Bundle flow: the trainit_config package HAS a full cell bringup (planners,
             # modes, bridges, scene loader). The app bringup INCLUDES it and runs the
@@ -217,7 +227,8 @@ class AppEmitter(Emitter):
                           bt_delay_default=('15.0' if (Backend.GAZEBO in dep.modes) else '8.0'),
                           default_planner_mode=(plan.planner_mode if plan else
                                                 app.global_planner_mode.value),
-                          start_tolerance=plan.start_tolerance if plan else None)
+                          start_tolerance=plan.start_tolerance if plan else None,
+                          data_modes_py=data_modes_py, data_namespace=cell_ns)
         else:
             # From-scratch bootstrap: no base config bringup exists — the app bringup
             # assembles move_group + controllers itself (and a mock gripper server).
@@ -259,7 +270,8 @@ class AppEmitter(Emitter):
                           # mock gripper: run the generated no-op server in mock mode when
                           # a gripper exists but no cell bridge serves it (empty bridges).
                           gripper_mock_action_py=(repr(gripper_action)
-                                                  if legacy_gripper else 'None'))
+                                                  if legacy_gripper else 'None'),
+                          data_modes_py=data_modes_py, data_namespace=cell_ns)
 
         # --- mock gripper action server (GENERATE, only if the robot has a gripper) ---
         if legacy_gripper:
@@ -336,7 +348,8 @@ class AppEmitter(Emitter):
                       servo_dep=(app.uses_servo()
                                  and not robot.base_moveit_config_path),
                       perception_min_version=perception_min_version,
-                      tmr=tmr, policy_runtime=use.policy_runtime, hardware_layer=hardware)
+                      tmr=tmr, policy_runtime=use.policy_runtime, hardware_layer=hardware,
+                      data_recorder=bool(recordings))
         ctx.render_to(f'{pkg}/CMakeLists.txt', 'app/CMakeLists.txt.j2',
                       package_name=pkg, has_gripper_script=legacy_gripper,
                       has_policies=bool(project.application.policies))

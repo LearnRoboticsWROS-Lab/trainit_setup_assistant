@@ -397,6 +397,8 @@ def scratch_catalog(tmp_path, monkeypatch):
     (here / REGISTRY_FILE).write_bytes(COPY.read_bytes())
     (here / catalog.TP_REGISTRY_FILE).write_bytes(
         (CATALOG_DIR / catalog.TP_REGISTRY_FILE).read_bytes())
+    (here / catalog.DATA_RECORDING_FILE).write_bytes(
+        (CATALOG_DIR / catalog.DATA_RECORDING_FILE).read_bytes())
     tmr = tmp_path / 'planner_profiles.yaml'
     tmr.write_bytes(COPY.read_bytes())
     record = dict(fake=True, registries=dict(trainit_perception=dict(version='0')))
@@ -408,6 +410,8 @@ def scratch_catalog(tmp_path, monkeypatch):
     monkeypatch.setattr(refresh_tool, 'tp_export', catalog.tp_registry)
     monkeypatch.setattr(refresh_tool, 'tp_installed_release',
                         lambda: catalog.tp_registry()['trainit_perception'])
+    monkeypatch.setattr(refresh_tool, 'data_vocabulary_path',
+                        lambda: CATALOG_DIR / catalog.DATA_RECORDING_FILE)
     files = lambda: {f.name: f.read_bytes() for f in here.iterdir()}  # noqa: E731
     return types.SimpleNamespace(here=here, tmr=tmr, files=files)
 

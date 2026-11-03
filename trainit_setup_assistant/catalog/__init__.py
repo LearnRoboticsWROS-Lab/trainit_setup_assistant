@@ -886,6 +886,78 @@ def snapshot() -> dict:
     return _load(SNAPSHOT_FILE)
 
 
+# --- TrainIt D0.8: the data recorder's recording vocabulary (ADR-0021, ADR-0029 Decision 7) ------------
+# A byte copy of trainit_data_ros's EXPORTED ``catalog/recording_vocabulary.yaml``, committed by the
+# refresh; ``snapshot.yaml`` records its sha256 (registries.trainit_data_ros) and the camera profile
+# models of the installed hardware layer (registries.trainit_hardware_layer.camera_profiles). TSA
+# validates a project's data_collection against THESE, never against an installed package, and never
+# imports the data stack.
+DATA_RECORDING_FILE = 'data_recording_vocabulary.yaml'
+DATA_RECORDING_SCHEMA = 'trainit-recording-vocabulary'
+DATA_RECORDING_MAJOR = 1
+# what TSA's data_collection model names (model/data_collection.py): a vocabulary without them is refused
+TSA_RECORDING_TRIGGER_KINDS = ('MANUAL', 'INTERVAL', 'EVENT', 'APPLICATION_STATE')
+TSA_RECORDING_STREAMS = ('color', 'depth')
+_RECORDING_KEYS = ('schema', 'trainit_data_ros', 'recording_schema', 'identifier_pattern', 'backends',
+                   'sim_sources', 'classifications', 'streams', 'triggers', 'sync', 'writer')
+
+
+def parse_recording_vocabulary(data: bytes, where: str) -> dict:
+    """trainit_data_ros's exported recording vocabulary, held to what TSA reads from it (RuntimeError)."""
+    try:
+        doc = yaml.safe_load(data)
+    except yaml.YAMLError as exc:
+        raise RuntimeError(f'{where} is not YAML ({exc})') from None
+    if not isinstance(doc, dict) or set(doc) != set(_RECORDING_KEYS):
+        raise RuntimeError(f'{where} is not a recording vocabulary this TSA reads (keys '
+                           f'{sorted(doc) if isinstance(doc, dict) else type(doc).__name__})')
+    name, _, version = str(doc['schema']).partition('/')
+    if name != DATA_RECORDING_SCHEMA or version.split('.')[0] != str(DATA_RECORDING_MAJOR):
+        raise RuntimeError(f'{where}: schema {doc["schema"]!r}, this TSA reads '
+                           f'{DATA_RECORDING_SCHEMA}/{DATA_RECORDING_MAJOR}.x')
+    if doc['recording_schema'] != 'trainit-recording/1.0':
+        raise RuntimeError(f'{where}: recording schema {doc["recording_schema"]!r}, this TSA writes '
+                           'trainit-recording/1.0')
+    try:
+        triggers = doc['triggers']
+        missing = [k for k in TSA_RECORDING_TRIGGER_KINDS if k not in triggers['kinds']
+                   or k not in triggers['fields']]
+        missing += [s for s in TSA_RECORDING_STREAMS if s not in doc['streams']]
+        if not doc['sync']['policies'] or not isinstance(triggers['pick_attempt_phases'], dict):
+            missing.append('a sync policy / the pick-attempt phases')
+        re.compile(doc['identifier_pattern'])
+    except (KeyError, TypeError, re.error) as exc:
+        raise RuntimeError(f'{where} is malformed ({type(exc).__name__}: {exc})') from None
+    if missing:
+        raise RuntimeError(f'{where} no longer offers {missing}, which TSA\'s data collection names: '
+                           'change TSA first, then refresh')
+    return doc
+
+
+@functools.lru_cache(maxsize=None)
+def _recording_snapshot() -> dict:
+    data = _committed(DATA_RECORDING_FILE)
+    recorded = ((snapshot().get('registries') or {}).get('trainit_data_ros') or {}).get(
+        'recording_vocabulary') or {}
+    if recorded.get('file') != DATA_RECORDING_FILE or recorded.get('sha256') != _sha256(data):
+        raise RuntimeError(f'catalog/{DATA_RECORDING_FILE} is not the file catalog/{SNAPSHOT_FILE} '
+                           f'records: it was changed outside the refresh -- restore it with git or run '
+                           f'{REFRESH}')
+    return parse_recording_vocabulary(data, f'catalog/{DATA_RECORDING_FILE}')
+
+
+def recording_vocabulary() -> dict:
+    """The recorder's recording vocabulary as TSA committed it (D0.8): never the installed package."""
+    return copy.deepcopy(_recording_snapshot())
+
+
+def camera_profiles() -> Dict[str, dict]:
+    """The hardware layer's camera profile models as TSA committed them: {model: {backends, sim_sources}}
+    (the backends whose profile declares a recording source descriptor)."""
+    hw = (snapshot().get('registries') or {}).get('trainit_hardware_layer') or {}
+    return copy.deepcopy(hw.get('camera_profiles') or {})
+
+
 def _parsed(name: str) -> bytes:
     """The bytes the model was built from: read by its cached reader (first use triggers it).
     A reader replaced by a stand-in reads nothing: the committed bytes answer then."""

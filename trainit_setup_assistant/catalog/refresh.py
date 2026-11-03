@@ -4,12 +4,13 @@
     python3 -m trainit_setup_assistant.catalog.refresh --check    # compare only; exit 1 on drift
 
 Run it with the system ``python3`` after sourcing ``/opt/ros/humble/setup.bash`` and the
-workspace's ``install/setup.bash``: it reads the trainit_motion_runtime and trainit_perception the
-workspace INSTALLS. Three files, all or none:
+workspace's ``install/setup.bash``: it reads the trainit_motion_runtime, trainit_perception,
+trainit_data_ros and trainit_hardware_layer the workspace INSTALLS. Four files, all or none:
 
-  tmr_planner_registry.yaml   a byte copy of TMR's planner registry (vNext M2.1)
-  tp_registry_snapshot.yaml   trainit_perception's configuration vocabulary (vNext M2.2)
-  snapshot.yaml               the catalog derived from both, recording their sha256
+  tmr_planner_registry.yaml       a byte copy of TMR's planner registry (vNext M2.1)
+  tp_registry_snapshot.yaml       trainit_perception's configuration vocabulary (vNext M2.2)
+  data_recording_vocabulary.yaml  a byte copy of trainit_data_ros's exported recording vocabulary (D0.8)
+  snapshot.yaml                   the catalog derived from them, recording their sha256
 
 1. READ      TMR's installed planner registry and ``trainit_perception.vocabulary.export()``;
 2. VALIDATE  each against the schema this TSA reads and the tokens TSA's own code names; TP's
@@ -47,7 +48,8 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from . import (REFRESH, REGISTRY_FILE, TP_REGISTRY_FILE, missing_capability_vocabulary,
+from . import (DATA_RECORDING_FILE, REFRESH, REGISTRY_FILE, TP_REGISTRY_FILE,
+               missing_capability_vocabulary, parse_recording_vocabulary,
                missing_required_modes, parse_planner_registry, parse_tp_registry, tp_drift,
                tp_registry_text, tp_tier_problems, tp_vocabulary_problems)
 
@@ -83,6 +85,21 @@ def tmr_registry_path() -> Path:
     if not path.is_file():
         raise Refused(f'the installed trainit_motion_runtime ships no planner registry ({path}): '
                       'it predates TMR 1.8.0 -- rebuild and re-source the workspace')
+    return path
+
+
+def data_vocabulary_path() -> Path:
+    """trainit_data_ros's INSTALLED exported recording vocabulary (D0.8)."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        share = Path(get_package_share_directory('trainit_data_ros'))
+    except Exception as exc:                                    # noqa: BLE001
+        raise Refused('trainit_data_ros is not installed or the workspace is not sourced: its '
+                      f'recording vocabulary cannot be read ({exc})') from exc
+    path = share / 'catalog' / 'recording_vocabulary.yaml'
+    if not path.is_file():
+        raise Refused(f'the installed trainit_data_ros ships no recording vocabulary ({path}): it '
+                      'predates 0.8.0 -- rebuild and re-source the workspace')
     return path
 
 
@@ -158,11 +175,13 @@ C._registry_copy = lambda: registry
 C._tp_snapshot = lambda: record
 from trainit_setup_assistant.catalog.derive import derive
 (work / 'record.json').write_text(json.dumps(derive(tmr_bytes=registry_bytes,
-                                                    tp_vocabulary=record)))
+                                                    tp_vocabulary=record,
+                                                    data_bytes=(work / 'data.yaml').read_bytes())))
 '''
 
 
-def derive_record(tmr_bytes: Optional[bytes] = None, tp_vocabulary: Optional[dict] = None) -> dict:
+def derive_record(tmr_bytes: Optional[bytes] = None, tp_vocabulary: Optional[dict] = None,
+                  data_bytes: Optional[bytes] = None) -> dict:
     """The catalog record ``derive()`` makes of these inputs, computed in a CHILD interpreter.
 
     ``derive()`` imports TSA's model, and the model builds its vocabulary when it is imported: in
@@ -173,9 +192,12 @@ def derive_record(tmr_bytes: Optional[bytes] = None, tp_vocabulary: Optional[dic
         tmr_bytes = tmr_registry_path().read_bytes()
     if tp_vocabulary is None:
         tp_vocabulary = tp_export()
+    if data_bytes is None:
+        data_bytes = data_vocabulary_path().read_bytes()
     work = Path(tempfile.mkdtemp(prefix='tsa_catalog_refresh_'))
     try:
         (work / 'tmr.yaml').write_bytes(tmr_bytes)
+        (work / 'data.yaml').write_bytes(data_bytes)
         (work / 'tp.yaml').write_text(tp_registry_text(tp_vocabulary))
         root = str(Path(__file__).resolve().parents[2])        # the dir holding this package
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1',
@@ -293,6 +315,7 @@ def _reread_catalog() -> None:
     from .. import catalog as C
     C._registry_copy.cache_clear()
     C._tp_snapshot.cache_clear()
+    C._recording_snapshot.cache_clear()
     faces = sys.modules.get('trainit_setup_assistant.model.faces')
     if faces is not None:
         faces._cache = None
@@ -325,13 +348,21 @@ def build(check: bool) -> Tuple[Dict[str, bytes], List[str]]:
         raise Refused(f'TP no longer exports {", ".join(gone)}, which TSA\'s snapshot has and '
                       'committed projects may hold (they would stop loading): a removal needs '
                       'TSA to migrate those projects first')
+    data_path = data_vocabulary_path()
+    data = data_path.read_bytes()
     try:
-        snapshot = snapshot_text(derive_record(tmr_bytes=registry, tp_vocabulary=record)).encode()
+        parse_recording_vocabulary(data, str(data_path))
+    except RuntimeError as exc:
+        raise Refused(str(exc)) from exc
+    try:
+        snapshot = snapshot_text(derive_record(tmr_bytes=registry, tp_vocabulary=record,
+                                               data_bytes=data)).encode()
     except Refused:
         raise
     except Exception as exc:                                    # noqa: BLE001
         raise Refused(f'the catalog could not be derived ({type(exc).__name__}: {exc})') from exc
-    return {REGISTRY_FILE: registry, TP_REGISTRY_FILE: tp_text, SNAPSHOT_FILE: snapshot}, report
+    return {REGISTRY_FILE: registry, TP_REGISTRY_FILE: tp_text, DATA_RECORDING_FILE: data,
+            SNAPSHOT_FILE: snapshot}, report
 
 
 def _write_all(here: Path, files: Dict[str, bytes]) -> None:

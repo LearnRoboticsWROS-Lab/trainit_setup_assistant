@@ -98,6 +98,12 @@ class Orchestrator:
         # And the end-effector contract's (ADR-0022 R1-R26): only when the project opts into it,
         # except `actuate` without one and the guard token / schema_version 3 without one.
         refuse_eef_contract(project)
+        # And the data collection's (TrainIt D0.8): a camera, trigger, task / step or channel the
+        # recorder could not use is refused before a recording file exists, not at runtime.
+        from .data_collection import data_collection_problems
+        data_problems = data_collection_problems(project)
+        if data_problems:
+            raise ValueError('\n'.join(data_problems))
         # And what the bundle will say compiled it (vNext M2.3): the committed catalog snapshot's
         # identity -- a catalog changed behind this process is refused here, before any file.
         identity = snapshot_identity(release=__version__)

@@ -529,14 +529,15 @@ def tp_catalog(tmp_path, monkeypatch):
     equal to the committed copy, and a TP whose export the test chooses (default: the snapshot)."""
     here = tmp_path / 'catalog'
     here.mkdir()
-    for name in (catalog.REGISTRY_FILE, TP_REGISTRY_FILE, refresh_tool.SNAPSHOT_FILE):
+    for name in (catalog.REGISTRY_FILE, TP_REGISTRY_FILE, catalog.DATA_RECORDING_FILE,
+                 refresh_tool.SNAPSHOT_FILE):
         (here / name).write_bytes((CATALOG_DIR / name).read_bytes())
     tmr = tmp_path / 'planner_profiles.yaml'
     tmr.write_bytes((CATALOG_DIR / catalog.REGISTRY_FILE).read_bytes())
     state = types.SimpleNamespace(here=here, tmr=tmr, tp=tp_registry(),
                                   release=tp_registry()['trainit_perception'])
 
-    def record(tmr_bytes=None, tp_vocabulary=None):
+    def record(tmr_bytes=None, tp_vocabulary=None, data_bytes=None):
         # a deterministic stand-in for derive(): it says which inputs it was handed
         return dict(fake=True, tp=tp_vocabulary['trainit_perception'],
                     rules=list(tp_vocabulary['rules']),
@@ -550,6 +551,8 @@ def tp_catalog(tmp_path, monkeypatch):
     monkeypatch.setattr(refresh_tool, 'tp_export', lambda: copy.deepcopy(state.tp))
     monkeypatch.setattr(refresh_tool, 'tp_installed_release', lambda: state.release)
     monkeypatch.setattr(refresh_tool, 'derive_record', record)
+    # D0.8: the 'installed' recording vocabulary is the committed copy (current)
+    monkeypatch.setattr(refresh_tool, 'data_vocabulary_path', lambda: CATALOG_DIR / catalog.DATA_RECORDING_FILE)
     return state
 
 
@@ -860,7 +863,8 @@ def test_no_model_built_from_a_candidate_outlives_the_refresh(tmp_path):
         pytest.skip('needs the installed workspace (TMR, TP on the ament index)')
     here = tmp_path / 'catalog'
     here.mkdir()
-    for name in (catalog.REGISTRY_FILE, TP_REGISTRY_FILE, refresh_tool.SNAPSHOT_FILE):
+    for name in (catalog.REGISTRY_FILE, TP_REGISTRY_FILE, catalog.DATA_RECORDING_FILE,
+                 refresh_tool.SNAPSHOT_FILE):
         (here / name).write_bytes((CATALOG_DIR / name).read_bytes())
     code = (
         'import copy, sys\n'
@@ -970,3 +974,21 @@ def test_a_changed_classification_is_named_by_the_catalog_drift(monkeypatch):
     assert ("catalog drift: tp.rule.score distribution is 'community_candidate' in snapshot.yaml "
             "but 'pro_candidate' from derive()") in drift, drift
     catalog_identity.require_installed(absent)
+
+
+def test_d0_8_the_refresh_copies_the_recording_vocabulary_and_refuses_one_tsa_cannot_read(tp_catalog, tmp_path,
+                                                                                          monkeypatch):
+    """TrainIt D0.8: the fourth catalog file, trainit_data_ros's exported recording vocabulary, is a byte copy
+    written with the others; an installed vocabulary without what TSA's data collection names is refused whole."""
+    committed = (CATALOG_DIR / catalog.DATA_RECORDING_FILE).read_bytes()
+    installed = tmp_path / 'recording_vocabulary.yaml'
+    installed.write_bytes(committed + b'# a newer export\n')
+    monkeypatch.setattr(refresh_tool, 'data_vocabulary_path', lambda: installed)
+    assert refresh_tool.main(['--check']) == 1
+    assert (tp_catalog.here / catalog.DATA_RECORDING_FILE).read_bytes() == committed
+    assert refresh_tool.main([]) == 0
+    assert (tp_catalog.here / catalog.DATA_RECORDING_FILE).read_bytes() == installed.read_bytes()
+    before = _tree(tp_catalog.here)
+    installed.write_bytes(committed.replace(b'  - EVENT\n', b''))
+    assert refresh_tool.main([]) == 2
+    assert _tree(tp_catalog.here) == before

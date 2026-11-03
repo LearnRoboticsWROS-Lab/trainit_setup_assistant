@@ -25,7 +25,7 @@ from typing import Iterable, List, Optional, Tuple
 
 # a canonical code: at the start of a validator line, or after the place in a load refusal
 # ("task 'scan' step 3 (move): R-M3-02: ...")
-_CODE = re.compile(r'(?:^|:\s)(?P<code>R-M3-\d+|R-I0-\d+|R\d+[a-z]?)\b:')
+_CODE = re.compile(r'(?:^|:\s)(?P<code>R-M3-\d+|R-I0-\d+|R-D0-\d+|R\d+[a-z]?)\b:')
 # an end-effector contract refusal (ADR-0022): "end-effector contract (ADR-0022 R15): device "main" on ..."
 _EEF_CODE = re.compile(r'end-effector contract \(ADR-0022 (?P<code>R\d+)\)')
 _PLACES = (
@@ -42,8 +42,8 @@ _PLACES = (
 class Location:
     """Where a diagnostic points.
 
-    ``kind`` is one of ``step``, ``task_data``, ``path``, ``waypoint``, ``profile``, ``task`` or
-    ``project``. ``name`` is the task, path, waypoint or profile name. ``label`` is a step's canonical
+    ``kind`` is one of ``step``, ``task_data``, ``path``, ``waypoint``, ``profile``, ``task``, ``data``
+    (TrainIt D0.8: the Data section) or ``project``. ``name`` is the task, path, waypoint or profile name. ``label`` is a step's canonical
     label, e.g. ``(3, 2, 1)``. ``segment`` and ``event`` are path indices. ``item`` is a task input /
     output name, and ``io`` is ``input`` or ``output``."""
 
@@ -73,6 +73,8 @@ class Location:
             return f"{self.kind} '{self.name}'"
         if self.kind == 'end_effector':
             return 'the end-effector contract (End effector section)'
+        if self.kind == 'data':
+            return 'data collection (Data section)'
         return 'the project'
 
 
@@ -129,6 +131,8 @@ def parse(text: str, severity: str = 'error') -> Diagnostic:
     if eef is not None and _CODE.search(text) is None:
         return Diagnostic(text=text, severity=severity, code=eef.group('code'), location=Location('end_effector', ''))
     m = _CODE.search(text)
+    if m is not None and m.group('code').startswith('R-D0-'):       # TrainIt D0.8: the Data section
+        return Diagnostic(text=text, severity=severity, code=m.group('code'), location=Location('data', ''))
     return Diagnostic(text=text, severity=severity, code=m.group('code') if m else '',
                       location=locate(text))
 

@@ -177,9 +177,11 @@ class ApplicationTemplate(ABC):
         (ADR-0022 R1-R26, refused again before any file) and its warnings are among them, so
         the GUI shows them before Generate is pressed.
         """
+        from ..generator.data_collection import data_collection_problems, data_collection_warnings
         from ..generator.eef_contract import eef_contract_problems, eef_contract_warnings
         return (self._validate_execution(project) + eef_contract_problems(project)
-                + eef_contract_warnings(project))
+                + eef_contract_warnings(project) + data_collection_problems(project)
+                + data_collection_warnings(project))
 
     # --- REFUSALS: what generation must not even start with ---
     def refusals(self, project: CanonicalProject) -> List[str]:

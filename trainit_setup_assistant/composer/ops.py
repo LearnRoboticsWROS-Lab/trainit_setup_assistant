@@ -38,7 +38,19 @@ Label = Tuple[int, ...]
 CONTROL_KINDS = ('repeat', 'retry', 'fallback')
 _EDITOR = 'the edited program'
 # what a whole-project edit may change besides robot.gripper and deployment.bridges (checked separately)
-_PROJECT_EDITABLE = ('application', 'robot', 'deployment', 'schema_version')
+_PROJECT_EDITABLE = ('application', 'robot', 'deployment', 'schema_version', 'data_collection', 'perception')
+# TrainIt D0.8: the Data section edits data_collection and, of the perception, ONLY the camera's id / profile
+_CAMERA_DATA_KEYS = ('id', 'profile')
+
+
+def _without_camera_data(data: dict):
+    """The perception block without the camera's data-collection keys (what the Data section may not change)."""
+    perception = copy.deepcopy(data.get('perception'))
+    camera = (perception or {}).get('camera') if isinstance(perception, dict) else None
+    if isinstance(camera, dict):
+        for key in _CAMERA_DATA_KEYS:
+            camera.pop(key, None)
+    return perception
 
 
 class ComposerError(ValueError):
@@ -131,7 +143,8 @@ class Composer:
     def edit_project(self, mutate: Callable[[dict], Any]) -> Any:
         """Apply ``mutate`` to a copy of the WHOLE project as written and commit it through the canonical
         model, in the same history as the program's edits: the end effector (``robot.gripper``) and the
-        bridges it replaces (``deployment.bridges``) are edited here (vNext I0, I0_DESIGN.md §34)."""
+        bridges it replaces (``deployment.bridges``) are edited here (vNext I0, I0_DESIGN.md §34), and the
+        data collection (``data_collection``, the camera's ``id`` / ``profile``: TrainIt D0.8)."""
         data = project_to_dict(self.project)
         before = copy.deepcopy(data)
         result = mutate(data)
@@ -140,9 +153,11 @@ class Composer:
         robot_after = {k: v for k, v in (data.get('robot') or {}).items() if k != 'gripper'}
         dep_before = {k: v for k, v in (before.get('deployment') or {}).items() if k != 'bridges'}
         dep_after = {k: v for k, v in (data.get('deployment') or {}).items() if k != 'bridges'}
-        if changed or robot_before != robot_after or dep_before != dep_after:
-            _refuse('the Composer edits the program and the end effector (robot.gripper, deployment.bridges) only: '
-                    'the robot, the scene and the deployment are set at Steps 1-4')
+        if changed or robot_before != robot_after or dep_before != dep_after \
+                or _without_camera_data(before) != _without_camera_data(data):
+            _refuse('the Composer edits the program and the end effector (robot.gripper, deployment.bridges), and '
+                    'the data collection (data_collection, the camera id / profile), only: the robot, the scene, '
+                    'the perception and the deployment are set at Steps 1-4')
         self._commit_project(data)
         return result
 

@@ -1405,8 +1405,9 @@ class AssistantController:
         if not p.application.is_task_program():
             return [], []
         p = self.resolved_project()
-        errors: List[str] = list(eef_contract_problems(p))
-        warnings: List[str] = list(eef_contract_warnings(p))
+        from ..generator.data_collection import data_collection_problems, data_collection_warnings
+        errors: List[str] = list(eef_contract_problems(p)) + data_collection_problems(p)
+        warnings: List[str] = list(eef_contract_warnings(p)) + data_collection_warnings(p)
         try:
             warnings += plan_program(p).warnings
         except ProgramRefusals as exc:

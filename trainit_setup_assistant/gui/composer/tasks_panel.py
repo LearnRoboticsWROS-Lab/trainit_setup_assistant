@@ -23,6 +23,7 @@ from python_qt_binding.QtWidgets import (QAbstractItemView, QComboBox, QFormLayo
 
 from ...composer.describe import label_text, route, step_text
 from ...composer.ops import CONTROL_KINDS, ComposerError, step_bodies, step_kind
+from ...model.program import STEP_ID_KEY
 
 Label = Tuple[int, ...]
 ADDABLE = ('move', 'path', 'process', 'capture', 'dwell', 'detect', 'grasp', 'release', 'tool_close',
@@ -123,6 +124,14 @@ class TasksPanel(QWidget):
         # ---- inspector ----
         self.inspector = QGroupBox('Inspector')
         iv = QVBoxLayout(self.inspector)
+        # TrainIt D0.8 (D18): the step's id, the name a data trigger ("When the application reaches") picks
+        idf = QFormLayout()
+        self.step_id = QLineEdit()
+        self.step_id.setPlaceholderText('none (optional)')
+        self.step_id.setToolTip('A name for this step, unique in its task. A data trigger can capture when the '
+                                'application reaches a step that has an id.')
+        idf.addRow('Id', self.step_id)
+        iv.addLayout(idf)
         self.forms = QStackedWidget()
         self._build_forms()
         iv.addWidget(self.forms)
@@ -304,6 +313,7 @@ class TasksPanel(QWidget):
         kind = step_kind(step)
         self._edit_label, self._edit_original = label, step
         self.inspector.setEnabled(True)
+        self.step_id.setText(str(step.get(STEP_ID_KEY) or '') if isinstance(step, dict) else '')
         self.inspector.setTitle(f'Step {label_text(label)} — {step_text(step)}')
         doc = self._doc()
         wps = [w['name'] for w in doc.get('waypoints') or []]
@@ -383,7 +393,8 @@ class TasksPanel(QWidget):
             return False
         spec = self.spec_from_inspector()
         label = self._edit_label
-        return self._do(lambda: self.composer.replace_step(self.task, label, spec), select=label)
+        step_id = self.step_id.text().strip() or None
+        return self._do(lambda: self.composer.replace_step(self.task, label, spec, step_id=step_id), select=label)
 
     def default_step(self, kind: str) -> dict:
         doc = self._doc()

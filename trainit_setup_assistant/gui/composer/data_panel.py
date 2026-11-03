@@ -26,7 +26,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from python_qt_binding.QtCore import Qt, QTimer
 from python_qt_binding.QtGui import QColor, QImage, QPainter, QPen, QPixmap
@@ -44,6 +44,7 @@ OK, ERROR, WARN, HINT = '#2e7d32', '#c62828', '#8a6d3b', '#555'
 CALL_TIMEOUT_S = {'start_session': 15.0, 'capture': 30.0, 'close_session': 120.0}
 # after a successful reply, the session buttons wait for the recorder's 1 Hz diagnostics to show the new state
 STATE_SETTLE_S = 2.5
+FRAMES_SILENT_S = 3.0          # a camera stream with no new frame for this long is reported silent
 KIND_LABELS = {'manual': 'Manual (Capture button)', 'interval': 'Every N milliseconds',
                'event': 'When a process channel changes', 'application_state': 'When the application reaches'}
 TRANSITIONS = {'enter': 'starts', 'exit': 'ends', 'succeeded': 'succeeds', 'failed': 'fails'}
@@ -296,8 +297,8 @@ class TriggerDialog(QDialog):
                      'application_state': ('task', 'step', 'transition', 'attempt')}[kind])
         self.note.setText({'manual': 'One capture each time Capture is pressed during a session.',
                            'event': 'Only the process channels the program drives are listed.',
-                           'application_state': 'Only the steps that have an id are listed (give a step an id in '
-                                                'Tasks to name it here).'}.get(kind, ''))
+                           'application_state': 'Only the steps that have an id are listed: to name a step here, '
+                                                'give it an id in Tasks (select the step, Id, Apply).'}.get(kind, ''))
         if kind == 'application_state':
             self._task_changed()
 
@@ -364,6 +365,7 @@ class DataPanel(QWidget):
         self._settle_until = 0.0
         self._recorder_starting = False               # "Recorder starting…" until it answers or ends
         self._recorder_tail: List[str] = []           # its last output lines (why it ended)
+        self._frames: Dict[str, Tuple[int, float]] = {}  # stream -> (frames received, when that count last grew)
         self.sessions: List[dict] = []
         self.datasets: List[dict] = []
         self.versions: List[int] = []
@@ -940,6 +942,26 @@ class DataPanel(QWidget):
         self.tabs.blockSignals(False)
         self.refresh_datasets(select_session=self._session_after_close)
 
+    def _silent_streams(self, values: dict) -> List[str]:
+        """The streams whose received-frame count (the recorder's diagnostics, `received/<stream>`) has not grown
+        for FRAMES_SILENT_S. A drop is a new session's reset: it restarts the watch."""
+        now = time.monotonic()
+        silent = []
+        for key, value in values.items():
+            if not key.startswith('received/'):
+                continue
+            try:
+                count = int(value)
+            except (TypeError, ValueError):
+                continue
+            stream = key[len('received/'):]
+            last = self._frames.get(stream)
+            if last is None or count != last[0]:
+                self._frames[stream] = (count, now)
+            elif now - last[1] >= FRAMES_SILENT_S:
+                silent.append(stream)
+        return silent
+
     def _recorder_ended(self, code: int) -> None:
         self._recorder_starting = False
         launcher = self.launcher()
@@ -1001,6 +1023,11 @@ class DataPanel(QWidget):
         else:
             self.counters.setText('')
         warnings = []
+        silent = self._silent_streams(values) if reachable else []
+        if silent:
+            warnings.append(f'No camera frames for {FRAMES_SILENT_S:.0f} s or more: {", ".join(silent)}. The recorder '
+                            'is waiting for images; a capture now fails. Check that the camera publishes (Isaac: '
+                            'the scene is playing and its camera publishes images).')
         if status is not None and status.get('level', 0) >= 1:
             for key in ('captures_lost', 'write_failures', 'queue_overruns', 'sync_failures', 'clock_jumps'):
                 if values.get(key) not in (None, '', '0'):

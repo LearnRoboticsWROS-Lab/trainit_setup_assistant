@@ -726,3 +726,59 @@ def test_step_8_says_where_the_recorder_starts_after_generate(qapp, monkeypatch,
     assert 'Generated' in text, text
     assert ('Data recording (isaac, mock): < Back to Step 7 -> Data -> Capture -> Start recorder (no build '
             'needed), or start the bundle: its bring-up runs it.') in text
+
+
+# ---- owner acceptance flow 2 findings (D0.8) ---------------------------------------------------------------
+
+def test_a_step_gets_keeps_and_loses_its_id_in_the_tasks_inspector(qapp):
+    """The trigger dialog lists only steps with an id; the GUI must be able to give one (owner, flow 2)."""
+    import test_i0_7_tasks as T
+    c = T.composer(T.SAMPLE)
+    main = c.program.main_task
+    panel = T._panel(c, main)
+    panel.select((2,))
+    assert panel.step_id.text() == ''
+    panel.step_id.setText('approach_w1')
+    assert panel.apply()
+    assert c.step(main, (2,))['id'] == 'approach_w1' and c.can_undo
+    panel.select((2,))
+    assert panel.step_id.text() == 'approach_w1'
+    panel.move_profile.setCurrentText('approach')                # another edit keeps the id
+    assert panel.apply() and c.step(main, (2,))['id'] == 'approach_w1'
+    panel.select((3,))
+    panel.step_id.setText('approach_w1')                         # unique in its task: refused, nothing changed
+    before = c.step(main, (3,))
+    assert not panel.apply() and c.step(main, (3,)) == before
+    panel.select((2,))
+    panel.step_id.setText('')                                    # cleared: removed
+    assert panel.apply() and 'id' not in c.step(main, (2,))
+    c.undo()
+    assert c.step(main, (2,))['id'] == 'approach_w1'
+
+
+def test_a_silent_camera_is_reported_before_a_capture_fails(qapp, monkeypatch):
+    """Flow 2: Isaac's image publishers stopped; the recorder was ready and every capture timed out. The
+    recorder's own frame counters (diagnostics) now say so in the Session box."""
+    from trainit_setup_assistant.gui.composer import data_panel as P
+    panel, ctrl, host, _ = make_panel(qapp, monkeypatch)
+    counts = {'color': 0, 'depth': 0}
+
+    class Link(FakeLink):
+        def status(self, max_age_s=None):
+            return {'level': 0, 'backend': 'isaac',
+                    'values': {'session_state': 'IDLE', 'received/cell_camera/color': str(counts['color']),
+                               'received/cell_camera/depth': str(counts['depth'])}}
+    panel._link = Link()
+    clock = [100.0]
+    monkeypatch.setattr(P.time, 'monotonic', lambda: clock[0])
+    counts.update(color=10, depth=10)
+    panel._refresh_session()
+    assert panel.session_warnings.text() == ''
+    clock[0] += P.FRAMES_SILENT_S + 0.5
+    counts['color'] = 40                                         # colour flows, depth is silent
+    panel._refresh_session()
+    text = panel.session_warnings.text()
+    assert 'No camera frames' in text and 'cell_camera/depth' in text and 'cell_camera/color' not in text
+    counts.update(color=0, depth=0)                              # a new session resets the counters: a new watch
+    panel._refresh_session()
+    assert panel.session_warnings.text() == ''

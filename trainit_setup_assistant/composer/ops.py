@@ -34,6 +34,8 @@ from ..model.program import STEP_ID_KEY, describe_load_error, step_mapping_kind
 from ..model.project import CanonicalProject
 from .diagnostics import Diagnostic, parse_load_error
 
+KEEP_ID = object()          # replace_step: keep the step's id as it is
+
 Label = Tuple[int, ...]
 CONTROL_KINDS = ('repeat', 'retry', 'fallback')
 _EDITOR = 'the edited program'
@@ -510,7 +512,9 @@ class Composer:
         self.insert_step(task, label, step)
         return label
 
-    def replace_step(self, task: str, label: Label, step: dict) -> None:
+    def replace_step(self, task: str, label: Label, step: dict, step_id: Any = KEEP_ID) -> None:
+        """Replace a step. ``step_id``: KEEP_ID keeps the id it has; a name sets it; None removes it (D18: the id
+        a data trigger names, TrainIt D0.8). One edit, one undo."""
         step = copy.deepcopy(step)
         step_kind(step)
 
@@ -522,7 +526,12 @@ class Composer:
             # D18: the editor's spec carries no id; a step keeps the one it has (bindings stay valid)
             kept = {STEP_ID_KEY: old[STEP_ID_KEY]} if isinstance(old, dict) and STEP_ID_KEY in old \
                 and STEP_ID_KEY not in step else {}
-            steps[i] = {**kept, **step}
+            new = {**kept, **step}
+            if step_id is not KEEP_ID:
+                new.pop(STEP_ID_KEY, None)
+                if step_id is not None:
+                    new = {STEP_ID_KEY: step_id, **new}
+            steps[i] = new
         self.edit(mutate)
 
     def delete_step(self, task: str, label: Label) -> None:
@@ -730,5 +739,5 @@ def _profile_holders(doc: dict):
                 yield body
 
 
-__all__ = ['CONTROL_KINDS', 'Composer', 'ComposerError', 'Label', 'WAYPOINT_FIELDS', 'step_bodies',
+__all__ = ['CONTROL_KINDS', 'Composer', 'ComposerError', 'KEEP_ID', 'Label', 'WAYPOINT_FIELDS', 'step_bodies',
            'step_kind', 'walk', 'waypoint_refs']

@@ -184,7 +184,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_setup_assistant
-    version: 8.3.0
+    version: 8.4.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'

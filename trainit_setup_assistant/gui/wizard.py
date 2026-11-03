@@ -2860,7 +2860,8 @@ class BlocksPage(QWizardPage):
                                       if self.wizard() is not None and getattr(self.wizard(), '_live', None)
                                       else None),
             on_edit=self._program_edited,
-            live=lambda: self.wizard().live_capture())
+            live=lambda: self.wizard().live_capture(),
+            host=lambda: self.wizard())
         self.program_panel.setVisible(False)
         outer.addWidget(self.program_panel, 1)
         root = QHBoxLayout(self.editor)
@@ -4423,6 +4424,9 @@ class SetupWizard(QWizard):
 
     def closeEvent(self, event):  # pragma: no cover - GUI lifecycle
         self.launcher.stop_all()
+        data = getattr(getattr(self.blocks_page, 'program_panel', None), 'data', None)
+        if data is not None:
+            data.close()                     # TrainIt D0.8: the recorder link and the preview's scratch store
         if self._live is not None:
             self._live.close()
         if self._scene_pub is not None:

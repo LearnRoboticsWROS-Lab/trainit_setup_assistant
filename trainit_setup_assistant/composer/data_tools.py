@@ -385,7 +385,8 @@ def provider_unavailable(provider: Provider, modes: Sequence[str], isaac_launche
 
 
 def provider_command(provider: Provider, isaac_launcher: str, config_file: str, seed: int, runs: int, views: int,
-                     root: str, store: Optional[str] = None, title: str = 'Synthetic generation') -> Command:
+                     root: str, store: Optional[str] = None, title: str = 'Synthetic generation',
+                     kind: str = 'synthetic') -> Command:
     """The provider as an external process (``env -i`` keeps a sourced ROS environment out of Kit)."""
     python = isaac_python(isaac_launcher)
     if python is None:
@@ -397,7 +398,7 @@ def provider_command(provider: Provider, isaac_launcher: str, config_file: str, 
         args += ['--store', str(store)]
     script = ('exec env -i HOME="$HOME" PATH=/usr/bin:/bin TRAINIT_DATA_ROOT=' + shlex.quote(str(root)) + ' '
               + ' '.join(shlex.quote(a) for a in args))
-    return Command('synthetic', title, script, long_running=True)
+    return Command(kind, title, script, long_running=True)
 
 
 def parse_progress(line: str) -> Optional[dict]:

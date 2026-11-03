@@ -610,3 +610,119 @@ def test_edit_needs_a_selected_trigger(qapp, monkeypatch):
     monkeypatch.setattr(P, 'TriggerDialog', lambda *a: opened.append(a) or (_ for _ in ()).throw(AssertionError))
     panel.edit_trigger(-1)
     assert opened == []
+
+
+# ---- owner acceptance flow 1 findings (D0.8) ---------------------------------------------------------------
+
+class FakeLink:
+    base = '/trainit_data_recorder'
+
+    def reachable(self):
+        return True
+
+    def status(self, max_age_s=None):
+        return {'level': 0, 'backend': 'isaac', 'values': {'session_state': 'IDLE'}}
+
+    def alive(self):
+        return True
+
+    def close(self):
+        pass
+
+
+def test_recorder_starting_is_replaced_by_ready_or_by_why_it_ended(qapp, monkeypatch, tmp_path):
+    panel, ctrl, host, _ = make_panel(qapp, monkeypatch)
+    config = tmp_path / 'bundle' / ctrl.project.bundle.app_package / 'config'
+    config.mkdir(parents=True)
+    (config / 'data_collection.isaac.yaml').write_text('schema: trainit-recording/1.0\n')
+    ctrl.last_generation_dir = str(tmp_path / 'bundle')
+    panel.refresh()
+    panel.toggle_recorder()
+    assert panel in host.launcher.listeners and panel.message.text() == 'Recorder starting…'
+    # it ends at once (the flow 1 defect: a launch argument refused): the reason replaces "starting"
+    panel.line('data_recorder', "malformed launch argument 'namespace:=', expected format '<name>:=<value>'")
+    panel.line('data_recorder', '')
+    panel.finished('data_recorder', 1)
+    assert panel.message.text().startswith("The recorder ended (exit 1): malformed launch argument 'namespace:='")
+    # started again, and it answers: "starting" becomes "ready"
+    panel.toggle_recorder()
+    panel._link = FakeLink()
+    panel._refresh_session()
+    assert panel.message.text() == 'Recorder ready.' and panel.recorder_state.text().startswith('Recorder: ready')
+    panel._refresh_session()
+    assert panel.message.text() == 'Recorder ready.'
+
+
+def test_the_recording_setups_dataset_not_created_yet_is_said_not_replaced(qapp, monkeypatch):
+    cli = datasets_cli()
+    cli.answers['dataset list'] = (True, {'datasets': [{'dataset_id': 'd07_other', 'name': 'Another dataset',
+                                                        'classification': 'INTERNAL', 'versions': [1]}]}, None)
+    panel, ctrl, host, _ = make_panel(qapp, monkeypatch, cli=cli)
+    panel.tabs.setCurrentIndex(2)
+    panel.refresh()
+    _wait(panel)
+    _wait(panel)
+    planned = ctrl.project.data_collection.dataset.id
+    assert panel.dataset_combo.currentIndex() == -1 and panel.dataset_combo.count() == 1   # never d07_other by itself
+    assert not panel.dataset_hint.isHidden() and f'"{planned}" does not exist yet' in panel.dataset_hint.text()
+    assert not panel.create_version_button.isEnabled()
+    panel.dataset_combo.setCurrentIndex(0)                       # the user's own choice: allowed, hint gone
+    _wait(panel)
+    assert panel.dataset_combo.currentData() == 'd07_other' and panel.dataset_hint.isHidden()
+
+
+def test_generate_is_offered_only_before_a_generation_and_opens_step_8(qapp, monkeypatch, tmp_path):
+    panel, ctrl, host, _ = make_panel(qapp, monkeypatch)
+    opened = []
+    host.show_generate = lambda: opened.append(True)
+    panel.refresh()
+    assert not panel.bundle_generate.isHidden() and panel.mode.count() == 0
+    panel.bundle_generate.clicked.emit(False)                 # the button's own signal
+    assert opened == [True]
+    config = tmp_path / 'bundle' / ctrl.project.bundle.app_package / 'config'
+    config.mkdir(parents=True)
+    (config / 'data_collection.mock.yaml').write_text('schema: trainit-recording/1.0\n')
+    ctrl.last_generation_dir = str(tmp_path / 'bundle')
+    panel.refresh()
+    assert panel.bundle_generate.isHidden() and panel.mode.count() == 1
+
+
+def test_no_generate_button_without_a_host_that_opens_step_8(qapp, monkeypatch):
+    panel, ctrl, host, _ = make_panel(qapp, monkeypatch)        # no show_generate: absent, not decorative
+    panel.refresh()
+    assert panel.bundle_generate.isHidden()
+
+
+def test_the_wizard_opens_step_8_from_the_composer(qapp, monkeypatch):
+    from trainit_setup_assistant.gui.controller import AssistantController
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    ctrl.open_project(C.SOURCE)
+    w = SetupWizard(ctrl)
+    moved = []
+    monkeypatch.setattr(w, 'currentPage', lambda: w.blocks_page)
+    monkeypatch.setattr(w, 'next', lambda: moved.append('next'))
+    w.show_generate()
+    assert moved == ['next']
+    monkeypatch.setattr(w, 'currentPage', lambda: w.generate_page)
+    w.show_generate()
+    assert moved == ['next']                                    # anywhere else: nothing
+
+
+def test_step_8_says_where_the_recorder_starts_after_generate(qapp, monkeypatch, tmp_path):
+    """Generate then Back is not obvious (owner, flow 1): Step 8's result says it, for the modes it wrote."""
+    from trainit_setup_assistant.gui.controller import AssistantController
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    from test_d0_8_data_collection import with_data
+    ctrl = AssistantController()
+    ctrl.project = C.build(with_data(modes=['mock', 'isaac']))
+    w = SetupWizard(ctrl)
+    page = w.generate_page
+    page.initializePage()
+    page.project_name.setText(ctrl.project.project_name)
+    page.output_dir.setText(str(tmp_path))
+    page.generate()
+    text = page.result.toPlainText()
+    assert 'Generated' in text, text
+    assert ('Data recording (isaac, mock): < Back to Step 7 -> Data -> Capture -> Start recorder (no build '
+            'needed), or start the bundle: its bring-up runs it.') in text

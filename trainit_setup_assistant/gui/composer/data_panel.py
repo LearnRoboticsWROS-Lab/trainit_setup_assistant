@@ -362,6 +362,8 @@ class DataPanel(QWidget):
         self._preview_dir: Optional[str] = None
         self._session_after_close: Optional[str] = None
         self._settle_until = 0.0
+        self._recorder_starting = False               # "Recorder starting…" until it answers or ends
+        self._recorder_tail: List[str] = []           # its last output lines (why it ended)
         self.sessions: List[dict] = []
         self.datasets: List[dict] = []
         self.versions: List[int] = []
@@ -579,6 +581,12 @@ class DataPanel(QWidget):
         self.recorder_start = QPushButton('Start recorder')
         self.recorder_start.clicked.connect(self.toggle_recorder)
         row.addWidget(self.recorder_start)
+        # the recorder runs the GENERATED file (what the cell deploys): before a generation, the way to Step 8
+        self.bundle_generate = QPushButton('Generate…')
+        self.bundle_generate.setToolTip('Open Step 8 (Generate): the recorder runs the generated recording file')
+        self.bundle_generate.clicked.connect(self.open_generate)
+        self.bundle_generate.setVisible(False)
+        row.addWidget(self.bundle_generate)
         row.addStretch(1)
         sv.addLayout(row)
         row = QHBoxLayout()
@@ -860,8 +868,16 @@ class DataPanel(QWidget):
         except RuntimeError as exc:
             _say(self.message, str(exc), ERROR)
             return
+        launcher.add_listener(self)
+        self._recorder_starting = True
+        self._recorder_tail = []
         _say(self.message, f'Recorder starting: {command.display()}' if self.advanced.isChecked()
              else 'Recorder starting…', OK)
+
+    def open_generate(self) -> None:
+        go = getattr(self._host(), 'show_generate', None)
+        if go is not None:
+            go()
 
     def _call(self, service: str) -> None:
         link = self.link()
@@ -924,6 +940,17 @@ class DataPanel(QWidget):
         self.tabs.blockSignals(False)
         self.refresh_datasets(select_session=self._session_after_close)
 
+    def _recorder_ended(self, code: int) -> None:
+        self._recorder_starting = False
+        launcher = self.launcher()
+        proc = launcher.processes.get('data_recorder') if launcher is not None else None
+        if (proc is not None and proc.stopped) or code == 0:
+            _say(self.message, 'Recorder stopped.', OK)
+        else:
+            last = next((t for t in reversed(self._recorder_tail) if t.strip()), '')
+            _say(self.message, f'The recorder ended (exit {code})' + (f': {last.strip()}' if last else '.'), ERROR)
+        self._refresh_session()
+
     def _refresh_session(self) -> None:
         launcher = self.launcher()
         running = bool(launcher and launcher.running('data_recorder'))
@@ -961,6 +988,12 @@ class DataPanel(QWidget):
                 text += f' · {link.base}' + (f' · {backend}' if backend else '') + \
                     (f' · {values.get("session_id")}' if values.get('session_id') else '')
             _say(self.recorder_state, text, OK)
+            if self._recorder_starting:
+                self._recorder_starting = False
+                _say(self.message, 'Recorder ready.', OK)
+        self.bundle_generate.setVisible(self.mode.count() == 0 and not running and not elsewhere
+                                        and bool(self._data())
+                                        and getattr(self._host(), 'show_generate', None) is not None)
         if values:
             self.counters.setText(f'Captured {values.get("captures_attempted", 0)} · Complete '
                                   f'{values.get("captures_complete", 0)} · Partial {values.get("captures_partial", 0)}'
@@ -1284,6 +1317,9 @@ class DataPanel(QWidget):
         pass
 
     def line(self, kind: str, text: str) -> None:
+        if kind == 'data_recorder':
+            self._recorder_tail = (self._recorder_tail + [text])[-5:]
+            return
         if kind not in ('synthetic', 'synthetic_preview'):
             return
         self.synthetic_log.appendPlainText(text)
@@ -1306,6 +1342,9 @@ class DataPanel(QWidget):
             self._generated_session = event['session_id']
 
     def finished(self, kind: str, code: int) -> None:
+        if kind == 'data_recorder':
+            self._recorder_ended(code)
+            return
         if kind not in ('synthetic', 'synthetic_preview'):
             return
         self.progress.setVisible(False)
@@ -1419,6 +1458,10 @@ class DataPanel(QWidget):
         self.new_dataset.clicked.connect(self.create_dataset)
         row.addWidget(self.new_dataset)
         v.addLayout(row)
+        self.dataset_hint = QLabel('')
+        self.dataset_hint.setWordWrap(True)
+        self.dataset_hint.setVisible(False)
+        v.addWidget(self.dataset_hint)
         row = QHBoxLayout()
         self.create_version_button = QPushButton('Create version…')
         self.create_version_button.clicked.connect(self.create_version)
@@ -1534,7 +1577,8 @@ class DataPanel(QWidget):
     def _datasets_listed(self, result: D.CliResult) -> None:
         current = self.dataset_combo.currentData()
         self.datasets = result.result['datasets'] if result.ok else []
-        wanted = self._wanted_dataset or current or (((self._data() or {}).get('dataset') or {}).get('id'))
+        planned = ((self._data() or {}).get('dataset') or {}).get('id')
+        wanted = self._wanted_dataset or current or planned
         self._wanted_dataset = None
         self.dataset_combo.blockSignals(True)
         self.dataset_combo.clear()
@@ -1543,12 +1587,19 @@ class DataPanel(QWidget):
                 continue
             self.dataset_combo.addItem(f'{d["dataset_id"]} — {d["name"]}', d['dataset_id'])
         i = self.dataset_combo.findData(wanted)
-        self.dataset_combo.setCurrentIndex(i if i >= 0 else (0 if self.dataset_combo.count() else -1))
+        missing = planned if i < 0 and wanted == planned and planned else None
+        self.dataset_combo.setCurrentIndex(i if i >= 0 else (0 if self.dataset_combo.count() and not missing else -1))
         self.dataset_combo.blockSignals(False)
+        self.dataset_hint.setVisible(bool(missing))
+        if missing:
+            _say(self.dataset_hint, f'The recording setup\'s dataset "{missing}" does not exist yet: New dataset… '
+                 'creates it. Recorded sessions join a dataset when you create a version.', WARN)
         self._dataset_changed()
 
     def _dataset_changed(self) -> None:
         dataset = self.dataset_combo.currentData()
+        if dataset is not None:
+            self.dataset_hint.setVisible(False)
         self.version_list.clear()
         self.versions = []
         self._version_detail = {}
@@ -1670,6 +1721,8 @@ class DataPanel(QWidget):
         rights = QComboBox()
         for c in ('INTERNAL', 'CUSTOMER_RESTRICTED', 'PUBLIC_APPROVED'):
             rights.addItem(c.lower().replace('_', ' '), c)
+        planned = (((self._data() or {}).get('dataset') or {}).get('classification') or 'internal').upper()
+        rights.setCurrentIndex(max(rights.findData(planned), 0))
         form.addRow('Id', did)
         form.addRow('Name', name)
         form.addRow('Data rights', rights)

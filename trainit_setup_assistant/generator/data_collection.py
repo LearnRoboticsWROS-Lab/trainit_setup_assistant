@@ -315,6 +315,10 @@ def recording_documents(project: CanonicalProject) -> Dict[str, dict]:
         if namespace is not None:
             entry['namespace'] = namespace
         entry['streams'] = streams
+        if mode == 'real':
+            # a physical camera's session must name its device (D0.4, D0-C): the recorder refuses one without the
+            # camera's source document (`<namespace>/source_info`, published by the hardware layer's launch)
+            entry['source_info'] = {'required': True}
         out[mode] = {'schema': vocab['recording_schema'], 'source': {'backend': mode},
                      'rights': {'classification': dc.dataset.classification.upper()},
                      'sensors': [entry], 'triggers': triggers, 'sync': sync}

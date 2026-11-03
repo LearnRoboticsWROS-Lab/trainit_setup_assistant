@@ -297,7 +297,8 @@ def _recorder_parses(path: Path) -> subprocess.CompletedProcess:
             'def profile(model):\n'
             '    return yaml.safe_load(open(share("trainit_hardware_layer") + f"/profiles/camera/{model}.yaml"))\n'
             'doc, _ = load_yaml(sys.argv[1])\n'
-            'resolve(doc, Vocabulary.default(), load_profile=profile, use_sim_time=sys.argv[2] == "1")\n')
+            'r = resolve(doc, Vocabulary.default(), load_profile=profile, use_sim_time=sys.argv[2] == "1")\n'
+            'import json; print(json.dumps([s["source_info"]["required"] for s in r["sensors"]]))\n')
     sim = '1' if '.isaac.' in path.name else '0'
     return subprocess.run([sys.executable, '-c', code, str(path), sim], capture_output=True, text=True,
                           env=dict(os.environ))
@@ -317,6 +318,8 @@ def test_the_recorder_itself_accepts_every_generated_file(tmp_path):
     for path in files:
         result = _recorder_parses(path)
         assert result.returncode == 0, f'{path.name}: {result.stderr[-2000:]}'
+        # only the physical camera must name its device (its source document, D0.4): the recorder resolves it so
+        assert result.stdout.split() == (['[true]'] if '.real.' in path.name else ['[false]']), path.name
 
 
 def test_the_composer_edits_data_collection_and_only_the_cameras_id_and_profile():

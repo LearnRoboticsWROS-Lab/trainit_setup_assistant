@@ -36,7 +36,10 @@ TYPES = ('int', 'float', 'int_range', 'float_range', 'float_pair', 'choice')
 GROUPS = ('objects', 'lighting', 'appearance', 'camera', 'scene', 'quality')
 LEVELS = ('simple', 'advanced')
 GENERAL = ('seed', 'runs', 'views')
-RUNTIMES = ('isaac_sim_python',)
+# The runtime kinds TSA can launch a provider with: kind -> how THIS machine's settings resolve its interpreter
+# (None + the reason when it is not installed). A new runtime kind is one row here; the panel, the validator and
+# the canonical project never name a runtime.
+RUNTIME_LAUNCHERS = {}
 _IDENT = re.compile(r'^[a-z0-9]+(?:_[a-z0-9]+)*$')
 
 
@@ -198,9 +201,15 @@ def parse_descriptor(doc, where: str = DESCRIPTOR_FILE) -> dict:
         _fail(where, f'schema {doc["schema"]!r}: this TSA reads {PROVIDER_SCHEMA}/{PROVIDER_MAJOR}.x')
     if not isinstance(doc['id'], str) or not _IDENT.match(doc['id']):
         _fail(where, f'id {doc["id"]!r} is not a provider id')
+    for text in ('name', 'version', 'description'):
+        if not isinstance(doc[text], str) or not doc[text].strip():
+            _fail(where, f'{text} must be a non-empty string')
+    if any(not isinstance(b, str) or not _IDENT.match(b) for b in doc['backends'] or [None]) \
+            or len(set(doc['backends'])) != len(doc['backends']):
+        _fail(where, 'backends: unique deployment backend ids')
     runtime = _keys(doc['runtime'], f'{where}.runtime', ('kind',), ('min_version',))
-    if runtime['kind'] not in RUNTIMES:
-        _fail(where, f'runtime {runtime["kind"]!r} is not one TSA can launch ({", ".join(RUNTIMES)})')
+    if runtime['kind'] not in RUNTIME_LAUNCHERS:
+        _fail(where, f'runtime {runtime["kind"]!r} is not one TSA can launch ({", ".join(RUNTIME_LAUNCHERS)})')
     if not isinstance(doc['backends'], list) or not doc['backends']:
         _fail(where, 'backends: at least one deployment backend')
     for rel in ('entry', 'base_config'):
@@ -216,7 +225,10 @@ def parse_descriptor(doc, where: str = DESCRIPTOR_FILE) -> dict:
     keys = [p['key'] for p in out['parameters']]
     if len(set(keys)) != len(keys):
         _fail(where, 'a parameter key is declared twice')
-    _keys(doc['outputs'], f'{where}.outputs', ('modalities', 'annotations', 'classes'))
+    outputs = _keys(doc['outputs'], f'{where}.outputs', ('modalities', 'annotations', 'classes'))
+    for name, items in outputs.items():
+        if not isinstance(items, list) or any(not isinstance(i, str) for i in items) or len(set(items)) != len(items):
+            _fail(where, f'outputs.{name}: a list of unique names')
     if doc['progress'] != PROGRESS_PROTOCOL:
         _fail(where, f'progress {doc["progress"]!r}: this TSA reads {PROGRESS_PROTOCOL}')
     return out
@@ -348,8 +360,12 @@ def find_providers(dirs: Sequence[Path]) -> Tuple[List[Provider], List[str]]:
     ``provider.json``; otherwise its sub-directories are searched (one level)."""
     providers, problems, seen = [], [], set()
     for base in dirs:
-        candidates = [base] if (base / DESCRIPTOR_FILE).is_file() else (
-            sorted(p for p in base.iterdir() if (p / DESCRIPTOR_FILE).is_file()) if base.is_dir() else [])
+        try:
+            candidates = [base] if (base / DESCRIPTOR_FILE).is_file() else (
+                sorted(p for p in base.iterdir() if (p / DESCRIPTOR_FILE).is_file()) if base.is_dir() else [])
+        except OSError as exc:
+            problems.append(f'{base}: cannot be searched ({exc})')
+            continue
         for directory in candidates:
             try:
                 provider = load_provider(directory)
@@ -372,25 +388,40 @@ def isaac_python(isaac_launcher: str) -> Optional[Path]:
     return path if path.is_file() else None
 
 
-def provider_unavailable(provider: Provider, modes: Sequence[str], isaac_launcher: str) -> Optional[str]:
+def _isaac_sim_python(settings) -> Tuple[Optional[Path], str]:
+    python = isaac_python(getattr(settings, 'isaac_launcher', '') or '')
+    return python, ('' if python else 'Isaac Sim is not installed here, or its launcher is not set (Settings: '
+                                      'isaac-sim.sh, with python.sh beside it)')
+
+
+RUNTIME_LAUNCHERS['isaac_sim_python'] = _isaac_sim_python
+
+
+def runtime_python(provider: Provider, settings) -> Tuple[Optional[Path], str]:
+    """The interpreter this machine runs the provider's runtime kind with, or (None, why not)."""
+    resolve = RUNTIME_LAUNCHERS.get(provider.descriptor['runtime']['kind'])
+    if resolve is None:
+        return None, f'runtime {provider.descriptor["runtime"]["kind"]!r} is not one TSA can launch'
+    return resolve(settings)
+
+
+def provider_unavailable(provider: Provider, modes: Sequence[str], settings) -> Optional[str]:
     """Why this provider cannot run for this project on this machine (None = available)."""
     served = [b for b in provider.descriptor['backends'] if b in modes]
     if not served:
         return (f'{provider.name} generates data for {", ".join(provider.descriptor["backends"])} cells; this '
                 f'project deploys {", ".join(modes) or "nothing"}')
-    if provider.descriptor['runtime']['kind'] == 'isaac_sim_python' and isaac_python(isaac_launcher) is None:
-        return ('Isaac Sim is not installed here, or its launcher is not set (Settings: isaac-sim.sh, with '
-                'python.sh beside it)')
-    return None
+    python, why = runtime_python(provider, settings)
+    return None if python is not None else why
 
 
-def provider_command(provider: Provider, isaac_launcher: str, config_file: str, seed: int, runs: int, views: int,
+def provider_command(provider: Provider, settings, config_file: str, seed: int, runs: int, views: int,
                      root: str, store: Optional[str] = None, title: str = 'Synthetic generation',
                      kind: str = 'synthetic') -> Command:
-    """The provider as an external process (``env -i`` keeps a sourced ROS environment out of Kit)."""
-    python = isaac_python(isaac_launcher)
+    """The provider as an external process (``env -i``: a sourced ROS environment stays out of its runtime)."""
+    python, why = runtime_python(provider, settings)
     if python is None:
-        raise ValueError('Isaac Sim python.sh not found beside the launcher (Settings)')
+        raise ValueError(why)
     entry = provider.directory / provider.descriptor['entry']
     args = [str(python), str(entry), '--config', str(config_file), '--seed', str(seed), '--runs', str(runs),
             '--views', str(views)]

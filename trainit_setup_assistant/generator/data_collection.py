@@ -72,8 +72,12 @@ def recordable_modes(project: CanonicalProject, vocab: Optional[dict] = None,
     camera = project.perception.camera if project.perception else None
     row = profiles.get(camera.profile) if camera is not None and camera.profile else None
     supported = set(row['backends']) if row else set()
+    # a simulated mode runs the recorder on use_sim_time: the profile must name the simulator clock there, or
+    # the recorder refuses the session at start-up (recording_config.resolve)
+    clocked = set((row or {}).get('sim_sources') or {})
     modes = [m.value for m in project.deployment.modes]
-    recordable = [m for m in modes if m in vocab['backends'] and m in supported]
+    recordable = [m for m in modes if m in vocab['backends'] and m in supported
+                  and (m not in _SIM_MODES or m in clocked)]
     return recordable, [m for m in modes if m not in recordable]
 
 
@@ -127,7 +131,7 @@ def data_collection_problems(project: CanonicalProject) -> List[str]:
         if 'depth' in sensor.streams and 'color' not in sensor.streams:
             problems.append(f"{CODE_CAMERA}: data collection sensor '{sensor.camera}': depth is registered to "
                             'colour -- record both streams')
-    if camera is not None and camera.id is not None:
+    if dc.sensors and camera is not None and camera.id is not None:
         name(camera.id, 'camera id')
     if dc.sensors and camera is not None:
         profiles = _profiles()
@@ -257,9 +261,12 @@ def _namespace_and_overrides(camera) -> Tuple[Optional[str], Dict[str, dict]]:
     namespace = camera.rgb_topic[:-len(suffix)] if camera.rgb_topic.endswith(suffix) else None
     overrides: Dict[str, dict] = {'color': {}, 'depth': {}}
     if not namespace:
+        # no contract namespace: every topic explicit; depth's CameraInfo is the colour one (contracts/camera.md,
+        # "Registered depth": depth carries the colour grid and intrinsics), never a profile-namespace default
         overrides['color']['topic'] = camera.rgb_topic
         overrides['color']['info'] = camera.camera_info_topic
         overrides['depth']['topic'] = camera.depth_topic
+        overrides['depth']['info'] = camera.camera_info_topic
         return None, overrides
     if camera.camera_info_topic != f'{namespace}/{_CONTRACT["color"][1]}':
         overrides['color']['info'] = camera.camera_info_topic

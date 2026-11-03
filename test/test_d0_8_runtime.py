@@ -25,6 +25,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import d08_env
+
 from trainit_setup_assistant.composer import data_tools as D
 from trainit_setup_assistant.livesession.data_recorder import (SERVICES, diagnostics_topic, parse_capture_reply,
                                                                recorder_base)
@@ -82,8 +84,8 @@ def test_recorder_names_resolve_in_the_robot_slot():
 
 @pytest.fixture
 def ros_graph():
-    rclpy = pytest.importorskip('rclpy')
-    pytest.importorskip('std_srvs')
+    rclpy = d08_env.import_or_require('rclpy')
+    d08_env.import_or_require('std_srvs.srv')
     os.environ['ROS_DOMAIN_ID'] = str(200 + os.getpid() % 30)
     rclpy.init()
     yield rclpy
@@ -160,7 +162,7 @@ def test_the_link_calls_the_three_services_and_reads_the_recorders_diagnostics(r
 
 def _cli_available():
     if D.cli_version() is None:
-        pytest.skip('trainit_data is not importable by python3 here (source the workspace)')
+        d08_env.require('trainit_data is not importable by python3 here (source the workspace)')
 
 
 def test_the_cli_runs_as_a_process_and_its_refusal_is_structured(tmp_path):
@@ -202,7 +204,7 @@ def test_the_store_root_follows_settings_then_environment(monkeypatch):
 
 def _example():
     if not (EXAMPLE / 'provider.json').is_file():
-        pytest.skip('the trainit_data repository (its reference provider) is not beside TSA')
+        d08_env.require('the trainit_data repository (its reference provider) is not beside TSA')
     return D.load_provider(EXAMPLE)
 
 
@@ -229,7 +231,7 @@ def _core_accepts(doc) -> bool:
             'try:\n    parse_descriptor(json.loads(sys.stdin.read()))\nexcept Exception:\n    sys.exit(3)\n')
     proc = subprocess.run([sys.executable, '-c', code], input=json.dumps(doc), capture_output=True, text=True)
     if proc.returncode not in (0, 3):
-        pytest.skip(f'trainit_data is not importable here: {proc.stderr[-300:]}')
+        d08_env.require(f'trainit_data is not importable here: {proc.stderr[-300:]}')
     return proc.returncode == 0
 
 
@@ -258,7 +260,7 @@ def test_the_resolved_configuration_is_what_the_provider_itself_accepts(tmp_path
     proc = subprocess.run([sys.executable, '-c', code, str(EXAMPLE)], input=json.dumps(resolved),
                           capture_output=True, text=True)
     if proc.returncode != 0:
-        pytest.skip(f'trainit_data is not importable here: {proc.stderr[-300:]}')
+        d08_env.require(f'trainit_data is not importable here: {proc.stderr[-300:]}')
     assert json.loads(proc.stdout) == []
     assert provider.problems({'objects_per_run': [0, 3], 'nope': 1}, runs=0) == [
         'Objects per run: [0, 3] is outside [1, 20]', 'nope: provider isaac_replicator_bin has no such parameter',
@@ -283,13 +285,15 @@ def test_providers_are_discovered_installed_and_machine_local(tmp_path):
 
 def test_availability_and_the_launched_command(tmp_path):
     provider = _example()
-    assert 'this project deploys mock' in D.provider_unavailable(provider, ['mock'], '')
-    assert 'Isaac Sim is not installed' in D.provider_unavailable(provider, ['isaac'], str(tmp_path / 'isaac-sim.sh'))
+    none = SimpleNamespace(isaac_launcher='')
+    assert 'this project deploys mock' in D.provider_unavailable(provider, ['mock'], none)
+    missing = SimpleNamespace(isaac_launcher=str(tmp_path / 'isaac-sim.sh'))
+    assert 'Isaac Sim is not installed' in D.provider_unavailable(provider, ['isaac'], missing)
     (tmp_path / 'isaac-sim.sh').write_text('#!/bin/sh\n')
     (tmp_path / 'python.sh').write_text('#!/bin/sh\n')
-    launcher = str(tmp_path / 'isaac-sim.sh')
-    assert D.provider_unavailable(provider, ['mock', 'isaac'], launcher) is None
-    cmd = D.provider_command(provider, launcher, '/tmp/x/resolved.json', 7, 3, 2, '/data/store', store='/tmp/x/s')
+    settings = SimpleNamespace(isaac_launcher=str(tmp_path / 'isaac-sim.sh'))
+    assert D.provider_unavailable(provider, ['mock', 'isaac'], settings) is None
+    cmd = D.provider_command(provider, settings, '/tmp/x/resolved.json', 7, 3, 2, '/data/store', store='/tmp/x/s')
     shown = cmd.display()
     assert cmd.kind == 'synthetic' and shown.startswith('env -i HOME="$HOME" PATH=/usr/bin:/bin '
                                                         'TRAINIT_DATA_ROOT=/data/store ')
@@ -322,7 +326,7 @@ def _msg(encoding, array, pad=0):
     ('32FC1', np.array([[0.5, np.nan], [1.25, 3.0]], np.float32), np.array([[0.5, np.nan], [1.25, 3.0]], np.float32)),
 ])
 def test_the_preview_converts_depth_with_tps_depth_to_metres(encoding, raw, metres):
-    pytest.importorskip('trainit_perception.detectors.base')
+    d08_env.import_or_require('trainit_perception.detectors.base')
     from trainit_perception.detectors import base as tp
     from trainit_setup_assistant.livesession.camera_capture import LiveCameraCapture
     cap = LiveCameraCapture.__new__(LiveCameraCapture)
@@ -349,3 +353,46 @@ def test_without_tp_the_colour_still_shows_and_the_reason_is_given():
 def test_the_preview_keeps_no_decoder_of_its_own():
     text = (SRC / 'livesession' / 'camera_capture.py').read_text()
     assert '/ 1000.0' not in text and 'depth_to_metres' in text
+
+
+
+def test_the_runtime_is_dispatched_by_kind_never_named_by_the_panel(tmp_path, monkeypatch):
+    """A provider's runtime is resolved through the ONE registry keyed by its descriptor's runtime kind: a new
+    kind is a registry row; the panel and the validator name no runtime."""
+    provider = _example()
+    panel_source = (SRC / 'gui' / 'composer' / 'data_panel.py').read_text()
+    assert 'isaac_launcher' not in panel_source and 'isaac_python' not in panel_source
+    other = copy.deepcopy(provider)
+    other.descriptor['runtime'] = {'kind': 'example_runtime'}
+    assert 'not one TSA can launch' in D.provider_unavailable(other, ['isaac'], SimpleNamespace())
+    monkeypatch.setitem(D.RUNTIME_LAUNCHERS, 'example_runtime', lambda settings: (tmp_path / 'py', ''))
+    assert D.provider_unavailable(other, ['isaac'], SimpleNamespace()) is None
+    cmd = D.provider_command(other, SimpleNamespace(), '/c.json', 1, 1, 1, '/root')
+    assert f'{tmp_path}/py {EXAMPLE}/generate.py' in cmd.display()
+
+
+# ---- the real CLI, happy path, through the exact invocation TSA uses ---------------------------------------
+
+def _store(root):
+    code = 'import sys\nfrom trainit_data.store import Store\nStore.open(sys.argv[1], create=True)\n'
+    proc = subprocess.run([sys.executable, '-c', code, str(root)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        d08_env.require(f'trainit_data is not importable here: {proc.stderr[-300:]}')
+
+
+def test_the_real_cli_happy_path_is_parsed_and_propagated(tmp_path):
+    """A real temporary store (made by trainit_data in a child process: TSA never writes a store), then
+    python3 -m trainit_data --json as TSA runs it: exit 0, one trainit-cli/1 object, its result in TSA's hands."""
+    _cli_available()
+    root = tmp_path / 'store'
+    _store(root)
+    made = D.run_cli(['dataset', 'create', 'bin_parts', '--name', 'Bin parts'], root=str(root))
+    assert made.exit_code == 0 and made.ok and made.error is None and made.command == 'dataset create'
+    assert made.result['dataset']['dataset_id'] == 'bin_parts' and made.message() == 'ok'
+    listed = D.run_cli(['dataset', 'list'], root=str(root))
+    assert listed.ok and listed.exit_code == 0 and listed.stderr == ''
+    assert [d['dataset_id'] for d in listed.result['datasets']] == ['bin_parts']
+    detail = D.run_cli(['inspect', '--detail'], root=str(root))
+    assert detail.ok and detail.result['sessions'] == [] and detail.result['root'] == str(root)
+    again = D.run_cli(['dataset', 'create', 'bin_parts', '--name', 'Bin parts'], root=str(root))
+    assert again.exit_code == 1 and not again.ok and again.error['code'] == 'DATASET_EXISTS'

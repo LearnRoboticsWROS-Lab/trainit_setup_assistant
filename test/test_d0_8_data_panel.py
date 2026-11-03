@@ -212,7 +212,8 @@ def test_the_recorder_starts_only_from_a_generated_file_as_a_copyable_command(qa
 
 def _needs_example():
     if not (EXAMPLE / 'provider.json').is_file():
-        pytest.skip('the trainit_data repository (its reference provider) is not beside TSA')
+        import d08_env
+        d08_env.require('the trainit_data repository (its reference provider) is not beside TSA')
 
 
 def test_a_mock_only_project_gets_an_explanation_not_controls(qapp, monkeypatch):
@@ -467,3 +468,123 @@ def test_the_data_diagnostic_opens_the_data_section(qapp, monkeypatch):
     shell = w.blocks_page.program_panel
     shell.go_to(parse("R-D0-06: data collection trigger 'x': no task is named 'y' (tasks: a)"))
     assert shell.stack.currentWidget() is shell.data and shell.data.tabs.currentIndex() == 0
+
+
+# ---- review closure (D0.8) ----------------------------------------------------------------------------------
+
+def test_a_real_only_project_offers_live_capture_and_no_synthetic_controls(qapp, monkeypatch, tmp_path):
+    _needs_example()
+    panel, ctrl, host, _ = make_panel(qapp, monkeypatch, modes=['real'], settings=_isaac_settings(tmp_path))
+    panel.refresh()
+    assert panel.camera_state.text() == 'Ready for recording.' and panel.setup_state.text().startswith('Valid.')
+    assert panel.trigger_add.isEnabled() and 'Isaac' not in panel.recorder_state.text()
+    config = tmp_path / 'bundle' / ctrl.project.bundle.app_package / 'config'
+    config.mkdir(parents=True)
+    (config / 'data_collection.real.yaml').write_text('schema: trainit-recording/1.0\n')
+    ctrl.last_generation_dir = str(tmp_path / 'bundle')
+    panel.refresh()
+    assert [panel.mode.itemText(i) for i in range(panel.mode.count())] == ['real'] and panel.recorder_start.isEnabled()
+    panel.tabs.setCurrentIndex(1)
+    panel.refresh()
+    assert 'Synthetic data needs a isaac deployment: this project deploys real' in panel.provider_state.text()
+    assert not panel.provider_box.isVisibleTo(panel)               # no controls, even with Isaac installed here
+
+
+def test_the_preview_writes_only_into_its_own_scratch_store(qapp, monkeypatch, tmp_path):
+    """The preview's command names ONLY a fresh TSA scratch directory -- as --store AND as TRAINIT_DATA_ROOT,
+    under env -i (an exported TRAINIT_DATA_ROOT cannot leak in) -- never the user's store; and the provider gives
+    --store precedence over the environment (pinned on the provider side: test_d0_8_provider.py)."""
+    _needs_example()
+    import tempfile
+    from trainit_setup_assistant.gui.composer.data_panel import is_preview_scratch
+    user_store = tmp_path / 'TrainItData'
+    settings = _isaac_settings(tmp_path)
+    settings.data_root = str(user_store)
+    monkeypatch.setenv('TRAINIT_DATA_ROOT', str(user_store))
+    panel, ctrl, host, _ = make_panel(qapp, monkeypatch, modes=['mock', 'isaac'], settings=settings)
+    panel.tabs.setCurrentIndex(1)
+    panel.refresh()
+    panel.start_generation(preview=True)
+    shown = host.launcher.started[-1].display()
+    scratch = Path(panel._preview_dir)
+    assert is_preview_scratch(scratch) and scratch.parent == Path(tempfile.gettempdir()).resolve()
+    assert str(user_store) not in shown and shown.startswith('env -i ')
+    assert f'TRAINIT_DATA_ROOT={scratch}/store ' in shown and f'--store {scratch}/store' in shown
+    assert not user_store.exists()
+    # the generation proper writes to the user's store, by design (and only it)
+    panel.start_generation(preview=False)
+    assert f'TRAINIT_DATA_ROOT={user_store} ' in host.launcher.started[-1].display()
+    assert '--store' not in host.launcher.started[-1].display()
+    panel._drop_preview()
+    assert not scratch.exists()
+
+
+def test_only_a_tsa_scratch_directory_is_ever_removed(tmp_path):
+    import tempfile
+    from trainit_setup_assistant.gui.composer.data_panel import is_preview_scratch
+    assert not is_preview_scratch(tmp_path / 'tsa_synthetic_preview_x')          # right name, wrong place
+    assert not is_preview_scratch(Path(tempfile.gettempdir()) / 'TrainItData')  # right place, wrong name
+    assert not is_preview_scratch(Path.home() / 'TrainItData')
+
+
+def test_stale_cli_answers_about_another_dataset_are_ignored(qapp, monkeypatch):
+    panel, cli = _datasets(qapp, monkeypatch, versions=[1])
+    _wait(panel)
+    assert panel.versions == [1]
+    panel._dataset_shown('another_dataset', D.CliResult(argv=[], exit_code=0, ok=True, result={
+        'versions': [1, 2, 3], 'label_sets': []}))
+    assert panel.versions == [1] and panel.version_list.count() == 1
+    shows = [c for c in cli.calls if c[:2] == ['dataset', 'show']]
+    assert len(shows) == 1                                            # one dataset change, one read
+
+
+def test_an_unanswered_recorder_call_times_out_and_frees_the_buttons(qapp, monkeypatch):
+    from trainit_setup_assistant.gui.composer import data_panel as P
+    panel, *_ = make_panel(qapp, monkeypatch)
+    forgotten = []
+    panel._link = SimpleNamespace(forget=lambda s, f: forgotten.append(s), status=lambda: None,
+                                  reachable=lambda: True, alive=lambda: True, base='/trainit_data_recorder')
+    never = SimpleNamespace(done=lambda: False)
+    panel._pending = [('start_session', never, P.time.monotonic() - P.CALL_TIMEOUT_S['start_session'] - 1)]
+    panel._poll_calls()
+    assert panel._pending == [] and forgotten == ['start_session']
+    assert 'did not answer' in panel.session_result.text()
+
+
+def test_a_second_recorder_is_never_started_beside_a_running_one(qapp, monkeypatch, tmp_path):
+    panel, ctrl, host, _ = make_panel(qapp, monkeypatch)
+    config = tmp_path / 'bundle' / ctrl.project.bundle.app_package / 'config'
+    config.mkdir(parents=True)
+    (config / 'data_collection.mock.yaml').write_text('x: 1\n')
+    ctrl.last_generation_dir = str(tmp_path / 'bundle')
+    panel._link = SimpleNamespace(status=lambda: None, reachable=lambda: True, alive=lambda: True,
+                                  base='/trainit_data_recorder')
+    panel._link_ns = ''
+    panel._refresh_modes()
+    panel._refresh_session()
+    assert not panel.recorder_start.isEnabled() and 'already running' in panel.recorder_start.toolTip()
+
+
+def test_unsaved_setup_edits_survive_a_refresh(qapp, monkeypatch):
+    panel, ctrl, *_ = make_panel(qapp, monkeypatch)
+    panel.refresh()
+    panel.dataset_description.setText('typed, not saved')
+    panel.dataset_description.textEdited.emit('typed, not saved')
+    panel.advanced.setChecked(True)                                   # a refresh
+    assert panel.dataset_description.text() == 'typed, not saved' and panel.setup_dirty
+    panel.save_setup()
+    assert ctrl.project.data_collection.dataset.description == 'typed, not saved' and not panel.setup_dirty
+
+
+def test_edit_needs_a_selected_trigger(qapp, monkeypatch):
+    from trainit_setup_assistant.gui.composer import data_panel as P
+    panel, *_ = make_panel(qapp, monkeypatch)
+    panel.refresh()
+    panel.triggers.clearSelection()
+    panel.triggers.setCurrentCell(-1, -1)
+    panel._trigger_selected()
+    assert not panel.trigger_edit.isEnabled()
+    opened = []
+    monkeypatch.setattr(P, 'TriggerDialog', lambda *a: opened.append(a) or (_ for _ in ()).throw(AssertionError))
+    panel.edit_trigger(-1)
+    assert opened == []

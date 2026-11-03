@@ -45,8 +45,10 @@ class RecorderLink:
 
         self._rclpy = rclpy
         self._Trigger = Trigger
-        self._owns_context = not rclpy.ok()
-        if self._owns_context:
+        # the process's ONE rclpy context, shared with the wizard's other observers: initialised if needed,
+        # never shut down here (another observer -- the live preview, a link rebuilt for a new slot -- may be
+        # using it); it ends with the process
+        if not rclpy.ok():
             rclpy.init()
         self.base = recorder_base(namespace)
         self._node = Node(node_name)
@@ -98,7 +100,19 @@ class RecorderLink:
             raise ValueError(f'{service!r} is not a recorder service TSA calls ({", ".join(SERVICES)})')
         return self._clients[service].call_async(self._Trigger.Request())
 
+    def alive(self) -> bool:
+        """The link still spins (another owner of the context may have shut it down: rebuild the link then)."""
+        return self._thread.is_alive() and self._rclpy.ok()
+
+    def forget(self, service: str, future) -> None:
+        """Give up waiting for a call the recorder never answered (it died, or was restarted)."""
+        try:
+            self._clients[service].remove_pending_request(future)
+        except Exception:  # noqa: BLE001 - already answered or gone
+            pass
+
     def close(self) -> None:
+        """Stop this link's node (the shared context stays: see ``__init__``)."""
         self._spinning = False
         if self._thread.is_alive():
             self._thread.join(timeout=2.0)
@@ -107,8 +121,6 @@ class RecorderLink:
             self._node.destroy_node()
         except Exception:  # noqa: BLE001
             pass
-        if self._owns_context and self._rclpy.ok():
-            self._rclpy.shutdown()
 
 
 def parse_capture_reply(message: str) -> Dict[str, str]:

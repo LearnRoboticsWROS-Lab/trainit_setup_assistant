@@ -40,6 +40,10 @@ from ...composer import data_tools as D
 from ...composer.ops import ComposerError
 
 OK, ERROR, WARN, HINT = '#2e7d32', '#c62828', '#8a6d3b', '#555'
+# how long TSA waits for the recorder's answer (a capture waits for its frames; a close seals the session)
+CALL_TIMEOUT_S = {'start_session': 15.0, 'capture': 30.0, 'close_session': 120.0}
+# after a successful reply, the session buttons wait for the recorder's 1 Hz diagnostics to show the new state
+STATE_SETTLE_S = 2.5
 KIND_LABELS = {'manual': 'Manual (Capture button)', 'interval': 'Every N milliseconds',
                'event': 'When a process channel changes', 'application_state': 'When the application reaches'}
 TRANSITIONS = {'enter': 'starts', 'exit': 'ends', 'succeeded': 'succeeds', 'failed': 'fails'}
@@ -114,6 +118,27 @@ def mask_image(path: str) -> Optional[QImage]:
     return _np_image(palette[ids % 256])
 
 
+PREVIEW_PREFIX = 'tsa_synthetic_preview_'
+
+
+def _decimals(value) -> int:
+    text = repr(float(value))
+    return 0 if 'e' in text else len(text.split('.')[1].rstrip('0'))
+
+
+def is_preview_scratch(path) -> bool:
+    """A directory TSA made for a preview: directly in the system temp dir, with TSA's prefix. Nothing else is
+    ever removed by the panel (never the user's store)."""
+    path = Path(path).resolve()
+    return path.name.startswith(PREVIEW_PREFIX) and path.parent == Path(tempfile.gettempdir()).resolve()
+
+
+def _payload(root: Path, relative: str) -> Optional[Path]:
+    """A store-relative payload path under ``root`` (anything else is not shown)."""
+    path = (root / relative).resolve()
+    return path if path.is_relative_to(root.resolve()) else None
+
+
 def _pixmap(view: QLabel, image: Optional[QImage]) -> None:
     if image is None or image.isNull():
         view.setPixmap(QPixmap())
@@ -129,6 +154,7 @@ class Jobs:
     def __init__(self, owner: QWidget):
         self._queue: 'queue.Queue' = queue.Queue()
         self.busy = 0
+        self.errors: List[str] = []
         self.timer = QTimer(owner)
         self.timer.setInterval(100)
         self.timer.timeout.connect(self.drain)
@@ -152,7 +178,10 @@ class Jobs:
             except queue.Empty:
                 return
             self.busy -= 1
-            done(result)
+            try:
+                done(result)
+            except Exception as exc:  # noqa: BLE001 - a Qt slot must never raise (PyQt aborts)
+                self.errors.append(repr(exc))
 
     def wait(self, timeout_s: float = 30.0) -> None:
         """Tests: until every job has finished and been handed back."""
@@ -332,6 +361,7 @@ class DataPanel(QWidget):
         self._wanted_dataset: Optional[str] = None
         self._preview_dir: Optional[str] = None
         self._session_after_close: Optional[str] = None
+        self._settle_until = 0.0
         self.sessions: List[dict] = []
         self.datasets: List[dict] = []
         self.versions: List[int] = []
@@ -399,7 +429,8 @@ class DataPanel(QWidget):
         self.refresh()
         return True
 
-    def cli(self, args: List[str], done: Callable[[D.CliResult], None], root: Optional[str] = None) -> None:
+    def cli(self, args: List[str], done: Callable[[D.CliResult], None], root: Optional[str] = None,
+            timeout_s: float = 600.0) -> None:
         """One offline operation in the background; the result (and its command) kept for Advanced."""
         root = root or self.root()
 
@@ -409,7 +440,9 @@ class DataPanel(QWidget):
             self.last_cli = result
             self._show_last_cli()
             done(result)
-        self.jobs.run(lambda: D.run_cli(args, root=root), finish)
+            self._selection_changed()
+        self.jobs.run(lambda: D.run_cli(args, root=root, timeout_s=timeout_s), finish)
+        self._selection_changed()
 
     def _show_last_cli(self) -> None:
         r = self.last_cli
@@ -501,6 +534,11 @@ class DataPanel(QWidget):
         self.sync_rows = [self.sync_timeout, self.sync_tolerance]
         self.sync_form = form
         rv.addLayout(form)
+        self.setup_dirty = False                       # an edit in the setup fields not saved yet: never overwritten
+        for signal in (self.dataset_id.textEdited, self.dataset_description.textEdited,
+                       self.classification.activated, self.sync_timeout.valueChanged,
+                       self.sync_tolerance.valueChanged):
+            signal.connect(self._setup_edited)
         self.setup_save = QPushButton('Save recording setup')
         self.setup_save.clicked.connect(self.save_setup)
         rv.addWidget(self.setup_save)
@@ -512,6 +550,7 @@ class DataPanel(QWidget):
         self.triggers.setSelectionBehavior(QTableWidget.SelectRows)
         self.triggers.setEditTriggers(QTableWidget.NoEditTriggers)
         self.triggers.setMaximumHeight(150)
+        self.triggers.itemSelectionChanged.connect(self._trigger_selected)
         rv.addWidget(self.triggers)
         row = QHBoxLayout()
         self.trigger_add = QPushButton('Add…')
@@ -552,7 +591,7 @@ class DataPanel(QWidget):
         for b in (self.record_button, self.capture_button, self.stop_button):
             row.addWidget(b)
         self.open_datasets = QPushButton('Open in Datasets')
-        self.open_datasets.clicked.connect(lambda: self.tabs.setCurrentIndex(2))
+        self.open_datasets.clicked.connect(self._open_sealed_session)
         self.open_datasets.setVisible(False)
         row.addWidget(self.open_datasets)
         row.addStretch(1)
@@ -601,7 +640,11 @@ class DataPanel(QWidget):
                                          f'{camera.camera_info_topic} · frame {camera.optical_frame}')
         data = self._data() or {}
         dataset = data.get('dataset') or {}
-        if not self.dataset_id.hasFocus():
+        if not self.setup_dirty:
+            widgets = (self.dataset_id, self.dataset_description, self.classification, self.sync_timeout,
+                       self.sync_tolerance)
+            for widget in widgets:
+                widget.blockSignals(True)
             self.dataset_id.setText(dataset.get('id', ''))
             self.dataset_description.setText(dataset.get('description', ''))
             self.classification.setCurrentIndex(max(self.classification.findData(dataset.get('classification',
@@ -609,6 +652,9 @@ class DataPanel(QWidget):
             sync = data.get('sync') or {}
             self.sync_timeout.setValue(int(sync.get('timeout_ms') or 0))
             self.sync_tolerance.setValue(float(sync.get('tolerance_ms') or 0.0))
+            for widget in widgets:
+                widget.blockSignals(False)
+        self.setup_save.setText('Save recording setup *' if self.setup_dirty else 'Save recording setup')
         for widget in self.sync_rows:
             widget.setVisible(adv)
             label = self.sync_form.labelForField(widget)
@@ -621,8 +667,9 @@ class DataPanel(QWidget):
             self.triggers.setItem(i, 1, QTableWidgetItem(describe_trigger(t)))
         has_data = bool(data)
         self.trigger_add.setEnabled(has_data and has_camera)
-        self.trigger_edit.setEnabled(bool(triggers))
-        self.trigger_remove.setEnabled(bool(triggers))
+        selected = 0 <= self.triggers.currentRow() < len(triggers)
+        self.trigger_edit.setEnabled(selected)
+        self.trigger_remove.setEnabled(selected)
         if not has_data:
             _say(self.setup_state, 'Name the dataset and Save to start the recording setup.', HINT)
         else:
@@ -633,6 +680,10 @@ class DataPanel(QWidget):
                  ERROR if problems else OK)
         self._refresh_modes()
         self._refresh_session()
+
+    def _setup_edited(self, *_args) -> None:
+        self.setup_dirty = True
+        self.setup_save.setText('Save recording setup *')
 
     def apply_camera(self) -> None:
         name, model = self.camera_id.text().strip() or None, self.camera_profile.currentData()
@@ -668,11 +719,15 @@ class DataPanel(QWidget):
             else:
                 dc.pop('sync', None)
             doc['data_collection'] = dc
-        self._edit(mutate, 'Recording setup saved.')
+        if self._edit(mutate, 'Recording setup saved.'):
+            self.setup_dirty = False
+            self.refresh()
 
     def edit_trigger(self, row: Optional[int]) -> None:
         triggers = (self._data() or {}).get('triggers') or []
-        current = triggers[row] if row is not None and 0 <= row < len(triggers) else None
+        if row is not None and not 0 <= row < len(triggers):
+            return                                     # Edit without a selected trigger: nothing to edit
+        current = triggers[row] if row is not None else None
         dialog = TriggerDialog(self.project(), current, self)
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -689,6 +744,12 @@ class DataPanel(QWidget):
             if not dc.get('sensors') and camera.get('id'):
                 dc['sensors'] = [{'camera': camera['id'], 'streams': ['color', 'depth']}]
         self._edit(mutate, f'Trigger "{value["id"]}" saved.')
+
+    def _trigger_selected(self) -> None:
+        count = self.triggers.rowCount()
+        selected = 0 <= self.triggers.currentRow() < count and bool(self.triggers.selectedItems())
+        self.trigger_edit.setEnabled(selected)
+        self.trigger_remove.setEnabled(selected)
 
     def remove_trigger(self) -> None:
         row = self.triggers.currentRow()
@@ -758,9 +819,10 @@ class DataPanel(QWidget):
         if p is None:
             return None
         ns = cell_namespace(p)
-        if self._link is not None and self._link_ns != ns:
+        if self._link is not None and (self._link_ns != ns or not self._link.alive()):
             self._link.close()
             self._link = None
+            self._pending = []
         if self._link is None:
             try:
                 from ...livesession.data_recorder import RecorderLink
@@ -805,22 +867,30 @@ class DataPanel(QWidget):
         link = self.link()
         if link is None:
             return
-        self._pending.append((service, link.call(service)))
+        self._pending.append((service, link.call(service), time.monotonic()))
         if service == 'start_session':
             self.open_datasets.setVisible(False)
             _say(self.session_result, 'Starting a session…')
 
     def _poll_calls(self) -> None:
         still = []
-        for service, future in self._pending:
+        for service, future, since in self._pending:
             if not future.done():
-                still.append((service, future))
+                if time.monotonic() - since > CALL_TIMEOUT_S[service]:
+                    if self._link is not None:
+                        self._link.forget(service, future)
+                    _say(self.session_result, f'The recorder did not answer ({service}, '
+                         f'{CALL_TIMEOUT_S[service]:.0f} s): is it still running?', ERROR)
+                    continue
+                still.append((service, future, since))
                 continue
             try:
                 reply = future.result()
             except Exception as exc:  # noqa: BLE001
                 _say(self.session_result, f'{service} failed: {exc}', ERROR)
                 continue
+            if reply.success:
+                self._settle_until = time.monotonic() + STATE_SETTLE_S
             if not reply.success:
                 _say(self.session_result, f'Refused: {reply.message}', ERROR)
             elif service == 'start_session':
@@ -847,21 +917,32 @@ class DataPanel(QWidget):
                 self._session_after_close = sid
         self._pending = still
 
+    def _open_sealed_session(self) -> None:
+        """Datasets, re-read (the store changed), with the session just sealed selected."""
+        self.tabs.blockSignals(True)
+        self.tabs.setCurrentIndex(2)
+        self.tabs.blockSignals(False)
+        self.refresh_datasets(select_session=self._session_after_close)
+
     def _refresh_session(self) -> None:
         launcher = self.launcher()
         running = bool(launcher and launcher.running('data_recorder'))
-        self.recorder_start.setText('Stop recorder' if running else 'Start recorder')
-        self.recorder_start.setEnabled(launcher is not None and (running or self.mode.count() > 0))
-        self.mode.setEnabled(not running)
         # the link (an rclpy node) is made only when the Capture tab is on screen, never by a refresh
         link = self.link() if self.isVisible() and self.tabs.currentIndex() == 0 else self._link
         status = link.status() if link is not None else None
         reachable = bool(link is not None and link.reachable())
+        # a recorder already on the graph (the bundle's bring-up runs one): never start a second one beside it
+        elsewhere = reachable and not running
+        self.recorder_start.setText('Stop recorder' if running else 'Start recorder')
+        self.recorder_start.setEnabled(launcher is not None and not elsewhere and (running or self.mode.count() > 0))
+        self.recorder_start.setToolTip('A recorder is already running (the bundle bring-up started it)'
+                                       if elsewhere else '')
+        self.mode.setEnabled(not running)
         values = (status or {}).get('values') or {}
         state = values.get('session_state', '')
         active = state == 'ACTIVE'
         manual = any(t.get('kind') == 'manual' for t in (self._data() or {}).get('triggers') or [])
-        busy = bool(self._pending)
+        busy = bool(self._pending) or time.monotonic() < self._settle_until
         self.record_button.setEnabled(reachable and not active and not busy)
         self.capture_button.setEnabled(reachable and active and manual and not busy)
         self.capture_button.setToolTip('' if manual else 'Add a Manual trigger to capture by hand')
@@ -963,6 +1044,7 @@ class DataPanel(QWidget):
         v.addStretch(1)
         self._generated_session: Optional[str] = None
         self._generation_kind: Optional[str] = None
+        self._refused = False
         return w
 
     def discover_providers(self) -> None:
@@ -975,8 +1057,8 @@ class DataPanel(QWidget):
         if not self.providers and not self.provider_problems:
             self.discover_providers()
         modes = [m.value for m in p.deployment.modes]
-        launcher = self.settings().isaac_launcher
-        usable = [(pr, D.provider_unavailable(pr, modes, launcher)) for pr in self.providers]
+        settings = self.settings()
+        usable = [(pr, D.provider_unavailable(pr, modes, settings)) for pr in self.providers]
         if not self.providers:
             text = ('No synthetic data generator is installed (trainit_data 0.8.0 installs the reference one).' +
                     (' ' + '; '.join(self.provider_problems) if self.advanced.isChecked() and self.provider_problems
@@ -1098,7 +1180,8 @@ class DataPanel(QWidget):
             else:
                 spin = QDoubleSpinBox()
                 span = float(parameter['max']) - float(parameter['min'])
-                spin.setDecimals(3 if span < 10 else 1)
+                # enough decimals for the value itself (a value is never shown, nor saved, rounded)
+                spin.setDecimals(min(6, max(3 if span < 10 else 1, _decimals(v))))
                 spin.setSingleStep(10 ** (len(str(int(span))) - 2) if span >= 10 else 0.005)
                 spin.setRange(float(parameter['min']), float(parameter['max']))
                 spin.setValue(float(v))
@@ -1113,11 +1196,20 @@ class DataPanel(QWidget):
         return values[0] if len(values) == 1 else values
 
     def recipe_values(self) -> Dict[str, Any]:
-        """The parameters the user set (the form's), on top of the saved recipe's hidden ones."""
+        """The parameters the user set (the form's), on top of the saved recipe's hidden ones; a value equal to
+        the provider's default (as its widget shows it) is not an override."""
         out = dict(getattr(self, '_saved_params', {}) or {})
         out.update({key: self._widget_value(key) for key in self.param_widgets})
         defaults = {p['key']: self.provider.default(p['key']) for p in self.provider.descriptor['parameters']}
-        return {k: v for k, v in out.items() if v != defaults.get(k)}
+        return {k: v for k, v in out.items() if not self._same(k, v, defaults.get(k))}
+
+    def _same(self, key: str, value, default) -> bool:
+        widgets = self.param_widgets.get(key) or []
+        decimals = [w.decimals() for w in widgets if isinstance(w, QDoubleSpinBox)]
+        if not decimals or default is None:
+            return value == default
+        pairs = zip(value, default) if isinstance(value, list) and isinstance(default, list) else [(value, default)]
+        return all(round(float(a), decimals[0]) == round(float(b), decimals[0]) for a, b in pairs)
 
     def save_recipe(self) -> None:
         if self.provider is None:
@@ -1157,7 +1249,7 @@ class DataPanel(QWidget):
             return
         if preview:
             self._drop_preview()
-            self._preview_dir = tempfile.mkdtemp(prefix='tsa_synthetic_preview_')
+            self._preview_dir = tempfile.mkdtemp(prefix=PREVIEW_PREFIX)
             work, store = Path(self._preview_dir), str(Path(self._preview_dir) / 'store')
         else:
             work = Path.home() / '.cache' / 'trainit' / 'synthetic'
@@ -1166,8 +1258,9 @@ class DataPanel(QWidget):
         config = work / f'{self.provider.id}-{time.strftime("%Y%m%dT%H%M%S")}.json'
         config.write_text(json.dumps(self.provider.resolved_config(params), indent=2, sort_keys=True))
         try:
-            command = D.provider_command(self.provider, self.settings().isaac_launcher, str(config),
-                                         self.seed.value(), runs, views, self.root(), store=store,
+            # a preview names ONLY its scratch store (TRAINIT_DATA_ROOT too): the user's store is not in its command
+            command = D.provider_command(self.provider, self.settings(), str(config),
+                                         self.seed.value(), runs, views, store or self.root(), store=store,
                                          title='Synthetic preview' if preview else 'Synthetic generation', kind=kind)
             launcher.add_listener(self)
             launcher.start(command)
@@ -1176,6 +1269,7 @@ class DataPanel(QWidget):
             return
         self._generation_kind = kind
         self._generated_session = None
+        self._refused = False
         self.add_to_dataset.setVisible(False)
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
@@ -1202,6 +1296,7 @@ class DataPanel(QWidget):
             self.progress.setValue(int(event['run']))
             self.progress.setFormat(f'run {event["run"]} / {event["runs"]}')
         elif phase == 'invalid_config':
+            self._refused = True
             _say(self.synthetic_result, 'The generator refused the settings: ' + '; '.join(event.get('problems', [])),
                  ERROR)
         elif phase == 'session':
@@ -1221,8 +1316,10 @@ class DataPanel(QWidget):
             _say(self.synthetic_result, 'Stopped. A session left unfinished appears as "Interrupted" in Datasets.',
                  WARN)
         elif sid is None or code != 0:
-            if 'refused' not in self.synthetic_result.text():
+            if not self._refused:
                 _say(self.synthetic_result, f'Generation failed (exit {code}): see the log (Advanced).', ERROR)
+        elif kind == 'synthetic_preview' and self._preview_dir is None:
+            _say(self.synthetic_result, 'The preview was discarded.', HINT)
         elif kind == 'synthetic_preview':
             _say(self.synthetic_result, 'Sample rendered (a real render, discarded when replaced).', OK)
             self.cli(['inspect', sid, '--captures', '--limit', '1'], self._show_sample,
@@ -1238,11 +1335,14 @@ class DataPanel(QWidget):
             _say(self.synthetic_result, f'The sample could not be read: {result.message()}', ERROR)
             return
         root = Path(result.result['root'])
+        if self._preview_dir is None or not root.resolve().is_relative_to(Path(self._preview_dir).resolve()):
+            return                                     # an older preview's answer, or not TSA's scratch store
         capture = result.result['captures'][0]
         by_stream = {o['stream']: o for o in capture['observations']}
         color, inst, depth = by_stream.get('color'), by_stream.get('instances'), by_stream.get('depth')
         if color is not None:
-            image = QImage(str(root / color['payload']['path']))
+            path = _payload(root, color['payload']['path'])
+            image = QImage(str(path)) if path else QImage()
             if inst is not None and not image.isNull():
                 painter = QPainter(image)
                 painter.setPen(QPen(QColor('#00e676'), 2))
@@ -1254,17 +1354,19 @@ class DataPanel(QWidget):
                 painter.end()
             _pixmap(self.sample_rgb, image)
         if inst is not None:
-            _pixmap(self.sample_mask, mask_image(str(root / inst['payload']['path'])))
+            path = _payload(root, inst['payload']['path'])
+            _pixmap(self.sample_mask, mask_image(str(path)) if path else None)
         if depth is not None:
             import numpy as np
             try:
-                _pixmap(self.sample_depth, depth_image(np.load(root / depth['payload']['path'])))
-            except (OSError, ValueError):
+                path = _payload(root, depth['payload']['path'])
+                _pixmap(self.sample_depth, depth_image(np.load(path, allow_pickle=False)) if path else None)
+            except (OSError, ValueError, TypeError):
                 _pixmap(self.sample_depth, None)
 
     def _drop_preview(self) -> None:
         """The previous preview's TSA-owned scratch store (never the user's store)."""
-        if self._preview_dir and Path(self._preview_dir).name.startswith('tsa_synthetic_preview_'):
+        if self._preview_dir and is_preview_scratch(self._preview_dir):
             shutil.rmtree(self._preview_dir, ignore_errors=True)
         self._preview_dir = None
         for view in (self.sample_rgb, self.sample_mask, self.sample_depth):
@@ -1351,10 +1453,12 @@ class DataPanel(QWidget):
         self._datasets_loaded = False
         self._select_after: Optional[str] = None
         self._version_detail: Dict[int, dict] = {}
+        self._dataset_ready: Optional[str] = None
         return w
 
     def refresh_datasets(self, select_session: Optional[str] = None) -> None:
         self._select_after = select_session or self._select_after
+        self._datasets_loaded = True              # requested: a second refresh before the answers re-reads nothing
         _say(self.store_state, f'Reading the data store {self.root()}…')
         self.cli(['inspect', '--detail'], self._sessions_loaded)
         self.cli(['dataset', 'list'], self._datasets_listed)
@@ -1419,10 +1523,12 @@ class DataPanel(QWidget):
             selected[0]['session_id'] != recording
         self.inspect_button.setEnabled(len(selected) == 1)
         self.recover_button.setVisible(bool(self.interrupted.text()))
-        self.recover_button.setEnabled(one_active)
         sealed = [s for s in selected if s.get('status') in ('CLOSED', 'INTERRUPTED')]
-        self.create_version_button.setEnabled(bool(sealed) and len(sealed) == len(selected)
-                                              and self.dataset_combo.currentData() is not None)
+        ready = (self.dataset_combo.currentData() is not None
+                 and self._dataset_ready == self.dataset_combo.currentData() and not self.jobs.busy)
+        self.create_version_button.setEnabled(bool(sealed) and len(sealed) == len(selected) and ready)
+        self.export_button.setEnabled(ready and self.version_list.currentRow() >= 0)
+        self.recover_button.setEnabled(one_active and not self.jobs.busy)
         self.create_version_button.setToolTip('' if self.dataset_combo.currentData() else 'Choose or create a dataset')
 
     def _datasets_listed(self, result: D.CliResult) -> None:
@@ -1436,9 +1542,9 @@ class DataPanel(QWidget):
             if 'error' in d:
                 continue
             self.dataset_combo.addItem(f'{d["dataset_id"]} — {d["name"]}', d['dataset_id'])
-        self.dataset_combo.blockSignals(False)
         i = self.dataset_combo.findData(wanted)
         self.dataset_combo.setCurrentIndex(i if i >= 0 else (0 if self.dataset_combo.count() else -1))
+        self.dataset_combo.blockSignals(False)
         self._dataset_changed()
 
     def _dataset_changed(self) -> None:
@@ -1449,35 +1555,42 @@ class DataPanel(QWidget):
         self.version_summary.setText('')
         self.import_labels.setEnabled(dataset is not None)
         self.export_button.setEnabled(False)
+        self._dataset_ready = None                 # versions / label sets of `dataset` not read yet
         self._selection_changed()
         if dataset is None:
             return
-        self.cli(['dataset', 'show', dataset], self._dataset_shown)
+        self.cli(['dataset', 'show', dataset], lambda r, d=dataset: self._dataset_shown(d, r))
 
-    def _dataset_shown(self, result: D.CliResult) -> None:
+    def _dataset_shown(self, dataset: str, result: D.CliResult) -> None:
+        if dataset != self.dataset_combo.currentData():
+            return                                  # an answer about a dataset no longer selected
         if not result.ok:
             _say(self.dataset_result, result.message(), ERROR)
             return
         self.versions = list(result.result['versions'])
         self._label_sets = list(result.result['label_sets'])
+        self._dataset_ready = dataset
         self.version_list.clear()
         for n in self.versions:
             self.version_list.addItem(f'v{n}')
         if self.versions:
             self.version_list.setCurrentRow(len(self.versions) - 1)
+        self._selection_changed()
 
     def _version_changed(self, row: int) -> None:
-        self.export_button.setEnabled(row >= 0)
+        self.export_button.setEnabled(row >= 0 and self._dataset_ready == self.dataset_combo.currentData())
         if row < 0 or row >= len(self.versions):
             return
         n = self.versions[row]
         if n in self._version_detail:
             self._show_version(self._version_detail[n])
             return
-        self.cli(['version', 'show', self.dataset_combo.currentData(), str(n)],
-                 lambda r, n=n: self._version_loaded(n, r))
+        dataset = self.dataset_combo.currentData()
+        self.cli(['version', 'show', dataset, str(n)], lambda r, n=n, d=dataset: self._version_loaded(d, n, r))
 
-    def _version_loaded(self, n: int, result: D.CliResult) -> None:
+    def _version_loaded(self, dataset: str, n: int, result: D.CliResult) -> None:
+        if dataset != self.dataset_combo.currentData():
+            return
         if result.ok:
             self._version_detail[n] = result.result['version']
             if self.versions and self.version_list.currentRow() >= 0 and \
@@ -1722,7 +1835,7 @@ class DataPanel(QWidget):
             _say(self.dataset_result, f'Exported {total} images (' + ' / '.join(
                 f'{k} {s["images"]}' for k, s in splits.items()) + f') to {e["destination"]}. '
                 'The canonical data was not changed.', OK)
-        self.cli(['export', 'yolo', dataset, str(n), destination], done)
+        self.cli(['export', 'yolo', dataset, str(n), destination], done, timeout_s=6 * 3600.0)
 
     # ---- refresh / timer -----------------------------------------------------------------------------------
     def refresh(self) -> None:

@@ -308,7 +308,8 @@ def test_the_recorder_itself_accepts_every_generated_file(tmp_path):
     probe = subprocess.run([sys.executable, '-c', 'import trainit_data_ros.recording_config'],
                            capture_output=True)
     if probe.returncode != 0:
-        pytest.skip('trainit_data_ros is not installed in this environment (source the workspace)')
+        import d08_env
+        d08_env.require('trainit_data_ros is not installed in this environment (source the workspace)')
     app = _generate(build(modes=['mock', 'isaac', 'real']), tmp_path)
     files = sorted((app / 'config').glob('data_collection.*.yaml'))
     assert [p.name for p in files] == ['data_collection.isaac.yaml', 'data_collection.mock.yaml',
@@ -334,3 +335,114 @@ def test_the_composer_edits_data_collection_and_only_the_cameras_id_and_profile(
         composer.edit_project(lambda doc: doc['data_collection']['triggers'].append({'id': 'x', 'kind': 'bogus'}))
     composer.undo()
     assert composer.project.data_collection is None
+
+
+# ---- review closure (D0.8): boundaries the first test set did not pin ---------------------------------------
+
+@pytest.mark.parametrize('kw, needle', [
+    (dict(data=edited(triggers__3__pick_attempt='mid_grasp')), "pick_attempt 'mid_grasp' is not one of"),
+    (dict(data=edited(triggers__1__period_ms=-5)), "trigger 'every_2s': period_ms must be an integer >= 1"),
+    (dict(data=edited(triggers__1__max_captures=0)), "trigger 'every_2s': max_captures must be an integer >= 1"),
+    (dict(data=edited(triggers__1__max_captures=-1)), 'max_captures must be an integer >= 1'),
+    (dict(data=edited(dataset__id='a' * 65)), 'longer than 64 characters'),
+])
+def test_boundary_refusals(kw, needle):
+    problems = problems_of(**kw)
+    assert any(needle in p for p in problems), problems
+
+
+@pytest.mark.parametrize('kw', [
+    dict(data=edited(dataset__id='a' * 64)),
+    dict(data=edited(triggers__2__edge='falling')),
+    dict(data=edited(triggers__2__edge='any')),
+    dict(data=edited(triggers__1__max_captures=None)),
+    dict(data=edited(triggers__1__period_ms=1, triggers__1__max_captures=1)),
+])
+def test_boundary_acceptances(kw):
+    assert problems_of(**kw) == []
+
+
+def test_a_real_only_project_records_from_the_real_camera_only(tmp_path):
+    project = build(modes=['real'])
+    assert data_collection_problems(project) == [] and data_collection_warnings(project) == []
+    assert list(recording_documents(project)) == ['real']
+    app = _generate(project, tmp_path)
+    assert [p.name for p in (app / 'config').glob('data_collection.*.yaml')] == ['data_collection.real.yaml']
+    assert "if mode in ('real',):" in (app / 'launch' / 'bringup.launch.py').read_text()
+    result = _recorder_parses(app / 'config' / 'data_collection.real.yaml')
+    if 'No module named' in result.stderr:
+        import d08_env
+        d08_env.require('trainit_data_ros is not installed in this environment')
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
+NON_CONTRACT = [
+    # no contract namespace at all: every topic explicit, depth's CameraInfo = the colour one (registered depth)
+    ({'rgb_topic': '/cell_cam/rgb', 'depth_topic': '/cell_cam/depth_registered',
+      'camera_info_topic': '/cell_cam/rgb_info'},
+     None, {'color': {'topic': '/cell_cam/rgb', 'info': '/cell_cam/rgb_info'},
+            'depth': {'topic': '/cell_cam/depth_registered', 'info': '/cell_cam/rgb_info'}}),
+    # the contract's colour topic under a namespace, but its own CameraInfo and depth names
+    ({'rgb_topic': '/cam2/color/image_raw', 'depth_topic': '/cam2/aligned/depth',
+      'camera_info_topic': '/cam2/color/info_custom'},
+     '/cam2', {'color': {'info': '/cam2/color/info_custom'}, 'depth': {'topic': '/cam2/aligned/depth'}}),
+]
+
+
+@pytest.mark.parametrize('topics, namespace, streams', NON_CONTRACT)
+def test_non_contract_camera_topics_become_explicit_overrides_the_recorder_accepts(topics, namespace, streams,
+                                                                                    tmp_path):
+    camera = dict(CAMERA, **topics)
+    project = build(camera=camera, modes=['mock', 'real'])
+    assert data_collection_problems(project) == []
+    app = _generate(project, tmp_path)
+    for mode in ('mock', 'real'):
+        path = app / 'config' / f'data_collection.{mode}.yaml'
+        sensor = yaml.safe_load(path.read_text())['sensors'][0]
+        assert sensor.get('namespace') == namespace and sensor['streams'] == streams
+        result = _recorder_parses(path)
+        if 'No module named' in result.stderr:
+            import d08_env
+            d08_env.require('trainit_data_ros is not installed in this environment')
+        assert result.returncode == 0, f'{path.name}: {result.stderr[-2000:]}'
+
+
+def test_relative_camera_topics_are_refused():
+    problems = problems_of(camera=dict(CAMERA, rgb_topic='camera/color/image_raw'))
+    assert any('the recorder needs absolute names (camera/color/image_raw)' in p for p in problems)
+
+
+def test_a_synthetic_only_section_does_not_judge_the_camera_name():
+    synthetic_only = {'dataset': {'id': 'bin_parts'}, 'synthetic': {'provider': 'isaac_replicator_bin'}}
+    assert problems_of(data=synthetic_only, camera=dict(CAMERA, id='Bin Cam')) == []
+
+
+def _render(template, **ctx):
+    from trainit_setup_assistant.generator.determinism import build_jinja_env
+    return build_jinja_env().get_template(template).render(**ctx)
+
+
+def test_both_bringup_templates_include_the_recorder_only_with_data(tmp_path):
+    """The scene-loader flow's bring-up (bringup.launch.py.j2) and the from-scratch one
+    (bringup_bootstrap.launch.py.j2, what the composition cell generates): the recorder include, the data:=
+    argument and the recordable modes are there exactly when a mode records; without, nothing changes."""
+    loader = dict(robot_name='r', moveit_config_package='r_cfg', app_package='r_app', valid_modes_py="('isaac',)",
+                  default_mode='isaac', modes_human='isaac', gazebo_supported=False, default_planner_mode='ompl',
+                  has_policies=False)
+    with_data_ = _render('app/bringup.launch.py.j2', data_modes_py="('isaac',)", data_namespace='r1', **loader)
+    compile(with_data_, 'bringup.launch.py', 'exec')
+    assert 'recorder.launch.py' in with_data_ and "if mode in ('isaac',):" in with_data_
+    assert '"namespace": "r1"' in with_data_ and 'DeclareLaunchArgument("data", default_value="true"' in with_data_
+    assert '_share("r_app"), "config"' in with_data_
+    plain = _render('app/bringup.launch.py.j2', **loader)
+    assert _render('app/bringup.launch.py.j2', data_modes_py='', data_namespace='', **loader) == plain
+    assert 'trainit_data_ros' not in plain and '"data"' not in plain
+    # the bootstrap flow, through a real generation (the composition cell has no base MoveIt config)
+    app = _generate(build(modes=['mock']), tmp_path)
+    manifest = yaml.safe_load((tmp_path / 'bundle' / 'generation_manifest.yaml').read_text())
+    entry = next(f for f in manifest['files'] if f['path'].endswith(f'{app.name}/launch/bringup.launch.py'))
+    assert 'bootstrap' in entry.get('source', '')
+    bootstrap = (app / 'launch' / 'bringup.launch.py').read_text()
+    compile(bootstrap, 'bringup.launch.py', 'exec')
+    assert "if mode in ('mock',):" in bootstrap and 'recorder.launch.py' in bootstrap
+    assert 'DeclareLaunchArgument("data", default_value="true"' in bootstrap

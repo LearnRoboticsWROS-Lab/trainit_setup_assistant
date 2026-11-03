@@ -48,8 +48,10 @@ class LiveCameraCapture:
             depth_to_metres = None
             self._depth_unavailable = f'depth needs trainit_perception (its depth_to_metres): {exc!r}'
         self._depth_to_metres = depth_to_metres
-        self._owns_context = not rclpy.ok()
-        if self._owns_context:
+        # the process's ONE rclpy context is shared with the other observers (the Data section's recorder
+        # link, D0.8): initialised if needed, never shut down here -- a camera re-created for new topics must
+        # not end the context another observer is spinning on; it ends with the process
+        if not rclpy.ok():
             rclpy.init()
 
         self._node = Node(node_name)
@@ -140,8 +142,6 @@ class LiveCameraCapture:
             self._node.destroy_node()
         except Exception:  # noqa: BLE001
             pass
-        if self._owns_context and self._rclpy.ok():
-            self._rclpy.shutdown()
 
     def __enter__(self):
         return self

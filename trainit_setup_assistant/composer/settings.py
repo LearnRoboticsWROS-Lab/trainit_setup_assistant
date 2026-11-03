@@ -25,6 +25,11 @@ def settings_file() -> Path:
 class LauncherSettings:
     isaac_launcher: str = ''          # isaac-sim.sh
     workspace_root: str = ''          # the colcon workspace (the parent of src/)
+    # TrainIt D0.8: the canonical data store this machine uses (else TRAINIT_DATA_ROOT, else ~/TrainItData)
+    # and extra directories holding synthetic providers (os.pathsep-separated; private providers live here,
+    # never in a public repository)
+    data_root: str = ''
+    synthetic_provider_dirs: str = ''
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> 'LauncherSettings':
@@ -46,7 +51,8 @@ class LauncherSettings:
         import yaml
         path = Path(path) if path else settings_file()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(yaml.safe_dump(asdict(self), sort_keys=True))
+        # unset (empty) settings are not written: the file says only what this machine configured
+        path.write_text(yaml.safe_dump({k: v for k, v in asdict(self).items() if v}, sort_keys=True))
         return path
 
 

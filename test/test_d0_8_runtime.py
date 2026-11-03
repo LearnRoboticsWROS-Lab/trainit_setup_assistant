@@ -190,6 +190,10 @@ def test_the_recorder_command_is_launched_and_copyable():
     assert shown.startswith("TRAINIT_DATA_ROOT=/data/store source /opt/ros/humble/setup.bash")
     assert 'ros2 launch trainit_data_ros recorder.launch.py config_file:=' in shown and 'namespace:=r1' in shown
     assert 'ros2 run' not in shown
+    # a project without a robot slot: no `namespace:=` at all (`ros2 launch` refuses an empty value)
+    flat = D.recorder_command('/ws', '/ws/x/data_collection.isaac.yaml', '', True, '/data/store').display()
+    assert 'namespace:=' not in flat and flat.endswith('config_file:=/ws/x/data_collection.isaac.yaml '
+                                                       'use_sim_time:=true')
 
 
 def test_the_store_root_follows_settings_then_environment(monkeypatch):

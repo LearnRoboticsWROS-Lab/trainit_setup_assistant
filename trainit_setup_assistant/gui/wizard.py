@@ -3019,6 +3019,13 @@ class BlocksPage(QWizardPage):
         self.program_result.setStyleSheet(style)
         self.program_result.setText('\n'.join(body))
 
+    def showEvent(self, event) -> None:
+        """Back from Step 8 does not re-run initializePage (QWizard): the Composer shows what changed
+        meanwhile (a generation: the Data section's recorder modes) every time the page is shown."""
+        super().showEvent(event)
+        if not self.program_panel.isHidden():
+            self.program_panel.refresh()
+
     def _show_program(self, program: bool) -> None:
         self.editor.setVisible(not program)
         self.program_panel.setVisible(program)

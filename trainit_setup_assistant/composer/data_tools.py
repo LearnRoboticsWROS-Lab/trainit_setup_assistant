@@ -126,8 +126,10 @@ def recorder_command(ws_root: Optional[str], config_file: str, namespace: str, u
                      root: str) -> Command:
     """The recorder as a launched, copyable command (when the bundle's bring-up does not run it)."""
     from .launch_plan import _sourced
-    args = (f'config_file:={shlex.quote(str(config_file))} namespace:={shlex.quote(namespace or "")} '
-            f'use_sim_time:={"true" if use_sim_time else "false"}')
+    # no slot = the launch file's default: `ros2 launch` refuses an empty `namespace:=` (owner acceptance flow 1)
+    args = (f'config_file:={shlex.quote(str(config_file))} '
+            + (f'namespace:={shlex.quote(namespace)} ' if namespace else '')
+            + f'use_sim_time:={"true" if use_sim_time else "false"}')
     return Command('data_recorder', 'Data recorder', _sourced(ws_root, f'ros2 launch trainit_data_ros '
                                                                        f'recorder.launch.py {args}'),
                    long_running=True, env={'TRAINIT_DATA_ROOT': str(root)})

@@ -470,6 +470,28 @@ def test_the_data_diagnostic_opens_the_data_section(qapp, monkeypatch):
     assert shell.stack.currentWidget() is shell.data and shell.data.tabs.currentIndex() == 0
 
 
+def test_back_from_generate_shows_the_new_recorder_modes(qapp, monkeypatch, tmp_path):
+    """Owner acceptance flow 1: Generate (Step 8), then Back to Step 7. QWizard does not re-run
+    initializePage on Back; showing the page must still offer the modes the generation wrote."""
+    from trainit_setup_assistant.gui.controller import AssistantController
+    from trainit_setup_assistant.gui.wizard import SetupWizard
+    ctrl = AssistantController()
+    ctrl.open_project(C.SOURCE)
+    w = SetupWizard(ctrl)
+    page = w.blocks_page
+    page.initializePage()
+    shell = page.program_panel
+    shell.select('Data')
+    assert shell.data.mode.count() == 0
+    config = tmp_path / 'bundle' / ctrl.project.bundle.app_package / 'config'
+    config.mkdir(parents=True)
+    (config / 'data_collection.isaac.yaml').write_text('schema: trainit-recording/1.0\n')
+    ctrl.last_generation_dir = str(tmp_path / 'bundle')       # what Step 8's Generate records
+    from python_qt_binding.QtGui import QShowEvent
+    page.showEvent(QShowEvent())                              # Back: shown again, no initializePage
+    assert [shell.data.mode.itemText(i) for i in range(shell.data.mode.count())] == ['isaac']
+
+
 # ---- review closure (D0.8) ----------------------------------------------------------------------------------
 
 def test_a_real_only_project_offers_live_capture_and_no_synthetic_controls(qapp, monkeypatch, tmp_path):

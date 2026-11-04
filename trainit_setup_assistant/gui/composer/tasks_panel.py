@@ -272,6 +272,11 @@ class TasksPanel(QWidget):
         self.route_view.setPlainText('\n'.join(route(task, paths=paths)) or '(no motion)')
         if self._edit_label in self.items:
             self.select(self._edit_label)
+        else:                                       # its step is gone (deleted, undone): no stale form to apply
+            self._edit_label = None
+            self.step_id.clear()
+            self.inspector.setTitle('Inspector')
+            self.inspector.setEnabled(False)
 
     # ---- selection ---------------------------------------------------------------------------------------
     def select(self, label: Label) -> None:

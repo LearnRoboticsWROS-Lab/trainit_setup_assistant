@@ -450,7 +450,34 @@ def parse_progress(line: str) -> Optional[dict]:
     return None
 
 
-__all__ = ['CliResult', 'DescriptorError', 'Provider', 'cli_argv', 'cli_version', 'data_root', 'find_providers',
-           'isaac_python', 'load_provider', 'parse_cli_output', 'parse_descriptor', 'parse_progress',
+_SYNC_PROBLEMS = {'OUT_OF_TOLERANCE': 'taken {skew} ms apart (allowed {tol} ms)',
+                  'INCOMPATIBLE_CLOCKS': 'stamped on different clocks'}
+
+
+def _ms(ns) -> str:
+    return f'{(ns or 0) / 1e6:.0f}'
+
+
+def capture_problems(captures: Sequence[dict]) -> List[str]:
+    """``inspect --captures`` records -> one line per capture that is not COMPLETE, saying why in the recorder's
+    own words (its stream reasons and sync verdict); [] when every capture is complete."""
+    lines = []
+    for c in captures:
+        if not isinstance(c, dict) or c.get('outcome') == 'COMPLETE':
+            continue
+        why = [f'{m.get("stream")}: {m.get("reason")}' for m in c.get('missing') or [] if isinstance(m, dict)]
+        sync = c.get('sync') or {}
+        if sync.get('status') in _SYNC_PROBLEMS:
+            text = _SYNC_PROBLEMS[sync['status']].format(skew=_ms(sync.get('max_skew_ns')),
+                                                         tol=_ms(sync.get('tolerance_ns')))
+            why.append(f'streams {text} [{sync["status"]}]')
+        trigger = (c.get('trigger') or {}).get('trigger_id')
+        lines.append(f'#{c.get("seq")} {c.get("outcome")}' + (f' ({trigger})' if trigger else '') + ': '
+                     + ('; '.join(why) or 'no reason recorded'))
+    return lines
+
+
+__all__ = ['CliResult', 'DescriptorError', 'Provider', 'capture_problems', 'cli_argv', 'cli_version', 'data_root',
+           'find_providers', 'isaac_python', 'load_provider', 'parse_cli_output', 'parse_descriptor', 'parse_progress',
            'provider_command', 'provider_dirs', 'provider_unavailable', 'recorder_command', 'run_cli',
            'value_problem']

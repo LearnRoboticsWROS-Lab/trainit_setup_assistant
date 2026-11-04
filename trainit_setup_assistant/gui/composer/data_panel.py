@@ -45,6 +45,11 @@ CALL_TIMEOUT_S = {'start_session': 15.0, 'capture': 30.0, 'close_session': 120.0
 # after a successful reply, the session buttons wait for the recorder's 1 Hz diagnostics to show the new state
 STATE_SETTLE_S = 2.5
 FRAMES_SILENT_S = 3.0          # a camera stream with no new frame for this long is reported silent
+INSPECT_CAPTURES_READ = 5000   # Inspect reads at most this many capture records of one session
+INSPECT_PROBLEMS_SHOWN = 20    # and lists at most this many not-complete ones
+SYNC_FAILURES_TEXT = ('{n} capture(s) with streams missing or not taken at the same moment: kept as '
+                      'Partial, with the reason (Datasets -> Inspect). Partial captures stay out of a '
+                      'version unless you include them.')
 KIND_LABELS = {'manual': 'Manual (Capture button)', 'interval': 'Every N milliseconds',
                'event': 'When a process channel changes', 'application_state': 'When the application reaches'}
 TRANSITIONS = {'enter': 'starts', 'exit': 'ends', 'succeeded': 'succeeds', 'failed': 'fails'}
@@ -1031,7 +1036,8 @@ class DataPanel(QWidget):
         if status is not None and status.get('level', 0) >= 1:
             for key in ('captures_lost', 'write_failures', 'queue_overruns', 'sync_failures', 'clock_jumps'):
                 if values.get(key) not in (None, '', '0'):
-                    warnings.append(f'{key.replace("_", " ")}: {values[key]}')
+                    warnings.append(SYNC_FAILURES_TEXT.format(n=values[key]) if key == 'sync_failures'
+                                    else f'{key.replace("_", " ")}: {values[key]}')
             if values.get('last_error'):
                 warnings.append(values['last_error'])
         self.session_warnings.setText(' · '.join(warnings))
@@ -1711,8 +1717,18 @@ class DataPanel(QWidget):
                              f'{committed["failed"]} failed')
             elif h.get('counters'):
                 lines.append(f'Captures: {h["counters"]["captures"]}')
+            captures = result.result.get('captures') or []
+            problems = D.capture_problems(captures)
+            if problems:
+                lines.append('Not complete, and why:')
+                lines += ['  ' + p for p in problems[:INSPECT_PROBLEMS_SHOWN]]
+                if len(problems) > INSPECT_PROBLEMS_SHOWN:
+                    lines.append(f'  … and {len(problems) - INSPECT_PROBLEMS_SHOWN} more')
+            total = result.result.get('captures_total')
+            if total is not None and len(captures) < total:
+                lines.append(f'(the first {len(captures)} of {total} captures were checked)')
             QMessageBox.information(self, 'Session', '\n'.join(lines))
-        self.cli(['inspect', sid], shown)
+        self.cli(['inspect', sid, '--captures', '--limit', str(INSPECT_CAPTURES_READ)], shown)
 
     def recover_selected(self) -> None:
         """Explicit only, behind a confirmation that says exactly what recover does (D0_8_DESIGN.md §9)."""

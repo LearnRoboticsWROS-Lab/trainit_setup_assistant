@@ -782,3 +782,67 @@ def test_a_silent_camera_is_reported_before_a_capture_fails(qapp, monkeypatch):
     counts.update(color=0, depth=0)                              # a new session resets the counters: a new watch
     panel._refresh_session()
     assert panel.session_warnings.text() == ''
+
+
+def test_the_inspector_forgets_a_deleted_step(qapp):
+    """Flow 2: after Delete, the Inspector still showed the deleted step's form (Id approach_w2) as if editable."""
+    import test_i0_7_tasks as T
+    c = T.composer(T.SAMPLE)
+    panel = T._panel(c, c.program.main_task)
+    panel.select((2,))
+    panel.step_id.setText('approach_w1')
+    assert panel.apply()
+    panel.select((2,))
+    assert panel.delete_selected()
+    assert not panel.inspector.isEnabled() and panel.step_id.text() == '' and panel.inspector.title() == 'Inspector'
+    assert not panel.apply()                                     # nothing stale left to apply
+
+
+def test_a_sync_failure_is_said_in_product_words(qapp, monkeypatch):
+    panel, ctrl, host, _ = make_panel(qapp, monkeypatch)
+
+    class Link(FakeLink):
+        def status(self, max_age_s=None):
+            return {'level': 1, 'backend': 'isaac', 'values': {'session_state': 'RECORDING', 'sync_failures': '1'}}
+    panel._link = Link()
+    panel._refresh_session()
+    text = panel.session_warnings.text()
+    assert 'sync failures' not in text
+    assert text.startswith('1 capture(s) with streams missing or not taken at the same moment: kept as Partial')
+    assert 'Datasets -> Inspect' in text
+
+
+# the two records of the owner's flow 2 session ses-20261104T163012Z-fe31fad1, trimmed to what Inspect reads
+FLOW2_CAPTURES = [
+    {'seq': 1, 'outcome': 'PARTIAL', 'missing': [], 'trigger': {'trigger_id': 'at_w2'},
+     'sync': {'status': 'OUT_OF_TOLERANCE', 'max_skew_ns': 50000002, 'tolerance_ns': 16666667}},
+    {'seq': 2, 'outcome': 'COMPLETE', 'missing': [], 'trigger': {'trigger_id': 'at_w2'},
+     'sync': {'status': 'SYNCED', 'max_skew_ns': 0, 'tolerance_ns': 16666667}},
+    {'seq': 3, 'outcome': 'FAILED', 'trigger': {'trigger_id': 'manual'}, 'sync': None,
+     'missing': [{'stream': 'cell_camera/color', 'reason': 'TIMEOUT'},
+                 {'stream': 'cell_camera/depth', 'reason': 'TIMEOUT'}]},
+]
+
+
+def test_capture_problems_say_why_a_capture_is_not_complete():
+    assert D.capture_problems(FLOW2_CAPTURES) == [
+        '#1 PARTIAL (at_w2): streams taken 50 ms apart (allowed 17 ms) [OUT_OF_TOLERANCE]',
+        '#3 FAILED (manual): cell_camera/color: TIMEOUT; cell_camera/depth: TIMEOUT']
+    assert D.capture_problems(FLOW2_CAPTURES[1:2]) == []
+
+
+def test_inspect_lists_the_captures_that_are_not_complete_and_why(qapp, monkeypatch):
+    from trainit_setup_assistant.gui.composer import data_panel as P
+    panel, cli = _datasets(qapp, monkeypatch)
+    sid = SESSIONS[0]['session_id']
+    header = {'status': 'CLOSED', 'source': {'transport': 'LIVE_ROS', 'backend': 'real'},
+              'sensors': [{'sensor_id': 'bin_camera'}], 'counters': {'captures': {'attempted': 3}}}
+    cli.answers[f'inspect {sid}'] = (True, {'session': header, 'captures': FLOW2_CAPTURES, 'captures_total': 3}, None)
+    shown = []
+    monkeypatch.setattr(P.QMessageBox, 'information', lambda *a, **k: shown.append(a[2]))
+    panel.session_table.selectRow(2)
+    panel.inspect_selected()
+    _wait(panel)
+    assert ['inspect', sid, '--captures', '--limit', str(P.INSPECT_CAPTURES_READ)] in cli.calls
+    assert 'Not complete, and why:\n  #1 PARTIAL (at_w2): streams taken 50 ms apart (allowed 17 ms)' in shown[0]
+    assert '#2' not in shown[0] and 'checked)' not in shown[0]

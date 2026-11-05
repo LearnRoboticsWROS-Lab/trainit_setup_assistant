@@ -154,6 +154,16 @@ def _pixmap(view: QLabel, image: Optional[QImage]) -> None:
                                                    Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
 
+SYNC_POLICY_WORDS = {
+    'FIRST_AT_OR_AFTER_BOUNDARY': 'the first frame of each stream after the trigger',
+    'FIRST_ALIGNED_AT_OR_AFTER_BOUNDARY': 'the first colour + depth pair taken together',
+}
+SYNC_POLICY_HINT = ('How a capture pairs its colour and depth frames. "Taken together" skips a frame whose partner '
+                    'was lost (e.g. Isaac over a busy network) and keeps the first pair within the tolerance; a '
+                    'tolerance of 1 ms then demands the same Isaac render tick, about 17 ms suits a real 30 fps '
+                    'camera. With no such pair the capture is still kept as Partial, with the reason.')
+
+
 class Jobs:
     """Background work for the panel: ``run(fn, done)`` runs ``fn()`` on a worker thread and calls
     ``done(result)`` in the GUI thread (a timer drains the queue). A failing ``fn`` hands its exception. A failing
@@ -555,13 +565,17 @@ class DataPanel(QWidget):
         self.sync_tolerance.setSuffix(' ms')
         form.addRow('Wait for frames at most', self.sync_timeout)
         form.addRow('Colour / depth tolerance', self.sync_tolerance)
-        self.sync_rows = [self.sync_timeout, self.sync_tolerance]
+        self.sync_policy = QComboBox()
+        self.sync_policy.setToolTip(SYNC_POLICY_HINT)
+        self._fill_sync_policies()
+        form.addRow('Frame pairing', self.sync_policy)
+        self.sync_rows = [self.sync_timeout, self.sync_tolerance, self.sync_policy]
         self.sync_form = form
         rv.addLayout(form)
         self.setup_dirty = False                       # an edit in the setup fields not saved yet: never overwritten
         for signal in (self.dataset_id.textEdited, self.dataset_description.textEdited,
                        self.classification.activated, self.sync_timeout.valueChanged,
-                       self.sync_tolerance.valueChanged):
+                       self.sync_tolerance.valueChanged, self.sync_policy.activated):
             signal.connect(self._setup_edited)
         self.setup_save = QPushButton('Save recording setup')
         self.setup_save.clicked.connect(self.save_setup)
@@ -672,7 +686,7 @@ class DataPanel(QWidget):
         dataset = data.get('dataset') or {}
         if not self.setup_dirty:
             widgets = (self.dataset_id, self.dataset_description, self.classification, self.sync_timeout,
-                       self.sync_tolerance)
+                       self.sync_tolerance, self.sync_policy)
             for widget in widgets:
                 widget.blockSignals(True)
             self.dataset_id.setText(dataset.get('id', ''))
@@ -682,6 +696,11 @@ class DataPanel(QWidget):
             sync = data.get('sync') or {}
             self.sync_timeout.setValue(int(sync.get('timeout_ms') or 0))
             self.sync_tolerance.setValue(float(sync.get('tolerance_ms') or 0.0))
+            i = self.sync_policy.findData(sync.get('policy'))
+            if i < 0:                                  # a policy this TSA's catalog does not offer: said, kept
+                self.sync_policy.addItem(f'{sync["policy"]} (not offered by the recorder)', sync['policy'])
+                i = self.sync_policy.count() - 1
+            self.sync_policy.setCurrentIndex(i)
             for widget in widgets:
                 widget.blockSignals(False)
         self.setup_save.setText('Save recording setup *' if self.setup_dirty else 'Save recording setup')
@@ -711,6 +730,17 @@ class DataPanel(QWidget):
         self._refresh_modes()
         self._refresh_session()
 
+    def _fill_sync_policies(self) -> None:
+        """The recorder's pairing policies from the pinned recording vocabulary: its declared default first (stored
+        as no choice), then every other one it offers, in product words."""
+        from ...generator.data_collection import sync_policies
+        default, offered = sync_policies()
+        self.sync_policy.clear()
+        self.sync_policy.addItem(f'{SYNC_POLICY_WORDS.get(default["name"], default["name"])} (recorder default)',
+                                 None)
+        for name in sorted({row['name'] for row in offered} - {default['name']}):
+            self.sync_policy.addItem(SYNC_POLICY_WORDS.get(name, name), name.lower())
+
     def _setup_edited(self, *_args) -> None:
         self.setup_dirty = True
         self.setup_save.setText('Save recording setup *')
@@ -738,6 +768,8 @@ class DataPanel(QWidget):
             sync['timeout_ms'] = self.sync_timeout.value()
         if self.sync_tolerance.value():
             sync['tolerance_ms'] = self.sync_tolerance.value()
+        if self.sync_policy.currentData() is not None:
+            sync['policy'] = self.sync_policy.currentData()
 
         def mutate(doc):
             dc = doc.get('data_collection') or {}

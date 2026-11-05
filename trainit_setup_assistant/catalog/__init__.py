@@ -925,6 +925,10 @@ def parse_recording_vocabulary(data: bytes, where: str) -> dict:
         missing += [s for s in TSA_RECORDING_STREAMS if s not in doc['streams']]
         if not doc['sync']['policies'] or not isinstance(triggers['pick_attempt_phases'], dict):
             missing.append('a sync policy / the pick-attempt phases')
+        default = doc['sync']['defaults']['policy']
+        if not any(p['name'] == default['name'] and p['version'] == default['version']
+                   for p in doc['sync']['policies']):
+            missing.append('its default sync policy among the listed ones')
         re.compile(doc['identifier_pattern'])
     except (KeyError, TypeError, re.error) as exc:
         raise RuntimeError(f'{where} is malformed ({type(exc).__name__}: {exc})') from None

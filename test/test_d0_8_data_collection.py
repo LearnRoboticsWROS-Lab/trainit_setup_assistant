@@ -199,6 +199,9 @@ def test_the_full_example_is_valid_and_warns_about_nothing():
     (dict(data=edited(triggers__3__step=None)), 'a pick attempt names the grasp STEP'),
     (dict(data=edited(triggers__2__process_channel='glue')), "no process channel 'glue' is driven"),
     (dict(data=edited(sync__timeout_ms=0)), 'R-D0-07: data collection sync timeout_ms must be >= 1'),
+    (dict(data=edited(sync__policy='nearest_frame')),
+     "R-D0-07: data collection sync policy 'nearest_frame' is not one the recorder offers "
+     '(first_aligned_at_or_after_boundary, first_at_or_after_boundary)'),
     (dict(data=edited(sensors=[{'camera': 'bin_camera'}, {'camera': 'bin_camera'}])), 'records ONE camera'),
     (dict(data=edited(sensors__0__streams=['depth'])), 'depth is registered to colour'),
     (dict(data=edited(triggers=[])), 'has no trigger'),
@@ -449,3 +452,38 @@ def test_both_bringup_templates_include_the_recorder_only_with_data(tmp_path):
     compile(bootstrap, 'bringup.launch.py', 'exec')
     assert "if mode in ('mock',):" in bootstrap and 'recorder.launch.py' in bootstrap
     assert 'DeclareLaunchArgument("data", default_value="true"' in bootstrap
+
+
+# ---- the selectable sync policy (owner decision 2026-11-05 (b)) ---------------------------------------------
+
+def test_the_default_policy_is_the_one_the_vocabulary_declares_not_a_list_position():
+    from trainit_setup_assistant.generator.data_collection import sync_policies
+    default, offered = sync_policies()
+    assert default == {'name': 'FIRST_AT_OR_AFTER_BOUNDARY', 'version': 1}
+    assert offered[0]['name'] == 'FIRST_ALIGNED_AT_OR_AFTER_BOUNDARY'   # sorted first: never taken by position
+    doc = yaml.safe_load((CATALOG / DATA_RECORDING_FILE).read_text())
+    doc['sync']['defaults']['policy'] = {'name': 'NEAREST_WITHIN_WINDOW', 'version': 1}
+    with pytest.raises(RuntimeError, match='its default sync policy among the listed ones'):
+        parse_recording_vocabulary(yaml.safe_dump(doc).encode(), 'x')
+
+
+def test_a_chosen_policy_is_written_with_its_version_and_no_choice_writes_the_default():
+    unset = recording_documents(build(modes=['mock']))['mock']['sync']
+    assert unset == {'policy': 'FIRST_AT_OR_AFTER_BOUNDARY', 'policy_version': 1, 'timeout_ms': 800}
+    project = build(data=edited(sync__policy='first_aligned_at_or_after_boundary'), modes=['mock'])
+    assert data_collection_problems(project) == []
+    chosen = recording_documents(project)['mock']['sync']
+    assert chosen == {'policy': 'FIRST_ALIGNED_AT_OR_AFTER_BOUNDARY', 'policy_version': 1, 'timeout_ms': 800}
+
+
+def test_the_recorder_itself_accepts_the_aligned_policy(tmp_path):
+    probe = subprocess.run([sys.executable, '-c', 'import trainit_data_ros.recording_config'],
+                           capture_output=True)
+    if probe.returncode != 0:
+        import d08_env
+        d08_env.require('trainit_data_ros is not installed in this environment (source the workspace)')
+    project = build(data=edited(sync__policy='first_aligned_at_or_after_boundary'), modes=['mock', 'isaac'])
+    app = _generate(project, tmp_path)
+    for path in sorted((app / 'config').glob('data_collection.*.yaml')):
+        result = _recorder_parses(path)
+        assert result.returncode == 0, f'{path.name}: {result.stderr[-2000:]}'

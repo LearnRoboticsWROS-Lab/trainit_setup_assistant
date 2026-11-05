@@ -796,7 +796,7 @@ registries:
     version: 0.8.0
     recording_vocabulary:
       file: data_recording_vocabulary.yaml
-      sha256: ee85bcacaf31620f7ffebe82b15b600cea9f656b3b8266c8c05ba14189d33abf
+      sha256: c7eb055562fac3e9b954b5abfbedd3b075e504b1ada88bbe3bd6c9f0954580d9
       schema: trainit-recording-vocabulary/1.0
   trainit_hardware_layer:
     camera_profiles:

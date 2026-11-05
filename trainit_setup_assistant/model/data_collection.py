@@ -107,6 +107,9 @@ class DataTrigger(_Strict):
 class DataSync(_Strict):
     timeout_ms: Optional[int] = None
     tolerance_ms: Optional[float] = None
+    # how a trigger's frames are paired: a sync policy the recorder offers (its catalog name, lower case);
+    # absent = the recorder's declared default (owner decision 2026-11-05 (b): selectable, versioned)
+    policy: Optional[str] = None
 
 
 class SyntheticRecipe(_Strict):

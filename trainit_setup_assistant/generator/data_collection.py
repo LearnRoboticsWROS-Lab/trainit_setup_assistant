@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Tuple
 import yaml
 
 from ..model import CanonicalProject
-from ..model.data_collection import DataTrigger
+from ..model.data_collection import DataCollectionSpec, DataTrigger
 
 CODE_SHAPE = 'R-D0-01'          # the model's own shape refusals (model/data_collection.py)
 CODE_CAMERA = 'R-D0-02'
@@ -42,6 +42,27 @@ FILE_PATTERN = 'config/data_collection.{mode}.yaml'
 def _vocabulary() -> dict:
     from ..catalog import recording_vocabulary
     return recording_vocabulary()
+
+
+def sync_policies(vocab: Optional[dict] = None) -> Tuple[dict, List[dict]]:
+    """(the recorder's default sync policy, every policy it offers) from the pinned recording vocabulary; each
+    ``{'name': 'FIRST_AT_OR_AFTER_BOUNDARY', 'version': 1}``. The default is the one the vocabulary DECLARES,
+    never a list position (a new row sorted first must not change what existing projects record)."""
+    vocab = vocab or _vocabulary()
+    return vocab['sync']['defaults']['policy'], list(vocab['sync']['policies'])
+
+
+def chosen_sync_policy(dc: DataCollectionSpec, vocab: Optional[dict] = None) -> dict:
+    """The policy a recording document names: the project's choice (its newest offered version), else the
+    recorder's declared default."""
+    default, offered = sync_policies(vocab)
+    wanted = dc.sync.policy if dc.sync is not None else None
+    if wanted is None:
+        return default
+    rows = [row for row in offered if row['name'].lower() == wanted]
+    if not rows:
+        raise ValueError(f'sync policy {wanted!r} is not offered by the recorder')
+    return max(rows, key=lambda row: row['version'])
 
 
 def _profiles() -> Dict[str, dict]:
@@ -228,6 +249,11 @@ def data_collection_problems(project: CanonicalProject) -> List[str]:
             problems.append(f'{CODE_SYNC}: data collection sync timeout_ms must be >= 1')
         if dc.sync.tolerance_ms is not None and not dc.sync.tolerance_ms > 0:
             problems.append(f'{CODE_SYNC}: data collection sync tolerance_ms must be > 0')
+        if dc.sync.policy is not None:
+            offered = sorted({row['name'].lower() for row in sync_policies()[1]})
+            if dc.sync.policy not in offered:
+                problems.append(f'{CODE_SYNC}: data collection sync policy {dc.sync.policy!r} is not one the '
+                                f'recorder offers ({", ".join(offered)})')
 
     if dc.synthetic is not None:
         recipe = dc.synthetic
@@ -285,7 +311,7 @@ def recording_documents(project: CanonicalProject) -> Dict[str, dict]:
     camera = project.perception.camera
     sensor = dc.sensors[0]
     namespace, overrides = _namespace_and_overrides(camera)
-    policy = vocab['sync']['policies'][0]
+    policy = chosen_sync_policy(dc, vocab)
     triggers = []
     for t in dc.triggers:
         doc = {'id': t.id, 'kind': t.kind.upper()}

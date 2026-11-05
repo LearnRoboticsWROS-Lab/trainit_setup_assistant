@@ -959,3 +959,26 @@ def test_a_failing_answer_is_said_not_swallowed(qapp, monkeypatch, capsys):
     assert panel.jobs.errors and 'deleted' in panel.jobs.errors[0]
     assert 'Internal error in the Data panel' in panel.message.text() and 'Refresh' in panel.message.text()
     assert 'RuntimeError' in capsys.readouterr().err                # the traceback is in the terminal
+
+
+def test_frame_pairing_offers_the_recorders_policies_and_saves_a_choice(qapp, monkeypatch):
+    panel, ctrl, *_ = make_panel(qapp, monkeypatch)
+    panel.advanced.setChecked(True)
+    panel.refresh()
+    items = [(panel.sync_policy.itemText(i), panel.sync_policy.itemData(i)) for i in range(panel.sync_policy.count())]
+    assert items == [('the first frame of each stream after the trigger (recorder default)', None),
+                     ('the first colour + depth pair taken together', 'first_aligned_at_or_after_boundary')]
+    assert panel.sync_policy.currentIndex() == 0 and not panel.sync_policy.isHidden()
+    assert '1 ms then demands the same Isaac render tick' in panel.sync_policy.toolTip()
+    panel.sync_policy.setCurrentIndex(1)
+    panel.sync_policy.activated.emit(1)
+    assert panel.setup_dirty
+    panel.save_setup()
+    assert ctrl.project.data_collection.sync.policy == 'first_aligned_at_or_after_boundary'
+    panel.refresh()
+    assert panel.sync_policy.currentData() == 'first_aligned_at_or_after_boundary'
+    panel.sync_policy.setCurrentIndex(0)                       # back to the default: no choice stored
+    panel.save_setup()
+    assert ctrl.project.data_collection.sync.policy is None
+    panel.advanced.setChecked(False)
+    assert panel.sync_policy.isHidden()                        # Simple shows no pairing knob

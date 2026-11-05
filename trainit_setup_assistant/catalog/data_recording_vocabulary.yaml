@@ -23,6 +23,9 @@ streams:
     registered_to: color
 sync:
   defaults:
+    policy:
+      name: FIRST_AT_OR_AFTER_BOUNDARY
+      version: 1
     timeout_ms: 1000
     tolerance_ms: half the frame period of the slowest stream (hardware profile)
   fields:
@@ -35,6 +38,8 @@ sync:
       required: false
       type: float
   policies:
+  - name: FIRST_ALIGNED_AT_OR_AFTER_BOUNDARY
+    version: 1
   - name: FIRST_AT_OR_AFTER_BOUNDARY
     version: 1
 trainit_data_ros: 0.8.0

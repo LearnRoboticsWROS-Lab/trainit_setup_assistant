@@ -1918,6 +1918,9 @@ class DataPanel(QWidget):
         if dataset is None or row < 0:
             return
         n = self.versions[row]
+        options = self._export_options(dataset, n)
+        if options is None:
+            return
         destination = QFileDialog.getExistingDirectory(self, f'Export {dataset} v{n} as YOLO detection into '
                                                              '(an empty folder)')
         if not destination:
@@ -1934,7 +1937,53 @@ class DataPanel(QWidget):
             _say(self.dataset_result, f'Exported {total} images (' + ' / '.join(
                 f'{k} {s["images"]}' for k, s in splits.items()) + f') to {e["destination"]}. '
                 'The canonical data was not changed.', OK)
-        self.cli(['export', 'yolo', dataset, str(n), destination], done, timeout_s=6 * 3600.0)
+        self.cli(['export', 'yolo', dataset, str(n), destination] + options, done, timeout_s=6 * 3600.0)
+
+    def _export_options(self, dataset: str, n: int) -> Optional[List[str]]:
+        """The export's label-set arguments, or None (nothing to export / cancelled). Box label sets of ONE origin
+        export as they are; of several origins (synthetic ground truth, imported, human) the user picks which, or
+        allows mixing them -- trainit_data refuses an unasked mix and records an allowed one."""
+        detail = self._version_detail.get(n)
+        if detail is None:                          # not read yet: trainit_data still judges the export
+            return []
+        boxes = [ls for ls in detail['content'].get('label_sets') or [] if ls.get('kind') == 'BBOX_2D']
+        if not boxes:
+            _say(self.dataset_result, f'{dataset} v{n} has no box labels to export. Label it first: generated '
+                 'sessions get theirs from the synthetic ground truth when a version is created, recorded ones '
+                 'with Import YOLO labels…; then create a new version.', WARN)
+            return None
+        if len({ls.get('source') for ls in boxes}) < 2:
+            return []
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f'Labels to export from {dataset} v{n}')
+        form = QFormLayout(dialog)
+        form.addRow(_hint('This version holds box labels of different origins. Export one origin, or allow '
+                          'mixing them (the export records it).'))
+        boxes_checked = {}
+        for ls in boxes:
+            box = QCheckBox(f'{ls.get("source", "?").lower().replace("_", " ")}: {ls.get("entries_selected", "?")} '
+                            f'image(s) ({ls["label_set_id"]})')
+            box.setChecked(True)
+            boxes_checked[ls['label_set_id']] = (box, ls.get('source'))
+            form.addRow(box)
+        mixed = QCheckBox('Allow labels of different origins in one export')
+        form.addRow(mixed)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+        chosen = [(i, source) for i, (box, source) in boxes_checked.items() if box.isChecked()]
+        if not chosen:
+            _say(self.dataset_result, 'No labels chosen: nothing exported.', WARN)
+            return None
+        if len({source for _, source in chosen}) > 1 and not mixed.isChecked():
+            _say(self.dataset_result, 'Labels of different origins were chosen without allowing the mix: choose one '
+                 'origin, or allow mixing them.', WARN)
+            return None
+        args = [a for i, _ in chosen for a in ('--label-set', i)]
+        return args + (['--allow-mixed-provenance'] if mixed.isChecked() else [])
 
     # ---- refresh / timer -----------------------------------------------------------------------------------
     def refresh(self) -> None:

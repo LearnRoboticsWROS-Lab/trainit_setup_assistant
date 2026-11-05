@@ -322,7 +322,8 @@ VERSION = {'version': 1, 'dataset_id': 'bin_parts', 'content_hash': 'sha256:' + 
                                      'filter': {'include_outcomes': ['COMPLETE']}},
                        'sessions': [{'session_id': s['session_id'], 'source': {'backend': s['backend']}}
                                     for s in SESSIONS[:2]],
-                       'label_sets': [{'label_set_id': 'ls-1'}],
+                       'label_sets': [{'label_set_id': 'ls-1', 'kind': 'BBOX_2D', 'source': 'SYNTHETIC_GROUND_TRUTH',
+                                       'entries_selected': 19}],
                        'split': {'group_by': 'randomization_run', 'counts': {
                            'train': {'groups': 3, 'captures': 15}, 'val': {'groups': 1, 'captures': 2},
                            'test': {'groups': 1, 'captures': 2}}}}}
@@ -850,3 +851,62 @@ def test_inspect_lists_the_captures_that_are_not_complete_and_why(qapp, monkeypa
     assert ['inspect', sid, '--captures', '--limit', str(P.INSPECT_CAPTURES_READ)] in cli.calls
     assert 'Not complete, and why:\n  #1 PARTIAL (at_w2): streams taken 50 ms apart (allowed 17 ms)' in shown[0]
     assert '#2' not in shown[0] and 'checked)' not in shown[0]
+
+
+# ---- owner flow 4 preparation: the label sets an export takes ------------------------------------------------
+
+def _export_with(qapp, monkeypatch, label_sets, dialog=None):
+    """Export v1 whose label sets are ``label_sets``; ``dialog(widget)`` sets the label dialog before OK."""
+    from trainit_setup_assistant.gui.composer import data_panel as P
+    panel, cli = _datasets(qapp, monkeypatch, versions=[1])
+    _wait(panel)
+    panel._version_detail[1] = dict(VERSION, content=dict(VERSION['content'], label_sets=label_sets))
+    asked = []
+    monkeypatch.setattr(P.QFileDialog, 'getExistingDirectory', lambda *a, **k: asked.append(1) or '/tmp/out')
+
+    def exec_(self):
+        if dialog is not None:
+            dialog(self)
+        return P.QDialog.Accepted
+    monkeypatch.setattr(P.QDialog, 'exec_', exec_)
+    panel.export_yolo()
+    _wait(panel)
+    return panel, [c for c in cli.calls if c[:2] == ['export', 'yolo']], asked
+
+
+SYNTH = {'label_set_id': 'ls-s', 'kind': 'BBOX_2D', 'source': 'SYNTHETIC_GROUND_TRUTH', 'entries_selected': 48}
+MASKS = {'label_set_id': 'ls-m', 'kind': 'INSTANCE_MASK', 'source': 'SYNTHETIC_GROUND_TRUTH', 'entries_selected': 48}
+IMPORTED = {'label_set_id': 'ls-i', 'kind': 'BBOX_2D', 'source': 'IMPORTED', 'entries_selected': 4}
+
+
+def test_a_version_without_box_labels_is_said_before_any_folder_is_asked(qapp, monkeypatch):
+    """Owner flow 3: d08_live v2 has recorded sessions only; trainit_data would refuse (EXPORT_REFUSED)."""
+    panel, calls, asked = _export_with(qapp, monkeypatch, [MASKS])
+    assert not calls and not asked
+    assert panel.dataset_result.text().startswith('bin_parts v1 has no box labels to export.')
+
+
+def test_box_labels_of_one_origin_export_as_they_are(qapp, monkeypatch):
+    panel, calls, asked = _export_with(qapp, monkeypatch, [SYNTH, MASKS])
+    assert calls == [['export', 'yolo', 'bin_parts', '1', '/tmp/out']]
+
+
+def _tick(text, value):
+    from trainit_setup_assistant.gui.composer import data_panel as P
+
+    def set_(dialog):
+        for box in dialog.findChildren(P.QCheckBox):
+            if box.text().startswith(text):
+                box.setChecked(value)
+    return set_
+
+
+def test_mixed_origins_need_a_choice_or_an_explicit_mix(qapp, monkeypatch):
+    """d07_mixed_real_synthetic v1: synthetic ground truth + imported boxes; trainit_data refuses an unasked mix."""
+    panel, calls, asked = _export_with(qapp, monkeypatch, [SYNTH, MASKS, IMPORTED])
+    assert not calls and not asked and 'without allowing the mix' in panel.dataset_result.text()
+    panel, calls, _ = _export_with(qapp, monkeypatch, [SYNTH, MASKS, IMPORTED], _tick('imported', False))
+    assert calls == [['export', 'yolo', 'bin_parts', '1', '/tmp/out', '--label-set', 'ls-s']]
+    panel, calls, _ = _export_with(qapp, monkeypatch, [SYNTH, MASKS, IMPORTED], _tick('Allow labels', True))
+    assert calls == [['export', 'yolo', 'bin_parts', '1', '/tmp/out', '--label-set', 'ls-s', '--label-set', 'ls-i',
+                      '--allow-mixed-provenance']]

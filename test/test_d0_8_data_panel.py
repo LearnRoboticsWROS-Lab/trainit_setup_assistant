@@ -910,3 +910,52 @@ def test_mixed_origins_need_a_choice_or_an_explicit_mix(qapp, monkeypatch):
     panel, calls, _ = _export_with(qapp, monkeypatch, [SYNTH, MASKS, IMPORTED], _tick('Allow labels', True))
     assert calls == [['export', 'yolo', 'bin_parts', '1', '/tmp/out', '--label-set', 'ls-s', '--label-set', 'ls-i',
                       '--allow-mixed-provenance']]
+
+
+def test_a_new_dataset_appears_and_is_chosen_without_a_refresh(qapp, monkeypatch):
+    """Owner acceptance 2026-11-05 (flows 3 and 5): after New dataset… the list kept the old datasets until
+    Refresh. The answer callback read the dialog's Id field after Qt had deleted the closed dialog; the error was
+    swallowed. Driven here with the REAL dialog, closed by a real OK click (no ``exec_`` stand-in)."""
+    from python_qt_binding.QtCore import QTimer
+    from trainit_setup_assistant.gui.composer import data_panel as P
+    cli = datasets_cli()
+    created = []
+    cli.answers['dataset create'] = (True, lambda a: created.append(a[2]) or {'dataset': {'dataset_id': a[2]}},
+                                     None)
+    cli.answers['dataset list'] = (True, lambda a: {'datasets': [
+        {'dataset_id': d, 'name': d, 'classification': 'INTERNAL', 'versions': []}
+        for d in ['bin_parts'] + created]}, None)
+    panel, ctrl, host, _ = make_panel(qapp, monkeypatch, cli=cli)
+    panel.show()
+    panel.tabs.setCurrentIndex(2)
+    panel.refresh()
+    _wait(panel)
+    _wait(panel)
+
+    def fill():
+        dialog = qapp.activeModalWidget()
+        ident, name = dialog.findChildren(P.QLineEdit)[:2]
+        ident.setText('d08_synthetic')
+        name.setText('D0.8 synthetic acceptance')
+        dialog.findChild(P.QDialogButtonBox).button(P.QDialogButtonBox.Ok).click()
+    QTimer.singleShot(0, fill)
+    panel.create_dataset()
+    _wait(panel)
+    _wait(panel)
+    assert panel.jobs.errors == []
+    assert ['dataset', 'create', 'd08_synthetic', '--name', 'D0.8 synthetic acceptance',
+            '--classification', 'INTERNAL'] in cli.calls
+    assert panel.dataset_combo.currentData() == 'd08_synthetic'
+    assert panel.dataset_result.text() == 'Dataset d08_synthetic created.'
+
+
+def test_a_failing_answer_is_said_not_swallowed(qapp, monkeypatch, capsys):
+    panel, ctrl, host, cli = make_panel(qapp, monkeypatch)
+
+    def broken(result):
+        raise RuntimeError('wrapped C/C++ object has been deleted')
+    panel.cli(['dataset', 'list'], broken)
+    _wait(panel)
+    assert panel.jobs.errors and 'deleted' in panel.jobs.errors[0]
+    assert 'Internal error in the Data panel' in panel.message.text() and 'Refresh' in panel.message.text()
+    assert 'RuntimeError' in capsys.readouterr().err                # the traceback is in the terminal

@@ -25,6 +25,7 @@ import shutil
 import tempfile
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -155,12 +156,15 @@ def _pixmap(view: QLabel, image: Optional[QImage]) -> None:
 
 class Jobs:
     """Background work for the panel: ``run(fn, done)`` runs ``fn()`` on a worker thread and calls
-    ``done(result)`` in the GUI thread (a timer drains the queue). A failing ``fn`` hands its exception."""
+    ``done(result)`` in the GUI thread (a timer drains the queue). A failing ``fn`` hands its exception. A failing
+    ``done`` is never silent: its traceback goes to stderr and ``on_error`` tells the user (a Qt slot must not raise,
+    so the exception cannot propagate)."""
 
-    def __init__(self, owner: QWidget):
+    def __init__(self, owner: QWidget, on_error: Optional[Callable[[str], None]] = None):
         self._queue: 'queue.Queue' = queue.Queue()
         self.busy = 0
         self.errors: List[str] = []
+        self._on_error = on_error
         self.timer = QTimer(owner)
         self.timer.setInterval(100)
         self.timer.timeout.connect(self.drain)
@@ -188,6 +192,12 @@ class Jobs:
                 done(result)
             except Exception as exc:  # noqa: BLE001 - a Qt slot must never raise (PyQt aborts)
                 self.errors.append(repr(exc))
+                traceback.print_exc()
+                if self._on_error is not None:
+                    try:
+                        self._on_error(repr(exc))
+                    except Exception:  # noqa: BLE001 - reporting must not raise either
+                        traceback.print_exc()
 
     def wait(self, timeout_s: float = 30.0) -> None:
         """Tests: until every job has finished and been handed back."""
@@ -360,7 +370,7 @@ class DataPanel(QWidget):
         self.ctrl = ctrl
         self._composer = composer
         self._host = host                        # the wizard: launcher, launcher_settings, camera_capture
-        self.jobs = Jobs(self)
+        self.jobs = Jobs(self, on_error=self._job_failed)
         self._link = None
         self._link_ns = None
         self._link_error = ''
@@ -437,6 +447,11 @@ class DataPanel(QWidget):
         _say(self.message, done, OK)
         self.refresh()
         return True
+
+    def _job_failed(self, error: str) -> None:
+        if hasattr(self, 'message'):
+            _say(self.message, f'Internal error in the Data panel: {error}. The details are in the terminal; '
+                 'Refresh re-reads the data store.', ERROR)
 
     def cli(self, args: List[str], done: Callable[[D.CliResult], None], root: Optional[str] = None,
             timeout_s: float = 600.0) -> None:
@@ -1775,13 +1790,15 @@ class DataPanel(QWidget):
         form.addRow(buttons)
         if dialog.exec_() != QDialog.Accepted:
             return
-        args = ['dataset', 'create', did.text().strip(), '--name', name.text().strip() or did.text().strip(),
+        # read the dialog NOW: Qt deletes its widgets once it is closed, before the answer arrives
+        dataset_id = did.text().strip()
+        args = ['dataset', 'create', dataset_id, '--name', name.text().strip() or dataset_id,
                 '--classification', rights.currentData()]
 
         def done(result: D.CliResult) -> None:
-            _say(self.dataset_result, f'Dataset {did.text().strip()} created.' if result.ok else
+            _say(self.dataset_result, f'Dataset {dataset_id} created.' if result.ok else
                  f'Not created: {result.message()}', OK if result.ok else ERROR)
-            self._wanted_dataset = did.text().strip()
+            self._wanted_dataset = dataset_id
             self.cli(['dataset', 'list'], self._datasets_listed)
         self.cli(args, done)
 

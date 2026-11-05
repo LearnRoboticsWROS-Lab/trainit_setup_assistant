@@ -416,8 +416,9 @@ def test_create_version_labels_generated_sessions_then_builds_v1_complete_only(q
                       'ses-20261103T091000Z-00000002']
     version = next(c for c in cli.calls if c[:2] == ['version', 'create'])
     assert version == ['version', 'create', 'bin_parts', '--group-by', 'randomization_run',
+                       '--include-outcome', 'COMPLETE',
                        '--session', 'ses-20261103T091000Z-00000002', '--session', 'ses-20261103T090000Z-00000001',
-                       '--include-outcome', 'COMPLETE', '--label-set', 'ls-synth']
+                       '--label-set', 'ls-synth']
     assert 'Version v1 created: 19 captures included, 1 excluded.' in panel.dataset_result.text()
 
 
@@ -431,7 +432,10 @@ def test_a_dataset_with_versions_gets_a_derived_version(qapp, monkeypatch):
     panel.create_version()
     _wait(panel)
     version = next(c for c in cli.calls if c[:2] == ['version', 'create'])
-    assert version[3:7] == ['--op', 'ADD_SESSIONS', '--from', '1']
+    # ADD_SESSIONS inherits the parent's outcome filter: trainit_data refuses --include-outcome with it
+    # (DERIVATION_INVALID, found while preparing owner flow 3)
+    assert version == ['version', 'create', 'bin_parts', '--op', 'ADD_SESSIONS', '--from', '1',
+                       '--session', 'ses-20261103T090000Z-00000001']
 
 
 def test_export_names_the_split_and_says_the_canonical_data_is_unchanged(qapp, monkeypatch):

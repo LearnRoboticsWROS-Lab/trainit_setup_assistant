@@ -1794,11 +1794,14 @@ class DataPanel(QWidget):
         dialog.setWindowTitle(f'New version of {dataset}')
         form = QFormLayout(dialog)
         outcomes = {}
-        for o, default in (('COMPLETE', True), ('PARTIAL', False), ('FAILED', False)):
-            box = QCheckBox(o.lower())
-            box.setChecked(default)
-            outcomes[o] = box
-            form.addRow('Include captures' if o == 'COMPLETE' else '', box)
+        if self.versions:                           # a derived version keeps its parent's outcome filter
+            form.addRow('Include captures', _hint(f'the same outcomes as v{self.versions[-1]}'))
+        else:
+            for o, default in (('COMPLETE', True), ('PARTIAL', False), ('FAILED', False)):
+                box = QCheckBox(o.lower())
+                box.setChecked(default)
+                outcomes[o] = box
+                form.addRow('Include captures' if o == 'COMPLETE' else '', box)
         synthetic = [s for s in selected if s.get('synthetic')]
         derive = QCheckBox('Label generated sessions from their synthetic ground truth (boxes)')
         derive.setChecked(bool(synthetic))
@@ -1858,10 +1861,10 @@ class DataPanel(QWidget):
             args += ['--op', 'ADD_SESSIONS', '--from', str(self.versions[-1])]
         else:
             args += ['--group-by', plan['group_by']]
+            for o in plan['outcomes']:
+                args += ['--include-outcome', o]
         for sid in plan['sessions']:
             args += ['--session', sid]
-        for o in plan['outcomes']:
-            args += ['--include-outcome', o]
         for ls in plan['label_sets']:
             args += ['--label-set', ls]
 

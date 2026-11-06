@@ -1173,7 +1173,7 @@ class DataPanel(QWidget):
         settings = self.settings()
         usable = [(pr, D.provider_unavailable(pr, modes, settings)) for pr in self.providers]
         if not self.providers:
-            text = ('No synthetic data generator is installed (trainit_data 0.8.0 installs the reference one).' +
+            text = ('No synthetic data generator is installed (trainit_data >= 0.8.0 installs the reference one).' +
                     (' ' + '; '.join(self.provider_problems) if self.advanced.isChecked() and self.provider_problems
                      else ''))
             _say(self.provider_state, text, WARN)

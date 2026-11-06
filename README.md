@@ -27,7 +27,7 @@ own robot.
 
 ## Install (TrainIt Community, from source)
 
-TrainIt Community is five public repositories released together: their `main` branches always
+TrainIt Community is six public repositories released together: their `main` branches always
 belong together. [`trainit_community.repos`](trainit_community.repos) lists them for `vcs import`.
 Four steps take you from a bare Ubuntu 22.04 to a running sample cell, and a fifth to your own
 robot. Their commands are written to be pasted as they are, except `~/robot_ws`, which stands for
@@ -76,8 +76,8 @@ what TrainIt is verified on. From that repository, `sudo apt install ros-dev-too
 
 ### 2. Get TrainIt and build it
 
-TrainIt goes into a colcon workspace in one of two layouts, A or B below. In both, the five
-repositories go together: import all five from the manifest and build them together, never one
+TrainIt goes into a colcon workspace in one of two layouts, A or B below. In both, the six
+repositories go together: import all six from the manifest and build them together, never one
 on its own (TMR needs `trainit_interfaces`, and a bundle with an end-effector contract needs the
 hardware layer).
 
@@ -88,6 +88,7 @@ hardware layer).
 | `trainit_hardware_layer` | the end-effector adapters | a bundle with an end-effector contract |
 | `trainit_setup_assistant` | this package: the wizard and the headless generator | generating a bundle |
 | `trainit_perception` | the detectors | vision and bin-picking applications |
+| `trainit_data` | the Data Foundation: canonical recording, datasets, versions and export (`trainit_data` + `trainit_data_ros`) | recording camera data, synthetic data and datasets (the Data section) |
 
 Before either layout, bring the system up to date, `sudo apt update && sudo apt upgrade`: that is
 the state this install was verified in. Then expect two things. `rosdep install` runs apt through
@@ -162,7 +163,7 @@ if ! command -v ros2 >/dev/null; then
 else
   echo 'OK      ros2'
   for p in trainit_interfaces trainit_motion_runtime trainit_hardware_layer \
-           trainit_setup_assistant trainit_perception; do
+           trainit_setup_assistant trainit_perception trainit_data trainit_data_ros; do
     if ros2 pkg prefix $p >/dev/null 2>&1; then echo "OK      $p"
     else echo "MISSING $p: source your workspace as step 2 says; if it is sourced, its build failed"; fi
   done
@@ -180,7 +181,7 @@ fi
 ```
 
 In a terminal with nothing sourced it prints only the `ros2` line. Otherwise every line should say
-`OK`: the five TrainIt packages, the generator, the MoveIt 2 and BehaviorTree.CPP 4 packages TMR
+`OK`: the seven TrainIt packages, the generator, the MoveIt 2 and BehaviorTree.CPP 4 packages TMR
 and TSA run on, and TSA's Python libraries. What a bundle needs besides is not checked here:
 ros2_control's controller manager and controllers, MoveIt's simple controller manager, MoveIt
 Servo when a move streams. The bundle's first-run lines install them
@@ -283,8 +284,8 @@ application is what you iterate on and ship.
 ## Prerequisites (in your `src/`)
 
 This is a cell the Adaptation Sprint built, laid out as Install's layout B: one workspace,
-`~/robot_ws` here, whose `src/` holds the hand-made twin and the five TrainIt repositories. In
-layout A the five `trainit_*` entries live in `~/trainit_ws/src` instead, and `~/robot_ws`, built
+`~/robot_ws` here, whose `src/` holds the hand-made twin and the six TrainIt repositories. In
+layout A the six `trainit_*` entries live in `~/trainit_ws/src` instead, and `~/robot_ws`, built
 with `~/trainit_ws` sourced, overlays it. The public sample needs none of the three hand-made
 entries, and a robot of your own needs at most a base config, which can be the MoveIt Setup
 Assistant's ([Install, step 5](#5-your-own-robot)).
@@ -298,10 +299,11 @@ Assistant's ([Install, step 5](#5-your-own-robot)).
 ├── trainit_motion_runtime/    # the engine (BT runtime + scene loader)   — vcs import (Install)
 ├── trainit_hardware_layer/    # the end-effector adapters                — vcs import (Install)
 ├── trainit_perception/        # the detectors                            — vcs import (Install)
+├── trainit_data/              # the Data Foundation (recording, datasets) — vcs import (Install)
 └── trainit_setup_assistant/   # this package                             — vcs import (Install)
 ```
 
-The five TrainIt repositories **ship together**: build their `main` branches together
+The six TrainIt repositories **ship together**: build their `main` branches together
 (Install, above), never one on its own -- TMR needs `trainit_interfaces`, and a bundle with an
 end-effector contract needs the hardware layer. To rebuild the workspace after adding a package to
 its `src/` (in layout A, `source ~/trainit_ws/install/setup.bash` first):

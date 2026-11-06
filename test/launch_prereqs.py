@@ -39,8 +39,9 @@ PACKAGE_NAME = re.compile(r'^[a-z][a-z0-9_]*$')
 RUN_DEPENDS = ('depend', 'exec_depend')
 # A Python module and the ROS package that installs it, where the two names differ.
 MODULE_PACKAGE = {'tf2_ros': 'tf2_ros_py'}
-# TrainIt Community: the repositories this manifest lists, one package each (README.md
-# "Install"). Any other trainit_* package is Pro or experimental.
+# TrainIt Community: the repositories this manifest lists (README.md "Install"); a repository's packages are
+# named after it (``trainit_data`` holds ``trainit_data`` + ``trainit_data_ros``). Any other trainit_* package is Pro
+# or experimental.
 COMMUNITY_REPOS = Path(__file__).resolve().parents[1] / 'trainit_community.repos'
 
 
@@ -107,9 +108,12 @@ def reason(lacks: list) -> str:
     packages = sorted({MODULE_PACKAGE.get(n, n) if kind == 'imported' else n
                        for n, kind in lacks})
     apt = [p for p in packages if not p.startswith('trainit_')]
-    community = set(yaml.safe_load(COMMUNITY_REPOS.read_text())['repositories'])
-    built = [p for p in packages if p.startswith('trainit_') and p in community]
-    beyond = [p for p in packages if p.startswith('trainit_') and p not in community]
+    repos = set(yaml.safe_load(COMMUNITY_REPOS.read_text())['repositories'])
+
+    def in_community(package):
+        return any(package == r or package.startswith(r + '_') for r in repos)
+    built = [p for p in packages if p.startswith('trainit_') and in_community(p)]
+    beyond = [p for p in packages if p.startswith('trainit_') and not in_community(p)]
     fix = []
     if apt:
         fix.append('sudo apt install ' + ' '.join(f'ros-{distro}-{p.replace("_", "-")}'

@@ -20,3 +20,7 @@ repositories:
     type: git
     url: https://github.com/LearnRoboticsWROS-Lab/trainit_perception.git
     version: main
+  trainit_data:
+    type: git
+    url: https://github.com/LearnRoboticsWROS-Lab/trainit_data.git
+    version: main

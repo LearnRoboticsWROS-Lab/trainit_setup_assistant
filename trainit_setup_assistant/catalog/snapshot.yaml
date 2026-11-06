@@ -8,7 +8,7 @@ derived_with:
   trainit_motion_runtime: 2.7.0
   trainit_perception: 0.5.0
   trainit_policy_runtime: 0.1.0
-  trainit_data_ros: 0.8.0
+  trainit_data_ros: 0.9.0
 providers:
 - id: moveit.ompl
   family: motion_planning
@@ -793,10 +793,10 @@ registries:
     - 0.0001
     - 1.0
   trainit_data_ros:
-    version: 0.8.0
+    version: 0.9.0
     recording_vocabulary:
       file: data_recording_vocabulary.yaml
-      sha256: c7eb055562fac3e9b954b5abfbedd3b075e504b1ada88bbe3bd6c9f0954580d9
+      sha256: 409f6b6318f27150046c097bb0b9dece73c5c1b0da41bff101e9c8dea1377e8c
       schema: trainit-recording-vocabulary/1.0
   trainit_hardware_layer:
     camera_profiles:

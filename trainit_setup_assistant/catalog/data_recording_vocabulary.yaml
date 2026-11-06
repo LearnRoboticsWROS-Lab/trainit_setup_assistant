@@ -42,7 +42,7 @@ sync:
     version: 1
   - name: FIRST_AT_OR_AFTER_BOUNDARY
     version: 1
-trainit_data_ros: 0.8.0
+trainit_data_ros: 0.9.0
 triggers:
   fields:
     APPLICATION_STATE:

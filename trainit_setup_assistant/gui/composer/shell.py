@@ -16,6 +16,7 @@ from python_qt_binding.QtWidgets import (QHBoxLayout, QListWidget, QPushButton, 
                                          QWidget)
 
 from ...composer.ops import Composer
+from .data_panel import DataPanel
 from .diagnostics_panel import DiagnosticsPanel
 from .eef_panel import EndEffectorPanel
 from .live_panel import LivePanel
@@ -34,7 +35,7 @@ def _no_live():
 class ComposerWidget(QWidget):
     def __init__(self, ctrl, program_panel: QWidget, joint_states_age=lambda: None,
                  on_edit: Callable[[], None] = lambda: None, live: Callable[[], object] = _no_live,
-                 preview_factory=None, parent=None):
+                 preview_factory=None, host: Callable[[], object] = lambda: None, parent=None):
         super().__init__(parent)
         self.ctrl = ctrl
         self._composer: Optional[Composer] = None
@@ -70,6 +71,9 @@ class ComposerWidget(QWidget):
         self.add_section('End effector', self.end_effector)
         self.tasks = TasksPanel(self.composer)
         self.add_section('Tasks', self.tasks)
+        # TrainIt D0.8: the Data section (Capture, Synthetic, Datasets): TSA configures, launches, observes
+        self.data = DataPanel(ctrl, self.composer, host=host)
+        self.add_section('Data', self.data)
         self.yaml = YamlPanel(ctrl, reloaded=self._file_reloaded)
         self.add_section('YAML', self.yaml)
         self.add_section('Program', program_panel)
@@ -117,6 +121,9 @@ class ComposerWidget(QWidget):
             self.profiles.select(loc.name)
         elif loc.kind == 'end_effector':
             self.select('End effector')
+        elif loc.kind == 'data':
+            self.select('Data')
+            self.data.tabs.setCurrentIndex(0)
         else:
             self.select('Overview')
 

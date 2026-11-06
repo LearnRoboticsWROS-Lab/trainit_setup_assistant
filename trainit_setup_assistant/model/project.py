@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, root_validator
 
 from typing import Optional
 
+from .data_collection import DataCollectionSpec
 from .deployment import DeploymentSpec
 from .perception import PerceptionSpec
 from .robot import RobotSpec
@@ -30,6 +31,11 @@ SCHEMA_VERSION_EEF_CONTRACT = 3
 # number (and by the application type) instead of dropping them. A task program may carry an
 # end-effector contract: the number stays 4.
 SCHEMA_VERSION_TASK_PROGRAM = 4
+# 5: written IF AND ONLY IF the project carries DATA COLLECTION content -- a ``data_collection`` section or a
+# camera ``id`` / ``profile`` (TrainIt D0.8). A task program with it is 5 too (a TSA that reads 4 refuses
+# the file instead of dropping the section). A 5 without that content is refused: a TSA older than D0.8
+# keeps the number it read and drops a section it does not know, so a bare 5 says the file lost one.
+SCHEMA_VERSION_DATA_COLLECTION = 5
 
 
 class BundleSpec(BaseModel):
@@ -77,6 +83,13 @@ class CanonicalProject(BaseModel):
     perception: Optional[PerceptionSpec] = None
     application: ApplicationSpec = Field(default_factory=ApplicationSpec)
     deployment: DeploymentSpec = Field(default_factory=DeploymentSpec)
+    # TrainIt D0.8: what this cell collects data with (a camera, triggers, a synthetic recipe); TSA
+    # authors and validates it, the recorder and trainit_data run it (ADR-0029 Decision 7).
+    data_collection: Optional[DataCollectionSpec] = None
+
+    def has_data_collection(self) -> bool:
+        """The schema-5 content: a data_collection section, or a camera id / profile."""
+        return has_data_collection_content(self.data_collection, self.perception)
 
     # skip_on_failure: required by pydantic 2.x for a post root_validator, accepted by 1.x.
     @root_validator(skip_on_failure=True)
@@ -85,6 +98,23 @@ class CanonicalProject(BaseModel):
         M3.3, R-M3-01: the file must say 4, a 4 without one is refused); otherwise 3 if and only if
         an end-effector contract exists (ADR-0022 D6): a contract loads as 3 whatever number its
         file had; a 3 without one is refused (R19)."""
+        has_data = has_data_collection_content(values.get('data_collection'), values.get('perception'))
+        if has_data:
+            # D0.8: 5 whatever the application. A file says 5, or the number its application had before the
+            # section was added by hand (a task program 4, a template application 2 or 3); it loads as 5.
+            program = getattr(values.get('application'), 'type', None) is AppType.TASK_PROGRAM
+            allowed = ((SCHEMA_VERSION_TASK_PROGRAM,) if program
+                       else (SCHEMA_VERSION, SCHEMA_VERSION_EEF_CONTRACT)) + (SCHEMA_VERSION_DATA_COLLECTION,)
+            if values.get('schema_version') not in allowed:
+                raise ValueError(f"R-D0-01: schema_version {values.get('schema_version')!r}: a project with "
+                                 f'data collection is schema_version {SCHEMA_VERSION_DATA_COLLECTION}')
+            values['schema_version'] = SCHEMA_VERSION_DATA_COLLECTION
+            return values
+        if values.get('schema_version') == SCHEMA_VERSION_DATA_COLLECTION:
+            raise ValueError('R-D0-01: schema_version 5 without data collection content -- the file was '
+                             'saved with a data_collection section (or a camera id / profile) that is no '
+                             'longer in it (a TSA older than D0.8 dropped it on save?). Restore it, or set '
+                             'the schema_version the rest of the project needs')
         application = values.get('application')
         if application is not None and application.type is AppType.TASK_PROGRAM:
             if values.get('schema_version') != SCHEMA_VERSION_TASK_PROGRAM:
@@ -111,3 +141,10 @@ class CanonicalProject(BaseModel):
                              'robot.gripper.contract, or set schema_version 2 for a legacy '
                              'project.')
         return values
+
+
+def has_data_collection_content(data_collection, perception) -> bool:
+    """A ``data_collection`` section, or a camera ``id`` / ``profile`` (the schema-5 content, D0.8)."""
+    camera = getattr(perception, 'camera', None)
+    return bool(data_collection is not None
+                or (camera is not None and (camera.id is not None or camera.profile is not None)))

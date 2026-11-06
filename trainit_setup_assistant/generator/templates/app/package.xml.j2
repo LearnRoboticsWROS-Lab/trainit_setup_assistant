@@ -25,6 +25,11 @@
   <exec_depend>trainit_perception</exec_depend>
 {% endif %}
 {% endif %}
+{% if data_recorder %}
+  <!-- the TrainIt data recorder (D0.8) this package's bring-up starts with its
+       config/data_collection.<mode>.yaml: 0.8.0 exports the recording vocabulary TSA validated against -->
+  <exec_depend version_gte="0.8.0">trainit_data_ros</exec_depend>
+{% endif %}
 {% if policy_runtime %}
   <!-- the learned-policy runtime (ADR-0005) that this package's policy step uses. Unversioned:
        0.1.0 is the only version its package.xml has stated -->

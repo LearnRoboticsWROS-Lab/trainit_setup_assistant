@@ -11,6 +11,7 @@ Scene (S3) and Waypoints (S4/S5) pages are added in M7/M8.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from python_qt_binding.QtCore import Qt, QTimer
@@ -553,6 +554,12 @@ class GeneratePage(QWizardPage):
             lines.append(f'Saved project.yaml -> {proj_path} (reopen to continue)')
         except Exception as exc:  # noqa: BLE001
             lines.append(f'(could not save project.yaml: {exc})')
+        recorded = sorted(f.name.split('.')[1] for f in
+                          (Path(out_dir) / b.app_package / 'config').glob('data_collection.*.yaml'))
+        if recorded:
+            # TrainIt D0.8: the recorder is started from the Data section, on the file just generated
+            lines.append(f'Data recording ({", ".join(recorded)}): < Back to Step 7 -> Data -> Capture -> '
+                         'Start recorder (no build needed), or start the bundle: its bring-up runs it.')
         if problems:
             lines.append('Validation notes:')
             lines += [f'  - {p}' for p in problems]
@@ -2860,7 +2867,8 @@ class BlocksPage(QWizardPage):
                                       if self.wizard() is not None and getattr(self.wizard(), '_live', None)
                                       else None),
             on_edit=self._program_edited,
-            live=lambda: self.wizard().live_capture())
+            live=lambda: self.wizard().live_capture(),
+            host=lambda: self.wizard())
         self.program_panel.setVisible(False)
         outer.addWidget(self.program_panel, 1)
         root = QHBoxLayout(self.editor)
@@ -3017,6 +3025,13 @@ class BlocksPage(QWizardPage):
                 style = 'color:#8a6d3b;'
         self.program_result.setStyleSheet(style)
         self.program_result.setText('\n'.join(body))
+
+    def showEvent(self, event) -> None:
+        """Back from Step 8 does not re-run initializePage (QWizard): the Composer shows what changed
+        meanwhile (a generation: the Data section's recorder modes) every time the page is shown."""
+        super().showEvent(event)
+        if not self.program_panel.isHidden():
+            self.program_panel.refresh()
 
     def _show_program(self, program: bool) -> None:
         self.editor.setVisible(not program)
@@ -4417,12 +4432,21 @@ class SetupWizard(QWizard):
             self._camera_topics = topics
         return self._camera
 
+    def show_generate(self) -> None:
+        """TrainIt D0.8: the Data section's "Generate…" opens Step 8 from Step 7 (the recorder runs the
+        generated recording file, so a recording setup is used only after Generate)."""
+        if self.currentPage() is self.blocks_page:
+            self.next()
+
     def reject(self):  # pragma: no cover - GUI lifecycle
         self.launcher.stop_all()
         super().reject()
 
     def closeEvent(self, event):  # pragma: no cover - GUI lifecycle
         self.launcher.stop_all()
+        data = getattr(getattr(self.blocks_page, 'program_panel', None), 'data', None)
+        if data is not None:
+            data.close()                     # TrainIt D0.8: the recorder link and the preview's scratch store
         if self._live is not None:
             self._live.close()
         if self._scene_pub is not None:

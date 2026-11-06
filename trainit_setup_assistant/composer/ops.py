@@ -34,11 +34,25 @@ from ..model.program import STEP_ID_KEY, describe_load_error, step_mapping_kind
 from ..model.project import CanonicalProject
 from .diagnostics import Diagnostic, parse_load_error
 
+KEEP_ID = object()          # replace_step: keep the step's id as it is
+
 Label = Tuple[int, ...]
 CONTROL_KINDS = ('repeat', 'retry', 'fallback')
 _EDITOR = 'the edited program'
 # what a whole-project edit may change besides robot.gripper and deployment.bridges (checked separately)
-_PROJECT_EDITABLE = ('application', 'robot', 'deployment', 'schema_version')
+_PROJECT_EDITABLE = ('application', 'robot', 'deployment', 'schema_version', 'data_collection', 'perception')
+# TrainIt D0.8: the Data section edits data_collection and, of the perception, ONLY the camera's id / profile
+_CAMERA_DATA_KEYS = ('id', 'profile')
+
+
+def _without_camera_data(data: dict):
+    """The perception block without the camera's data-collection keys (what the Data section may not change)."""
+    perception = copy.deepcopy(data.get('perception'))
+    camera = (perception or {}).get('camera') if isinstance(perception, dict) else None
+    if isinstance(camera, dict):
+        for key in _CAMERA_DATA_KEYS:
+            camera.pop(key, None)
+    return perception
 
 
 class ComposerError(ValueError):
@@ -131,7 +145,8 @@ class Composer:
     def edit_project(self, mutate: Callable[[dict], Any]) -> Any:
         """Apply ``mutate`` to a copy of the WHOLE project as written and commit it through the canonical
         model, in the same history as the program's edits: the end effector (``robot.gripper``) and the
-        bridges it replaces (``deployment.bridges``) are edited here (vNext I0, I0_DESIGN.md §34)."""
+        bridges it replaces (``deployment.bridges``) are edited here (vNext I0, I0_DESIGN.md §34), and the
+        data collection (``data_collection``, the camera's ``id`` / ``profile``: TrainIt D0.8)."""
         data = project_to_dict(self.project)
         before = copy.deepcopy(data)
         result = mutate(data)
@@ -140,9 +155,11 @@ class Composer:
         robot_after = {k: v for k, v in (data.get('robot') or {}).items() if k != 'gripper'}
         dep_before = {k: v for k, v in (before.get('deployment') or {}).items() if k != 'bridges'}
         dep_after = {k: v for k, v in (data.get('deployment') or {}).items() if k != 'bridges'}
-        if changed or robot_before != robot_after or dep_before != dep_after:
-            _refuse('the Composer edits the program and the end effector (robot.gripper, deployment.bridges) only: '
-                    'the robot, the scene and the deployment are set at Steps 1-4')
+        if changed or robot_before != robot_after or dep_before != dep_after \
+                or _without_camera_data(before) != _without_camera_data(data):
+            _refuse('the Composer edits the program and the end effector (robot.gripper, deployment.bridges), and '
+                    'the data collection (data_collection, the camera id / profile), only: the robot, the scene, '
+                    'the perception and the deployment are set at Steps 1-4')
         self._commit_project(data)
         return result
 
@@ -495,7 +512,9 @@ class Composer:
         self.insert_step(task, label, step)
         return label
 
-    def replace_step(self, task: str, label: Label, step: dict) -> None:
+    def replace_step(self, task: str, label: Label, step: dict, step_id: Any = KEEP_ID) -> None:
+        """Replace a step. ``step_id``: KEEP_ID keeps the id it has; a name sets it; None removes it (D18: the id
+        a data trigger names, TrainIt D0.8). One edit, one undo."""
         step = copy.deepcopy(step)
         step_kind(step)
 
@@ -507,7 +526,12 @@ class Composer:
             # D18: the editor's spec carries no id; a step keeps the one it has (bindings stay valid)
             kept = {STEP_ID_KEY: old[STEP_ID_KEY]} if isinstance(old, dict) and STEP_ID_KEY in old \
                 and STEP_ID_KEY not in step else {}
-            steps[i] = {**kept, **step}
+            new = {**kept, **step}
+            if step_id is not KEEP_ID:
+                new.pop(STEP_ID_KEY, None)
+                if step_id is not None:
+                    new = {STEP_ID_KEY: step_id, **new}
+            steps[i] = new
         self.edit(mutate)
 
     def delete_step(self, task: str, label: Label) -> None:
@@ -715,5 +739,5 @@ def _profile_holders(doc: dict):
                 yield body
 
 
-__all__ = ['CONTROL_KINDS', 'Composer', 'ComposerError', 'Label', 'WAYPOINT_FIELDS', 'step_bodies',
+__all__ = ['CONTROL_KINDS', 'Composer', 'ComposerError', 'KEEP_ID', 'Label', 'WAYPOINT_FIELDS', 'step_bodies',
            'step_kind', 'walk', 'waypoint_refs']

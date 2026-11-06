@@ -46,7 +46,10 @@ from .program import (DenseSource, Dwell, MoveStep, PathDef, PathGenerator, Path
                       RelativeFrame, RelativeTarget, RuntimeSettings, Task, TaskProgram, TaskStep,
                       TaskWaypoint)
 from .project import (BundleSpec, CanonicalProject, ProjectMeta, SCHEMA_VERSION,
-                      SCHEMA_VERSION_EEF_CONTRACT, SCHEMA_VERSION_TASK_PROGRAM)
+                      SCHEMA_VERSION_DATA_COLLECTION, SCHEMA_VERSION_EEF_CONTRACT,
+                      SCHEMA_VERSION_TASK_PROGRAM)
+from .data_collection import (DataCollectionSpec, DataSensor, DataSync, DataTrigger, DatasetRef,
+                              SyntheticRecipe)
 from .robot import (
     ArmControllerSpec,
     DescriptionSource,
@@ -71,6 +74,12 @@ from .task import (ApplicationSpec, BinPickingSpec, DetectPoint, MotionSegment,
 __all__ = [
     'SCHEMA_VERSION',
     'CanonicalProject',
+    'DataCollectionSpec',
+    'DataSensor',
+    'DataSync',
+    'DataTrigger',
+    'DatasetRef',
+    'SyntheticRecipe',
     'BundleSpec',
     'ProjectMeta',
     'RobotSpec',
@@ -153,6 +162,7 @@ __all__ = [
     'GripperJointTarget',
     'SimGraspAdapter',
     # the end-effector contract (ADR-0022)
+    'SCHEMA_VERSION_DATA_COLLECTION',
     'SCHEMA_VERSION_EEF_CONTRACT',
     'EndEffectorContract',
     'SetBoolActuator',

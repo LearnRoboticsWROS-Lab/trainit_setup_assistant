@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+{% from "app/data_recorder.j2" import data_recorder, data_argument %}
 {% set ns_kw = 'namespace=NS, ' if cell_namespace else '' %}
 {% set ns_sp = ' namespace=NS,' if cell_namespace else '' %}
 {% set tf_rm = ', remappings=tf_global' if cell_namespace else '' %}
@@ -261,6 +262,9 @@ def launch_setup(context, *args, **kwargs):
             parameters=[rviz_params, common]))
 {% endif %}
 
+{% if data_modes_py is defined and data_modes_py %}
+{{ data_recorder("nodes", app_package, data_modes_py, data_namespace) }}
+{%- endif %}
     return nodes
 
 
@@ -277,5 +281,8 @@ def generate_launch_description():
         DeclareLaunchArgument("gui", default_value="true",
                               description="Gazebo client GUI (mode:=gazebo); gui:=false = headless"),
 {% endif %}
+{% if data_modes_py is defined and data_modes_py %}
+{{ data_argument() }}
+{%- endif %}
         OpaqueFunction(function=launch_setup),
     ])

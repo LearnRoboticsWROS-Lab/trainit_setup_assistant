@@ -12,8 +12,9 @@ from pydantic import BaseModel
 
 from .enums import DEPRECATED_APP_TYPES, AppType, deprecated_app_type_refusal
 from .program import describe_load_error
-from .project import (SCHEMA_VERSION_EEF_CONTRACT, SCHEMA_VERSION_TASK_PROGRAM,
-                      CanonicalProject)
+from .data_collection import data_collection_as_written
+from .project import (SCHEMA_VERSION_DATA_COLLECTION, SCHEMA_VERSION_EEF_CONTRACT,
+                      SCHEMA_VERSION_TASK_PROGRAM, CanonicalProject)
 
 # The ToolAction fields of the end-effector contract (ADR-0022): written only when set.
 _EEF_TOOL_ACTION_KEYS = ('actuator', 'target', 'site')
@@ -197,6 +198,17 @@ def project_to_dict(project: CanonicalProject) -> dict:
         node = data.get(section)
         if isinstance(node, dict) and node.get(key) is None:
             node.pop(key, None)
+    # TrainIt D0.8: the camera's id / profile and the data_collection section are written only when set
+    # (a project without them saves byte-identical), and then schema_version is 5
+    camera = (data.get('perception') or {}).get('camera')
+    if isinstance(camera, dict):
+        for key in ('id', 'profile'):
+            if camera.get(key) is None:
+                camera.pop(key, None)
+    if project.data_collection is None:
+        data.pop('data_collection', None)
+    else:
+        data['data_collection'] = data_collection_as_written(project.data_collection)
     application = data.get('application')
     if isinstance(application, dict):
         application.pop('program', None)        # a template application: no program, no key
@@ -206,6 +218,8 @@ def project_to_dict(project: CanonicalProject) -> dict:
             data['application'] = {'type': AppType.TASK_PROGRAM.value,
                                    **program_as_written(project.application.program)}
             data['schema_version'] = SCHEMA_VERSION_TASK_PROGRAM
+    if project.has_data_collection():
+        data['schema_version'] = SCHEMA_VERSION_DATA_COLLECTION
     return data
 
 

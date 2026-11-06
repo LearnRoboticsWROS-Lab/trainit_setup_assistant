@@ -80,7 +80,10 @@ def test_the_workspace_root_is_the_parent_of_src(out, root):
 ALLOWED_PUBLISHERS = {'/planning_scene', 'GOAL_TOPIC', 'GROUP_TOPIC'}
 # the live check; the Preview's IK; the live waypoint check (vNext I0, owner Test C): MoveIt computations and
 # reads only -- IK, FK, state validity, the planning scene's object names
-ALLOWED_CLIENTS = {'ListControllers', 'GetPositionIK', 'GetPositionFK', 'GetStateValidity', 'GetPlanningScene'}
+ALLOWED_CLIENTS = {'ListControllers', 'GetPositionIK', 'GetPositionFK', 'GetStateValidity', 'GetPlanningScene',
+                   # TrainIt D0.8 (ADR-0029 Decision 7): the data recorder's three std_srvs/Trigger services,
+                   # created by livesession/data_recorder.py only (test_d0_8_runtime.py pins which and where)
+                   'Trigger'}
 
 
 def test_tsa_creates_no_action_client_and_no_motion_publisher_or_client():

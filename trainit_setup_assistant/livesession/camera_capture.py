@@ -11,6 +11,11 @@ CameraInfo is RELIABLE. The constants mirror trainit_perception's detector_node 
 the tuner must see exactly what the runtime node sees.
 
 rclpy/numpy are imported in ``__init__`` so importing this module never needs ROS.
+
+Depth UNITS are converted by trainit_perception's ``depth_to_metres`` (TrainIt D0.8, the KNOWN_DEBT rule: one
+depth decoding per runtime side -- TSA reuses TP's, it does not keep its own). This module only lays the
+message's rows out as an array (the row stride); without trainit_perception the depth is unavailable and
+``last_error`` says why (the colour still shows).
 """
 
 from __future__ import annotations
@@ -37,8 +42,16 @@ class LiveCameraCapture:
 
         self._np = np
         self._rclpy = rclpy
-        self._owns_context = not rclpy.ok()
-        if self._owns_context:
+        try:
+            from trainit_perception.detectors.base import depth_to_metres
+        except Exception as exc:  # noqa: BLE001 - the colour preview works without it
+            depth_to_metres = None
+            self._depth_unavailable = f'depth needs trainit_perception (its depth_to_metres): {exc!r}'
+        self._depth_to_metres = depth_to_metres
+        # the process's ONE rclpy context is shared with the other observers (the Data section's recorder
+        # link, D0.8): initialised if needed, never shut down here -- a camera re-created for new topics must
+        # not end the context another observer is spinning on; it ends with the process
+        if not rclpy.ok():
             rclpy.init()
 
         self._node = Node(node_name)
@@ -83,21 +96,20 @@ class LiveCameraCapture:
                 h, rgb_msg.step)[:, :w * 3].reshape(h, w, 3)
             if rgb_msg.encoding == 'bgr8':
                 rgb = rgb[:, :, ::-1]
-            dh, dw = depth_msg.height, depth_msg.width
-            if depth_msg.encoding == '32FC1':
-                depth = np.frombuffer(depth_msg.data, np.uint8).reshape(
-                    dh, depth_msg.step)[:, :dw * 4].reshape(dh, dw * 4)
-                depth = depth.view(np.float32).reshape(dh, dw).copy()
-            elif depth_msg.encoding == '16UC1':
-                depth = np.frombuffer(depth_msg.data, np.uint8).reshape(
-                    dh, depth_msg.step)[:, :dw * 2].reshape(dh, dw * 2)
-                depth = depth.view(np.uint16).reshape(dh, dw).astype(np.float32) / 1000.0
-            else:
-                raise ValueError(f'unsupported depth encoding {depth_msg.encoding!r}')
+            depth, error = None, getattr(self, '_depth_unavailable', None)
+            if self._depth_to_metres is not None:
+                dh, dw = depth_msg.height, depth_msg.width
+                pixel = {'32FC1': np.float32, '16UC1': np.uint16}.get(depth_msg.encoding)
+                if pixel is None:
+                    raise ValueError(f'unsupported depth encoding {depth_msg.encoding!r}')
+                size = np.dtype(pixel).itemsize
+                raw = np.frombuffer(depth_msg.data, np.uint8).reshape(
+                    dh, depth_msg.step)[:, :dw * size].copy()
+                depth = self._depth_to_metres(raw.view(pixel).reshape(dh, dw), depth_msg.encoding)
             with self._lock:
                 self._latest = (rgb.copy(), depth)
                 self._frame_id = rgb_msg.header.frame_id
-                self._last_error = None
+                self._last_error = error
         except Exception as exc:  # noqa: BLE001 — a bad frame must not kill the thread
             with self._lock:
                 self._last_error = repr(exc)      # …but the drop reason is surfaced
@@ -108,7 +120,8 @@ class LiveCameraCapture:
 
     # --- Qt-side polling ----------------------------------------------------------
     def latest(self) -> Optional[Tuple]:
-        """(rgb HxWx3 uint8 RGB, depth_m HxW float32, K 3x3, frame_id) or None."""
+        """(rgb HxWx3 uint8 RGB, depth_m HxW float32 (None without trainit_perception), K 3x3, frame_id) or
+        None."""
         with self._lock:
             if self._latest is None or self._K is None:
                 return None
@@ -129,8 +142,6 @@ class LiveCameraCapture:
             self._node.destroy_node()
         except Exception:  # noqa: BLE001
             pass
-        if self._owns_context and self._rclpy.ok():
-            self._rclpy.shutdown()
 
     def __enter__(self):
         return self

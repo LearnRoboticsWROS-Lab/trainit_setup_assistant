@@ -18,6 +18,10 @@ Nothing here is typed in twice. Each row is read from the place that owns the fa
                ``tp_registry_snapshot.yaml``, so one refresh is a fixed point
   MoveIt       the installed planner and servo packages' ``package.xml`` (version, licence)
   the policy runtime, TMR, TP: their installed ``package.xml``
+  trainit_data_ros  its installed, EXPORTED recording vocabulary ``catalog/recording_vocabulary.yaml``
+               (TrainIt D0.8), committed byte for byte as ``data_recording_vocabulary.yaml``
+  the hardware layer  its installed camera profiles ``profiles/camera/*.yaml``: the models and the
+               backends each declares a recording source descriptor for (D0.8)
 
 The only facts that are not derivable are the ADAPTERS' maturity and the provisional
 Community/Pro classification (an owner decision, vNext approval 2026-10-06; for TP's entries an
@@ -40,9 +44,10 @@ import yaml
 
 from .. import __version__ as TSA_VERSION
 from ..model import enums as E
-from . import (EEF_ADAPTER_ROWS, REGISTRY_FILE, TP_REGISTRY_FILE, TP_TIERS,
+from . import (DATA_RECORDING_FILE, EEF_ADAPTER_ROWS, REGISTRY_FILE, TP_REGISTRY_FILE, TP_TIERS,
                declared_planner_modes, declared_providers, eligible_providers,
-               offered_planner_modes, parse_planner_registry, tp_registry_text)
+               offered_planner_modes, parse_planner_registry, parse_recording_vocabulary,
+               tp_registry_text)
 
 CHECKED_ON = '2026-10-06'
 
@@ -307,7 +312,50 @@ def _adapters() -> List[dict]:
     return rows + [dict(r) for r in _ROBOT_ADAPTERS]
 
 
-def derive(tmr_bytes: Optional[bytes] = None, tp_vocabulary: Optional[dict] = None) -> dict:
+def installed_recording_vocabulary() -> bytes:
+    """trainit_data_ros's INSTALLED exported recording vocabulary (D0.8), strictly: raises."""
+    from ament_index_python.packages import get_package_share_directory
+    try:
+        share = Path(get_package_share_directory('trainit_data_ros'))
+    except Exception as exc:                        # noqa: BLE001 - not installed / not sourced
+        raise RuntimeError('trainit_data_ros is not installed or the workspace is not sourced: '
+                           f'its recording vocabulary cannot be read ({exc})') from exc
+    path = share / 'catalog' / 'recording_vocabulary.yaml'
+    if not path.is_file():
+        raise RuntimeError(f'the installed trainit_data_ros ships no recording vocabulary ({path}): '
+                           'it predates 0.8.0 -- rebuild and re-source the workspace')
+    return path.read_bytes()
+
+
+def _data_record(raw: bytes) -> dict:
+    doc = parse_recording_vocabulary(raw, 'the trainit_data_ros recording vocabulary')
+    return dict(version=doc['trainit_data_ros'],
+                recording_vocabulary=dict(file=DATA_RECORDING_FILE,
+                                          sha256=hashlib.sha256(raw).hexdigest(),
+                                          schema=doc['schema']))
+
+
+def _camera_profiles() -> Dict[str, dict]:
+    """The INSTALLED hardware layer's camera profile models (D0.8): per model, the backends whose profile
+    declares a recording source descriptor, and each one's simulator clock (sim_source) when it has one."""
+    from ament_index_python.packages import get_package_share_directory
+    share = Path(get_package_share_directory('trainit_hardware_layer')) / 'profiles' / 'camera'
+    out: Dict[str, dict] = {}
+    for path in sorted(share.glob('*.yaml')):
+        doc = yaml.safe_load(path.read_text()) or {}
+        model = doc.get('model')
+        if doc.get('role') != 'camera' or not isinstance(model, str):
+            continue
+        backends = {name: row.get('source_descriptor') for name, row in (doc.get('backends') or {}).items()
+                    if isinstance(row, dict) and isinstance(row.get('source_descriptor'), dict)}
+        out[model] = dict(backends=sorted(backends),
+                          sim_sources={b: d['sim_source'] for b, d in sorted(backends.items())
+                                       if d.get('sim_source')})
+    return out
+
+
+def derive(tmr_bytes: Optional[bytes] = None, tp_vocabulary: Optional[dict] = None,
+           data_bytes: Optional[bytes] = None) -> dict:
     """The in-tree part of the catalog, as the installed workspace reports it.
 
     The refresh passes the TMR registry and the TP vocabulary it has just read and validated, so
@@ -315,6 +363,7 @@ def derive(tmr_bytes: Optional[bytes] = None, tp_vocabulary: Optional[dict] = No
     the installed workspace (the drift test)."""
     tmr = _tmr_registry(tmr_bytes)
     vocabulary = installed_tp_vocabulary() if tp_vocabulary is None else tp_vocabulary
+    data = _data_record(installed_recording_vocabulary() if data_bytes is None else data_bytes)
     tp = _tp_record(vocabulary)
     selectable_rules = [vocabulary['auto']] + list(vocabulary['rules'])
     providers = (_motion_planning(tmr) + [_servo()] + _perception(tp)
@@ -326,7 +375,8 @@ def derive(tmr_bytes: Optional[bytes] = None, tp_vocabulary: Optional[dict] = No
                               'trainit_motion_runtime').get('version'),
                           trainit_perception=tp.get('version'),
                           trainit_policy_runtime=_package_facts(
-                              'trainit_policy_runtime').get('version')),
+                              'trainit_policy_runtime').get('version'),
+                          trainit_data_ros=data['version']),
         providers=providers,
         adapters=_adapters(),
         registries=dict(
@@ -345,7 +395,9 @@ def derive(tmr_bytes: Optional[bytes] = None, tp_vocabulary: Optional[dict] = No
                 planner_modes=declared_planner_modes(tmr['registry']),
                 providers=list(declared_providers(tmr['registry'])),
                 pipeline_files=tmr['pipeline_files']),
-            trainit_perception=tp))
+            trainit_perception=tp,
+            trainit_data_ros=data,
+            trainit_hardware_layer=dict(camera_profiles=_camera_profiles())))
 
 
 def catalog_drift(committed: dict, derived: dict) -> List[str]:

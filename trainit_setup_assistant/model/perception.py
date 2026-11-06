@@ -303,6 +303,13 @@ class CameraSpec(BaseModel):
     # sim builds the coloured cloud (depth_image_proc, isaac branch only); in real the
     # vendor driver already publishes ``points_topic``.
     synthetic_cloud_in_sim: bool = True
+    # TrainIt D0.8 (D0_DESIGN.md §4 D3): the LOGICAL sensor id data collection names this camera by, and
+    # the hardware-layer camera PROFILE model (trainit_hardware_layer profiles/camera/<model>.yaml) its
+    # nominal characteristics come from. Both optional; written only when set (a project without them saves
+    # byte-identical). Intrinsics, units, calibration and extrinsics never live here: the recorder records
+    # what the sensor published.
+    id: Optional[str] = None
+    profile: Optional[str] = None
 
 
 class DetectorSpec(BaseModel):

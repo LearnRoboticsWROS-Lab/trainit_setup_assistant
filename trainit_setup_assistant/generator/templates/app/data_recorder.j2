@@ -1,0 +1,26 @@
+{#- TrainIt D0.8: the data recorder in the cell bring-up, only when the project records live data. -#}
+{% macro data_recorder(list_name, app_package, data_modes_py, data_namespace) %}
+    if LaunchConfiguration("data").perform(context).lower() in ("true", "1"):
+        # TrainIt data recorder (trainit_data_ros, D0.8): idle until a session starts (the TSA Data
+        # panel, or `ros2 service call <slot>/trainit_data_recorder/start_session std_srvs/srv/Trigger`).
+        # It reads this mode's config/data_collection.<mode>.yaml and writes to TRAINIT_DATA_ROOT
+        # (default ~/TrainItData). data:=false leaves it out.
+        from ament_index_python.packages import get_package_share_directory as _share
+        from launch.actions import IncludeLaunchDescription as _Include, LogInfo as _LogInfo
+        from launch.launch_description_sources import PythonLaunchDescriptionSource as _Source
+        if mode in {{ data_modes_py }}:
+            {{ list_name }}.append(_Include(
+                _Source(os.path.join(_share("trainit_data_ros"), "launch", "recorder.launch.py")),
+                launch_arguments={
+                    "config_file": os.path.join(_share("{{ app_package }}"), "config",
+                                                f"data_collection.{mode}.yaml"),
+                    "namespace": "{{ data_namespace }}",
+                    "use_sim_time": "true" if mode in ("isaac", "gazebo") else "false"}.items()))
+        else:
+            {{ list_name }}.append(_LogInfo(
+                msg=f"[data] no recording configuration for mode {mode}: no recorder started"))
+{% endmacro %}
+{% macro data_argument() %}
+        DeclareLaunchArgument("data", default_value="true",
+                              description="Start the data recorder (idle until a session starts)"),
+{% endmacro %}

@@ -207,6 +207,7 @@ def test_the_composer_has_every_section(qapp):
     w = SetupWizard(ctrl)
     w.blocks_page.initializePage()
     shell = w.blocks_page.program_panel
-    assert list(shell.sections) == ['Overview', 'Waypoints', 'Paths', 'Profiles', 'End effector', 'Tasks', 'YAML', 'Program']
+    assert list(shell.sections) == ['Overview', 'Waypoints', 'Paths', 'Profiles', 'End effector', 'Tasks', 'Data',
+                                   'YAML', 'Program']     # Data: TrainIt D0.8
     shell.select('Tasks')
     assert shell.tasks.task == ctrl.project.application.program.main_task

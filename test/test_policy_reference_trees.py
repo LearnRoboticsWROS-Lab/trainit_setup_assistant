@@ -33,6 +33,11 @@ package.xml declares the controller manager its copied moveit_controllers.yaml n
 three lines removed each tree hashes to its previous constant (pure 83ee32cd..., hybrid
 76d30cda...); no other file differed.
 
+Re-pinned at the owner-approved M4.5b re-bless (PB-7, 2026-11-10): TSA 8.6.1's application launch ends with its
+tree (``end_with_tree``) in exactly the two launch files; with those lines put back (the former
+``pending_rebless.POLICY_REFERENCE``) each tree hashed to its previous constant (pure a2a43971..., hybrid
+f4de26fd...); no other file differed.
+
 Fast and ROS-free.
 """
 import hashlib
@@ -43,6 +48,7 @@ from pathlib import Path
 
 import pytest
 
+import pending_rebless
 import ws_paths
 from trainit_setup_assistant.generator import Orchestrator
 from trainit_setup_assistant.model import BundleSpec, PolicyStep, load_project
@@ -64,8 +70,8 @@ _CARD = textwrap.dedent("""
 
 # sha256 over "<sha256>  <posix relative path>\n" of every generated file but the manifest
 REFERENCE_TREE_SHA256 = {
-    PolicyMode.PURE: 'a2a4397172f46cc04ecdd363fb1ae74020805b62cba2d47a76eadd0371b69f05',
-    PolicyMode.HYBRID: 'f4de26fdd7ac1ad676a111f43638eb3df64fe967298a766d9438e13bf48c4d70',
+    PolicyMode.PURE: 'ea8faf003db4eb2d4c1bdc15aeb087bca9a4ed9a40e93f356c88371c1022c881',
+    PolicyMode.HYBRID: '90a7f65211c141dfe3798e81c8b3efaa601cbc77f161f7a428b281689e4b0acc',
 }
 ADDED = {'cell_app/launch/policy_runtime.launch.py',
          'cell_app/policies/grasp2preplace/policy.onnx',
@@ -105,7 +111,10 @@ def _sha(files: dict) -> str:
 def test_the_policy_reference_tree_is_pinned_and_deterministic(mode):
     first = _sha(_tree(mode))
     assert first == _sha(_tree(mode))
-    assert first == REFERENCE_TREE_SHA256[mode]
+    # a generator change pending the owner's re-pin puts its lines back first (pending_rebless.POLICY_REFERENCE; empty
+    # since the M4.5b re-bless), then the tree hashes to its pinned constant
+    pinned = {rel: pending_rebless.backward(b, pending_rebless.POLICY_REFERENCE, rel) for rel, b in _tree(mode).items()}
+    assert _sha(pinned) == REFERENCE_TREE_SHA256[mode]
 
 
 @pytest.mark.parametrize('mode', [PolicyMode.PURE, PolicyMode.HYBRID])

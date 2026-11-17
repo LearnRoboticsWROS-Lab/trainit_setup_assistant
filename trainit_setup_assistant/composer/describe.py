@@ -1,7 +1,7 @@
 """Steps and routes in an engineer's words (vNext I0.7, I0_DESIGN.md §13, §15, §16). Pure, no Qt.
 
 Every canonical step kind has one line of text, without BehaviorTree words:
-- a repeat is "Repeat ×N", a retry is "Retry ×N";
+- a repeat is "Repeat ×N" ("Repeat until stopped" for ``cycles: -1``), a retry is "Retry ×N";
 - a fallback is "Try alternatives";
 - a task call is "Run task".
 
@@ -42,7 +42,11 @@ def step_text(step: dict) -> str:
     if kind == 'dwell':
         return f"Wait {body.get('ms')} ms"
     if kind == 'repeat':
-        return f"Repeat ×{body.get('cycles')}"
+        # M4.5d owner acceptance F3: cycles -1 is "no count", never shown as a count ("×-1")
+        until = ' until nothing to pick' if body.get('until') else ''
+        if body.get('cycles') == -1:
+            return 'Repeat' + (until or ' until stopped')
+        return f"Repeat ×{body.get('cycles')}" + until
     if kind == 'retry':
         return f"Retry ×{body.get('attempts')}"
     if kind == 'fallback':
@@ -115,8 +119,8 @@ def route(task: dict, start: Optional[str] = None, paths: Optional[dict] = None)
         elif kind in ('grasp', 'release'):
             # owner Test F.1 (row 34): a grasp / release MOVES the robot -- above the target, in, out
             g = step[kind] or {}
-            target = g.get('at') or (f"candidate {g.get('index', 0)} of "
-                                     f"{g.get('candidates') or 'the latest detection'}")
+            which = 'every candidate' if g.get('index') == 'all' else f"candidate {g.get('index', 0)}"
+            target = g.get('at') or f"{which} of {g.get('candidates') or 'the latest detection'}"
             standoff = g.get('standoff_m')
             above = f'{standoff * 1000.0:g} mm above it' if standoff else 'above it'
             act = 'close' if kind == 'grasp' else 'open'

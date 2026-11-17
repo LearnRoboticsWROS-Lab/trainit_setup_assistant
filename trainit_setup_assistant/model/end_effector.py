@@ -256,6 +256,9 @@ class AdapterBinding(_Strict):
     stage_cmd_topic: Optional[str] = None        # isaac: derived from the Step-2 stage topic
     stage_status_topic: Optional[str] = None     # isaac: the stage publishes its status
     flavour: Optional[ControllerFlavour] = None  # ros2_control: declared on real
+    # mock (vNext M4.5): the scripted grasp OUTCOME SEQUENCE per site -- {<site id>: [held | not_held | ...]}, the
+    # n-th applied engage takes the n-th outcome, the last repeats (trainit_hardware_layer >= 0.4.0)
+    outcomes: Optional[Dict[str, List[str]]] = None
 
 
 Binding = Union[EndEffectorAdapter, AdapterBinding]
@@ -330,6 +333,7 @@ class DeviceBinding:
     stage_status_topic: Optional[str] = None
     flavour: Optional[str] = None                # as DECLARED by the binding (its long form)
     long_form: bool = False
+    outcomes: Optional[Dict[str, List[str]]] = None  # mock: the outcome sequence per site (vNext M4.5)
     # The flavour the controller RUNS with (ADR-0022 D2.B): the declared one, else -- on gazebo --
     # the base config's controller type, which only the generator can read
     # (``generator.eef_contract.device`` resolves it once). provides() and every refusal read it.
@@ -508,7 +512,8 @@ def _binding(backend: Backend, value, stage_topic: Optional[str]) -> DeviceBindi
         out = DeviceBinding(backend=backend, adapter=value.adapter.value,
                             stage_cmd_topic=value.stage_cmd_topic,
                             stage_status_topic=value.stage_status_topic,
-                            flavour=flavour, long_form=True, effective_flavour=flavour)
+                            flavour=flavour, long_form=True, effective_flavour=flavour,
+                            outcomes=value.outcomes)
     else:
         out = DeviceBinding(backend=backend, adapter=EndEffectorAdapter(value).value)
     if out.stage_cmd_topic is None and 'stage_cmd_topic' in out.row['requires']:

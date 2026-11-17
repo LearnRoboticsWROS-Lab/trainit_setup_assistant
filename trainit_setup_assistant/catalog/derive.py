@@ -196,7 +196,8 @@ def _perception(tp: dict) -> List[dict]:
             **_trainit_license('trainit_perception')))
     # A method TSA lets a project select that TP's registry does not list (``custom``): an
     # external node by construction. Shown, not hidden -- it is a vocabulary drift (M2).
-    known = set(tp.get('in_process_methods', [])) | set(tp.get('external_methods', []))
+    known = (set(tp.get('in_process_methods', [])) | set(tp.get('external_methods', []))
+             | set(tp.get('grasp_providers', [])))
     for method in sorted(selectable - known) if tp else []:
         rows.append(dict(
             id=f'tsa.detector.{method}', family='perception_detection', kind='in_tree',
@@ -225,6 +226,17 @@ def _grasp(tp: dict, selectable: List[str]) -> List[dict]:
             name=f'grasp face {face} (TrainIt surface grasp)', vendor='TrainIt',
             tsa_selectable=True, distribution=_tier('face', face), requirements=dict(gpu=None),
             **_trainit_license('trainit_perception')))
+    # vNext M4: a grasp PROVIDER (its own node, publishing GraspCandidateArray, ADR-0026)
+    # (vNext M4.5: the scripted provider replays a scenario file -- it is no surface grasp, and its row says so)
+    methods = {m.value for m in E.DetectionMethod}
+    family = {'scripted_grasp': 'scripted scenario'}
+    for provider in tp.get('grasp_providers', []):
+        rows.append(dict(
+            id=f'tp.grasp.{provider}', family='grasp_generation', kind='in_tree', integration='ros_node',
+            name=(f'grasp provider {provider} (TrainIt {family.get(provider, "surface grasp")}: '
+                  'GraspCandidateArray)'), vendor='TrainIt',
+            tsa_selectable=provider in methods, distribution=_tier('grasp_provider', provider),
+            requirements=dict(gpu=None), **_trainit_license('trainit_perception')))
     return rows
 
 
@@ -269,6 +281,7 @@ def _tp_record(vocabulary: dict) -> dict:
         in_process_methods=sorted(m for m, s in methods.items() if s['kind'] == 'pure_python'),
         external_methods=sorted(m for m, s in methods.items() if s['kind'] == 'external_node'),
         rules=sorted(vocabulary['rules']), faces=sorted(vocabulary['faces']),
+        grasp_providers=sorted(vocabulary.get('grasp_providers') or {}),
         param_since=dict(sorted(vocabulary['param_since'].items())),
         face_size_band_m=[float(b) for b in vocabulary['face_size_band_m']])
 

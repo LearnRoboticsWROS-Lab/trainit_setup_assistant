@@ -43,6 +43,11 @@
        but deliberately does NOT depend on them. They implement a detection method
        outside trainit_perception and publish the same contract
        (vision_msgs/Detection3DArray on /perception/<name>/detections).
+{% if external_segmenters is defined and external_segmenters %}
+       The external SEGMENTER entr(ies) {{ external_segmenters | join(', ') }} publish an
+       instance image instead (/perception/<name>/instances + instance_info), which a
+       grasp provider's instance_topic segmentation reads (vNext M4.5).
+{% endif %}
 
        Why no <exec_depend>: ADR-0003 — Community installs with rosdep, and `rosdep
        install` over a source workspace fails with "cannot locate rosdep definition" for

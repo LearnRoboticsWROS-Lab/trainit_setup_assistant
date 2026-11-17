@@ -38,6 +38,8 @@ in ``DetectObject``, which reads as a perception fault and is a configuration on
 ``remappings``          ``from -> to``, for a node whose subscriptions are hardcoded
 ``detect_service``      the node serves ``/perception/<name>/detect`` (std_srvs/Trigger), the
                         contract's on-demand service a capture calls (vNext M3.5)
+``name_parameter``      the parameter the node reads its OUTPUT NAME from; the generator writes the
+                        entry's name there (vNext M4.5: an external segmenter's output name)
 ======================  ==========================================================
 
 Two deliberate omissions, both because the field already exists elsewhere:
@@ -104,6 +106,12 @@ class ExternalNodeSpec(BaseModel):
     # ``/perception/<detector>/detections``), so a task program may CAPTURE with it. Declared, never
     # assumed: TSA cannot see what another package's node serves. Generates nothing.
     detect_service: bool = False
+    # vNext M4.5: the PARAMETER NAME this node reads its output name from -- the generator fills it with the
+    # entry's own name, so the node publishes under ``/perception/<entry name>/...`` and the project's entry name
+    # stays the single source of truth for the topics a consumer reads (an external segmenter's
+    # ``/perception/<name>/instances``, which a grasp provider's ``segmentation.params.source`` names). The
+    # VALUE comes from the entry, exactly as ``topic_parameters``' values come from the camera contract.
+    name_parameter: Optional[str] = None
 
     def missing(self) -> Tuple[str, ...]:
         """The required fields that are empty, in declaration order.

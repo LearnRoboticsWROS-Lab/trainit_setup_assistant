@@ -398,8 +398,16 @@ def _step_rows(task, steps, plan: ProgramPlan) -> List[str]:
         elif sp.kind == 'repeat':
             times = ('until a step fails or the program is stopped' if sp.count == -1 else
                      f'{sp.count} cycle' + ('' if sp.count == 1 else 's'))
-            out.append(f'| {i} | repeat | -- | {_body_range(sp.bodies[0])}, {times}; a step that fails ends '
-                       'the repeat | -- |')
+            end = ('a step that fails ends the repeat' if not sp.until else
+                   'it ends NORMALLY when nothing is left to pick (a fresh detection found no candidate, no fault); '
+                   'any other failure ends it with FAILURE (recovery exhausted)')
+            if sp.until and sp.presence:      # TSA 8.7.0 (vNext M4.5b)
+                end = ('it ends NORMALLY when nothing is left to pick (a fresh detection found no candidate, no '
+                       f'fault) AND a presence capture of `{sp.presence}` finds no object: outcome BIN_EMPTY; objects '
+                       'that remain without a valid grasp end it with FAILURE, outcome PICKABLE_EXHAUSTED (not a '
+                       'fault: the cell needs an operator); any other failure ends it with FAILURE (recovery '
+                       'exhausted, RECOVERY_EXHAUSTED)')
+            out.append(f'| {i} | repeat | -- | {_body_range(sp.bodies[0])}, {times}; {end} | -- |')
         elif sp.kind == 'retry':
             out.append(f'| {i} | retry | -- | {_body_range(sp.bodies[0])}, again from the first when one fails: '
                        f'{sp.count} tr' + ('y' if sp.count == 1 else 'ies') + ' at most | -- |')

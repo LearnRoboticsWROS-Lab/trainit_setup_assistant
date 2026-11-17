@@ -129,8 +129,8 @@ DRIFTS = [
     ('method kind changed', lambda r: r['detector_methods']['color_mask'].update(
         kind='external_node'),
      "TP registry drift: method 'color_mask' kind is 'external_node' in TP but 'pure_python'"),
-    ('release changed', lambda r: r.update(trainit_perception='0.6.0'),
-     "TP registry drift: trainit_perception is '0.6.0' in TP but"),
+    ('release changed', lambda r: r.update(trainit_perception='0.9.0'),     # vNext M4.5d: the snapshot is 0.8.0
+     "TP registry drift: trainit_perception is '0.9.0' in TP but"),
     ('rules reordered', lambda r: r.update(rules=dict(reversed(list(r['rules'].items())))),
      'TP registry drift: the rules are listed in another order in TP'),
     ('parameters reordered', lambda r: r['detector_methods']['color_mask'].update(
@@ -252,11 +252,18 @@ def test_the_snapshot_holds_names_schema_and_requirements_only():
     assert tp_registry_problems(record) == []
     for path, value in _leaves(record):
         if isinstance(value, bool):
-            assert path[0] == 'terms' and path[-1] == 'face_sized', path
+            # vNext M4: a grasp provider's parameter is marked `required: true` (it has no default)
+            assert (path[0] == 'terms' and path[-1] == 'face_sized') or (
+                path[0] == 'grasp_providers' and path[-1] == 'required' and value is True), path
         elif isinstance(value, (int, float)):
             assert path in (('schema_version',),) or path[0] == 'face_size_band_m' or (
-                path[0] == 'detector_methods' and path[2] == 'parameters'
-                and path[4] in ('default', 'min', 'max')), (path, value)
+                path[0] in ('detector_methods', 'grasp_providers') and path[2] == 'parameters'
+                and path[4] in ('default', 'min', 'max')) or (
+                # vNext M4.5: a provider's dated sections -- {source: {parameters, since}} and {parameters, since}
+                path[:3] == ('grasp_providers', path[1], 'segmentation_parameters') and path[4] == 'parameters'
+                and path[6] in ('default', 'min', 'max')) or (
+                path[:3] == ('grasp_providers', path[1], 'eligibility') and path[3] == 'parameters'
+                and path[5] in ('default', 'min', 'max')), (path, value)
         elif isinstance(value, str):
             assert re.match(r'^[a-z][a-z0-9_]*$|^\d+\.\d+\.\d+$', value), (path, value)
         else:
@@ -328,13 +335,20 @@ def test_every_rule_and_method_tsa_code_names_is_required():
                         if t not in TSA_REQUIRED_TP_RULES and t != catalog.TSA_AUTO)
     assert not unrequired, f'named in TSA code but not required of TP: {unrequired}'
     named_methods = _attribute_tokens('DetectionMethod')
-    assert {t for t, _ in named_methods} <= set(TSA_TP_METHODS) | set(TSA_OWN_METHODS)
+    assert {t for t, _ in named_methods} <= (set(TSA_TP_METHODS) | set(TSA_OWN_METHODS)
+                                            | set(catalog.TSA_TP_GRASP_PROVIDERS))
 
 
 def test_detection_method_is_tsa_code_and_agrees_with_the_snapshot_both_ways():
-    assert set(TSA_TP_METHODS) | set(TSA_OWN_METHODS) == {m.value for m in E.DetectionMethod}
+    assert set(TSA_TP_METHODS) | set(TSA_OWN_METHODS) | set(catalog.TSA_TP_GRASP_PROVIDERS) == {
+        m.value for m in E.DetectionMethod}
     methods = tp_registry()['detector_methods']
     assert {m: s['kind'] for m, s in methods.items()} == TSA_TP_METHODS
+    # vNext M4: the grasp providers TSA handles are TP's, and run TP's own node (never a detector_node)
+    assert set(tp_registry()['grasp_providers']) == set(catalog.TSA_TP_GRASP_PROVIDERS)
+    for name in catalog.TSA_TP_GRASP_PROVIDERS:
+        spec = P.DetectorSpec(name='x', method=name)
+        assert spec.is_grasp_provider and not spec.emits_node and not spec.launches_external_node
     for m in E.DetectionMethod:
         if m.value in methods:      # a node is emitted exactly for the pure-python ones
             assert P.DetectorSpec(name='x', method=m).emits_node is (

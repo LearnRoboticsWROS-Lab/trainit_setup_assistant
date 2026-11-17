@@ -108,6 +108,11 @@ class VisionGuidedMotion(PickAndPlace):
             if per.detector_by_name(b.detector) is None:
                 problems.append(f'waypoint "{wp.name}" binds unknown detector '
                                 f'"{b.detector}"')
+            elif per.detector_by_name(b.detector).produces_instances:
+                # vNext M4.5: an external segmenter publishes an instance image, never detections
+                problems.append(f'waypoint "{wp.name}" binds "{b.detector}", an external segmenter '
+                                '(produces: instances): it publishes an instance image for a grasp '
+                                'provider, never detections a waypoint can follow')
             if b.orientation.startswith('from:'):
                 ref = b.orientation.split(':', 1)[1]
                 if ref not in names:

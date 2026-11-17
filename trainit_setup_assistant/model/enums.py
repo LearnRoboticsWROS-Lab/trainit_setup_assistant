@@ -158,11 +158,21 @@ class DetectionMethod(StrEnum):
                  (``vision_msgs/Detection3DArray``); config only, never a file upload.
     PCL_CLUSTER: external-node seam (roadmap) — a C++ PCL node publishing the same
                  contract; the assistant emits NO detector_node for it.
+    SURFACE_GRASP: a trainit_perception GRASP PROVIDER (vNext M4, ``tp.surface_grasp``):
+                 its own node (``surface_grasp_node``) publishes grasp CANDIDATES
+                 (trainit_interfaces/GraspCandidateArray, ADR-0026), never detections;
+                 a detect step samples it with ``source: candidates``.
+    SCRIPTED_GRASP: a trainit_perception GRASP PROVIDER (vNext M4.5, ``tp.scripted``): its own
+                 node (``scripted_grasp_node``) publishes the candidates of a SCENARIO file,
+                 one step per capture -- the mock cell's stand-in for a measured provider
+                 behind the same runtime surface (M4_5_DESIGN.md §12).
     """
 
     COLOR_MASK = 'color_mask'
     CUSTOM = 'custom'
     PCL_CLUSTER = 'pcl_cluster'
+    SURFACE_GRASP = 'surface_grasp'
+    SCRIPTED_GRASP = 'scripted_grasp'
 
 
 # WHICH candidate the detector publishes FIRST -- and therefore the RANKING. ADR-0016 Decision 1

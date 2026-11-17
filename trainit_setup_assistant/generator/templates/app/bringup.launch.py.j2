@@ -75,6 +75,11 @@ def launch_setup(context, *args, **kwargs):
 {% if gazebo_supported %}
                 "mode": mode,
 {% endif %}
+{% if perception_nodes is defined and perception_nodes %}
+                # the cell stays up after the tree ends (the perception nodes with it), as it does
+                # for an application without perception: only a standalone trainit_bt launch ends
+                "end_with_tree": "false",
+{% endif %}
             }.items())]))
     return actions
 

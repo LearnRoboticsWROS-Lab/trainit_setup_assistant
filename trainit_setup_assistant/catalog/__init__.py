@@ -329,7 +329,9 @@ TMR_BT_NODES = ('MoveWaypoint', 'ServoTrack', 'OpenGripper', 'CloseGripper', 'En
                 'DetectCandidates', 'SetWaypointFromCandidate')
 # BehaviorTree.CPP's own nodes TSA emits, and the tags of the tree file itself: no TMR floor
 BT_BUILTIN_NODES = ('root', 'BehaviorTree', 'Sequence', 'Fallback', 'Sleep', 'Script', 'Repeat',
-                    'RetryUntilSuccessful', 'SubTree')
+                    'RetryUntilSuccessful', 'SubTree',
+                    'AlwaysFailure',   # vNext M4.5: the task program's terminal branches (ADR-0024 amendment M4.5)
+                    'Inverter')        # TSA 8.7.0 (M4.5b): the presence capture's "nothing present" (amendment M4.5b)
 # The one placeholder the floors table admits, for a row whose TMR commit does not exist yet
 # (test_runtime_requirements.py names every row that still carries it). vNext M2.6 used it until
 # the TMR 2.0.0 commit adf94b0; no row carries it since.
@@ -391,6 +393,26 @@ TMR_FLOORS = {
     # ADR-0028: a pose waypoint's taught joint configuration (the entry key `configuration`) is honoured
     # since 5635584 (TMR 2.6.0); an older TMR ignores the key -- the configuration silently dropped
     'pose_configuration': ('2.6.0', '5635584', "a pose's taught joint configuration (ADR-0028)"),
+    # vNext M4 (ADR-0026 amendment M4), used by a task program grasping from a grasp provider: DetectCandidates'
+    # capture (trigger), SetWaypointFromCandidate's orientation="candidate" and its max_tilt_deg envelope arrived
+    # with TMR 2.8.0; an older TMR refuses the orientation mode and IGNORES the other two attributes -- the
+    # silent case a floor exists for
+    'candidate_capture': ('2.8.0', '7d01f5b', "DetectCandidates' trigger (a capture of a grasp producer)"),
+    'candidate_orientation': ('2.8.0', '7d01f5b',
+                              "SetWaypointFromCandidate orientation=\"candidate\" (the producer's own orientation)"),
+    'grasp_envelope': ('2.8.0', '7d01f5b', "SetWaypointFromCandidate max_tilt_deg (the orientation envelope)"),
+    # TSA 8.6.2 (the M4.5 independent review), used by a task program under faults: stop and / or with a payload:
+    # AttachObject / DetachObject report a planning-scene update move_group refused (their `fault`), AttachObject
+    # carries touch_links, SetWaypointFromCandidate faults a configuration refusal -- TMR 2.8.1; an older TMR
+    # refuses the unknown ports when it builds the tree
+    'scene_fault': ('2.8.1', '532c0d3', "AttachObject / DetachObject's fault output"),
+    'attach_touch_links': ('2.8.1', '532c0d3', "AttachObject touch_links"),
+    'candidate_fault': ('2.8.1', '532c0d3', "SetWaypointFromCandidate's fault output"),
+    # TSA 8.8.0 (vNext M4.5d, ADR-0024 amendment M4.5d), used by a faults: stop task program that grips: MoveWaypoint /
+    # FollowPath `holding` -- a motion failing while a part is held is a FAULT (TMR 2.9.0); an older TMR refuses the
+    # unknown port when it builds the tree
+    'held_motion_fault': ('2.9.0', 'f3e374e', "MoveWaypoint / FollowPath holding (a held part's failed "
+                                                         "motion is a fault)"),
 }
 # The TMR_FLOORS rows only a CANONICAL package can be given -- one whose bt_params carry the
 # end-effector contract's eef block (ADR-0022, its amendment M2.7; ADR-0021 amendment G0): a
@@ -403,7 +425,9 @@ EEF_CONTRACT_CAPABILITIES = ('VerifyGrasp', 'CommandActuator', 'detect_fault', '
 # had before them.
 TASK_PROGRAM_CAPABILITIES = ('FollowPath', 'waypoint_canonical_keys', 'move_goal_tolerance',
                              'ProcessEvent', 'detect_trigger', 'follow_path_range', 'path_events',
-                             'DetectCandidates', 'SetWaypointFromCandidate', 'pose_configuration')
+                             'DetectCandidates', 'SetWaypointFromCandidate', 'pose_configuration',
+                             'candidate_capture', 'candidate_orientation', 'grasp_envelope',
+                             'scene_fault', 'attach_touch_links', 'candidate_fault', 'held_motion_fault')
 
 
 # --- the end-effector ADAPTER rows (ADR-0022 D6) ------------------------------------------------
@@ -446,7 +470,7 @@ EEF_ADAPTER_ROWS = {
         name='TrainIt mock end-effector adapter', modes=('mock',), serves=EEF_INTERFACES,
         kinds=EEF_KINDS, provides=EEF_CAPABILITY_TOKENS, provides_if={},
         evidence=('sensor', 'sim_ground_truth', 'actuation_inference'),
-        evidence_configurable=True, default_evidence='sensor', binding_keys=(), requires=(),
+        evidence_configurable=True, default_evidence='sensor', binding_keys=('outcomes',), requires=(),
         flavours=(), package=HARDWARE_LAYER, executable='mock_eef_adapter', since='0.2.0',
         maturity='development',
         evidence_text='ADR-0022 D8: serves every actuator on its standard interface at the '
@@ -504,6 +528,16 @@ EEF_BRIDGE_ROLES = (
     dict(package=HARDWARE_LAYER, executable='mock_camera', role='camera',
          why='the mock camera'),
 )
+# vNext M4.5: the mock adapter's scripted grasp OUTCOME SEQUENCE per site (trainit_hardware_layer 0.4.0,
+# ``mock.sites.<s>.outcomes``: the n-th applied engage takes the n-th outcome, the last one repeats) -- the binding
+# key ``outcomes: {<site>: [<outcome>, ...]}`` of a ``trainit_mock`` binding; ``unavailable`` is not allowed in a
+# sequence (a site's deciding source is fixed at start-up). Typed here under the same exception (M2.6-1) as the
+# rows above; a bundle that writes one pins the hardware layer at the release that reads it.
+EEF_MOCK_OUTCOMES = ('held', 'not_held', 'pending', 'lost_after', 'stale_after', 'unknown')
+EEF_MOCK_SEQUENCE_SINCE = '0.4.0'
+# the binding keys whose value is a MAPPING (edited in the project file, never in a one-line GUI field)
+EEF_MAPPING_BINDING_KEYS = ('outcomes',)
+
 # The legacy name of the suction pseudo-joint echo (hardware layer contracts/gripper.md), used
 # when no joint-state merger names one: the adapter publishes the echo there, as the legacy bridge
 # did (ADR-0022 D7: relative under a cell namespace).
@@ -521,7 +555,18 @@ TP_HEADER = (
 
 _TP_KEYS = ('schema_version', 'trainit_perception', 'provides', 'detector_methods', 'auto',
             'rules', 'default_preference', 'terms', 'faces', 'default_face', 'face_size_band_m',
-            'param_since')
+            'param_since', 'grasp_providers')
+# vNext M4: a GRASP PROVIDER is a TP node of its own publishing trainit_interfaces/GraspCandidateArray
+# (ADR-0026); its record: the node, what it produces, the grasp modes, the segmentation methods it can fit
+# on, its parameter schema (a required parameter and a gate / tool number carry no default) and its release.
+# vNext M4.5 (TP 0.7.0): the schemas of its segmentation SOURCES that are not TP detector methods
+# (``segmentation_parameters``: {source: {parameters, since}}, e.g. ``instance_topic``, an external segmenter's
+# instance image) and of its workspace ``eligibility`` filter ({parameters, since}, or {} = none)
+_TP_PROVIDER_KEYS = ('node', 'produces', 'grasp_modes', 'segmentation_methods', 'segmentation_parameters',
+                     'eligibility', 'parameters', 'since')
+# vNext M4.5 (TP 0.7.0): ``str_list`` (a list of names, e.g. the classes an instance source keeps) and
+# ``polygon_px`` (a workspace polygon in colour pixels, [[u, v], ...])
+_TP_PROVIDER_TYPES = ('str', 'int', 'float', 'vec3', 'str_list', 'polygon_px')
 _TP_KINDS = ('pure_python', 'external_node')
 _TP_TYPES = ('str', 'int', 'float', 'range')
 _TOKEN = re.compile(r'^[a-z][a-z0-9_]*$')
@@ -543,6 +588,22 @@ _NO_DEFAULT = re.compile(r'^(pose_quality_|min_pose_quality|tool_)')
 #             filters the wizard's form writes -- their floor was a TSA literal until vNext M2.2
 #   form      the colour-mask parameters the wizard's form edits
 TSA_TP_METHODS = {'color_mask': 'pure_python', 'pcl_cluster': 'external_node'}
+# vNext M4: the grasp providers TSA's DetectionMethod handles (a perception.yaml entry of that method launches
+# the provider's own node); and the parameters TSA itself reads from one (the eef / site check, the PreGrasp)
+# vNext M4.5: the SCRIPTED provider (``tp.scripted``, TP 0.7.0) -- candidates from a scenario file, the mock
+# cell's stand-in for a measured provider behind the same runtime surface (M4_5_DESIGN.md §12).
+TSA_TP_GRASP_PROVIDERS = ('surface_grasp', 'scripted_grasp')
+# PER PROVIDER (vNext M4.5): a provider's parameters are its own. The scripted provider's eef / site come
+# from its scenario's candidates, so TSA reads none of the surface-grasp ones from it.
+TSA_GRASP_PROVIDER_PARAMS = {
+    'surface_grasp': ('eef', 'site', 'grasp_mode', 'standoff_m', 'approach_cone_deg', 'contact_radius_m'),
+    'scripted_grasp': ('scenario_file', 'frame_id', 'after_end'),
+}
+# vNext M4.5: the segmentation SOURCE (not a TP detector method) and the eligibility parameters TSA's own code
+# names for a provider that declares them (model/perception.py validates an entry against them)
+TSA_TP_SEGMENTATION_SOURCES = {'surface_grasp': ('instance_topic',)}
+TSA_TP_INSTANCE_SOURCE_PARAMS = ('source', 'classes', 'max_objects')
+TSA_TP_ELIGIBILITY_PARAMS = ('roi_px', 'min_inside', 'z_min_m', 'z_max_m')
 TSA_OWN_METHODS = ('custom',)
 TSA_REQUIRED_TP_RULES = ('detector_order', 'score', 'candidate_2d3d', 'candidate_x_visible',
                          'candidate_x_nonoverlap', 'candidate_x_clearance', 'candidate_x_square',
@@ -570,8 +631,16 @@ TP_TIERS = {
              'candidate_x_visible_x_square': 'pro_candidate', 'score_x_visible': 'pro_candidate',
              'score_x_nonoverlap': 'pro_candidate', 'score_x_clearance': 'pro_candidate'},
     'face': {'disc': 'pro_candidate', 'rect': 'pro_candidate', 'cylinder_side': 'pro_candidate'},
+    # vNext M4 (decision PA-11, owner pre-authorized by the M4 conditional GO): the surface-grasp provider is
+    # the surface-grasp family, classified as its rules and faces are; public under the distribution decision
+    'grasp_provider': {'surface_grasp': 'pro_candidate',
+                       # vNext M4.5 (decision PA45, owner pre-authorized by the M4.5 GO): the scripted provider
+                       # measures nothing and carries no grasp IP -- a mock-cell test stand-in replaying a
+                       # scenario file -- so it is Community, like the basic deterministic ranking
+                       'scripted_grasp': 'community_candidate'},
 }
-_TIER_SECTIONS = (('method', 'detector_methods'), ('rule', 'rules'), ('face', 'faces'))
+_TIER_SECTIONS = (('method', 'detector_methods'), ('rule', 'rules'), ('face', 'faces'),
+                  ('grasp_provider', 'grasp_providers'))
 
 
 def tp_registry_text(record: dict) -> str:
@@ -675,6 +744,47 @@ def _registry_problems(record) -> List[str]:
             out.append(f'term {name!r}: needs undated parameters {req["positive_params"]!r}')
     if record['default_face'] not in faces:
         out.append(f'default_face {record["default_face"]!r} is not a declared face')
+    for name, prov in _mapping(out, record, 'grasp_providers').items():
+        if not isinstance(prov, dict) or tuple(prov) != _TP_PROVIDER_KEYS:
+            out.append(f'grasp provider {name!r}: keys {list(prov) if isinstance(prov, dict) else prov}')
+            continue
+        if name in record['detector_methods']:
+            out.append(f'grasp provider {name!r} has a detector method\'s name')
+        if not _TOKEN.match(str(prov['node'])) or prov['produces'] != 'grasp_candidates':
+            out.append(f'grasp provider {name!r}: node {prov["node"]!r} / produces {prov["produces"]!r}')
+        if not _tokens(prov['grasp_modes']) or not prov['grasp_modes']:
+            out.append(f'grasp provider {name!r}: grasp_modes {prov["grasp_modes"]!r}')
+        sources = prov['segmentation_parameters']
+        if not isinstance(sources, dict) or not all(isinstance(k, str) and _TOKEN.match(k) for k in sources):
+            out.append(f'grasp provider {name!r}: segmentation_parameters is not a mapping of names')
+            sources = {}
+        if not _tokens(prov['segmentation_methods']) or not set(prov['segmentation_methods']) <= (
+                set(record['detector_methods']) | set(sources)):
+            out.append(f'grasp provider {name!r}: segmentation_methods {prov["segmentation_methods"]!r} are not '
+                       f'declared methods or segmentation sources')
+        for source in sources:
+            if source in record['detector_methods'] or source not in (prov['segmentation_methods'] or ()):
+                out.append(f'grasp provider {name!r}: segmentation source {source!r} has a detector method\'s name, '
+                           'or is not one of its segmentation_methods')
+        sections = [(f'segmentation source {k!r}', v) for k, v in sources.items()]
+        if prov['eligibility'] != {}:
+            sections.append(('eligibility', prov['eligibility']))
+        for what, sec in sections:
+            if not isinstance(sec, dict) or set(sec) != {'parameters', 'since'} or not isinstance(
+                    sec['parameters'], dict) or not _RELEASE.match(str(sec['since'])):
+                out.append(f'grasp provider {name!r}: {what} is not {{parameters, since}} dated with a release')
+                continue
+            for key, row in sec['parameters'].items():
+                out += [f'grasp provider {name!r} {what} parameter {key!r}: {p}'
+                        for p in _provider_parameter_problems(key, row)]
+        if not _RELEASE.match(str(prov['since'])):
+            out.append(f'grasp provider {name!r}: since {prov["since"]!r} is not a release')
+        params = prov['parameters']
+        if not isinstance(params, dict):
+            out.append(f'grasp provider {name!r}: parameters is not a mapping')
+            continue
+        for key, row in params.items():
+            out += [f'grasp provider {name!r} parameter {key!r}: {p}' for p in _provider_parameter_problems(key, row)]
     band = record['face_size_band_m']
     if not (isinstance(band, list) and len(band) == 2 and all(_is_number(b) for b in band)
             and 0.0 < band[0] < band[1]):
@@ -706,6 +816,35 @@ def _parameter_problems(key: str, row) -> List[str]:
     if not (_is_number(default) or (isinstance(default, str) and _TOKEN.match(default))
             or (isinstance(default, list) and all(_is_number(v) for v in default))):
         out.append(f'default {default!r} is not a number, a list of numbers or a name')
+    for bound in ('min', 'max'):
+        if bound in row and not _is_number(row[bound]):
+            out.append(f'{bound} {row[bound]!r} is not a number')
+    if 'choices' in row and not _tokens(row['choices']):
+        out.append(f'choices {row["choices"]!r} are not names')
+    return out
+
+
+def _provider_parameter_problems(key: str, row) -> List[str]:
+    if not _TOKEN.match(str(key)):
+        return ['not a name']
+    if not isinstance(row, dict) or not {'type'} <= set(row) <= {'type', 'default', 'min', 'max', 'choices',
+                                                                 'required'}:
+        return [f'keys {sorted(row) if isinstance(row, dict) else row}']
+    out = []
+    if row['type'] not in _TP_PROVIDER_TYPES:
+        out.append(f'type {row["type"]!r} not in {_TP_PROVIDER_TYPES}')
+    if 'required' in row and row['required'] is not True:
+        out.append('required is written only as true')
+    if 'default' in row:
+        if row.get('required') or re.match(r'^(pose_quality_|min_|tool_)', key):
+            out.append('a required, gate or tool parameter carries a default across the boundary')
+        d = row['default']
+        if not (_is_number(d) or (isinstance(d, str) and _TOKEN.match(d))
+                or (isinstance(d, list) and all(_is_number(v) for v in d))
+                or (row['type'] == 'str_list' and isinstance(d, list) and _tokens(d))):
+            out.append(f'default {d!r} is not a number, a list of numbers or a name')
+    elif not row.get('required') and not re.match(r'^(pose_quality_|min_|tool_)', key):
+        out.append('an optional parameter without a default')
     for bound in ('min', 'max'):
         if bound in row and not _is_number(row[bound]):
             out.append(f'{bound} {row[bound]!r} is not a number')
@@ -768,6 +907,30 @@ def tp_vocabulary_problems(record: dict) -> List[str]:
     form = (methods.get('color_mask') or {}).get('parameters') or {}
     out += [f'colour-mask parameter {k!r} is gone, and the wizard\'s form edits it'
             for k in TSA_COLOR_MASK_FORM if k not in form]
+    providers = record['grasp_providers']
+    for name in providers:
+        if name not in TSA_TP_GRASP_PROVIDERS:
+            out.append(f'grasp provider {name!r} is one TSA\'s DetectionMethod does not handle yet')
+        elif name in TSA_TP_METHODS or name in TSA_OWN_METHODS:
+            out.append(f'grasp provider {name!r} has the name of a detector method')
+    for name in TSA_TP_GRASP_PROVIDERS:
+        if name not in providers:
+            out.append(f'grasp provider {name!r} is absent, and TSA\'s DetectionMethod needs it')
+            continue
+        prov = providers[name]
+        out += [f'grasp provider {name!r} parameter {k!r} is gone, and TSA reads it' for k in
+                TSA_GRASP_PROVIDER_PARAMS[name] if k not in prov['parameters']]
+        for source in TSA_TP_SEGMENTATION_SOURCES.get(name, ()):
+            if source not in prov['segmentation_methods'] or source not in prov['segmentation_parameters']:
+                out.append(f'grasp provider {name!r}: segmentation source {source!r} is gone, and TSA names it')
+                continue
+            got = prov['segmentation_parameters'][source]['parameters']
+            out += [f'grasp provider {name!r} segmentation source {source!r} parameter {k!r} is gone, and TSA '
+                    'reads it' for k in TSA_TP_INSTANCE_SOURCE_PARAMS if k not in got]
+        if name in TSA_TP_SEGMENTATION_SOURCES:          # the provider whose eligibility TSA validates
+            got = (prov['eligibility'] or {}).get('parameters') or {}
+            out += [f'grasp provider {name!r} eligibility parameter {k!r} is gone, and TSA reads it'
+                    for k in TSA_TP_ELIGIBILITY_PARAMS if k not in got]
     return out
 
 
@@ -803,7 +966,8 @@ def tp_drift(snapshot: Optional[dict], live: dict) -> List[str]:
             out.append(f'TP registry drift: {key} is {live.get(key)!r} in TP but '
                        f'{snapshot.get(key)!r} in TSA snapshot')
     for section, what in (('detector_methods', 'method'), ('rules', 'rule'), ('terms', 'term'),
-                          ('faces', 'face'), ('param_since', 'parameter floor')):
+                          ('faces', 'face'), ('param_since', 'parameter floor'),
+                          ('grasp_providers', 'grasp provider')):
         old, new = snapshot.get(section) or {}, live.get(section) or {}
         gone = [k for k in old if k not in new]
         came = [k for k in new if k not in old]

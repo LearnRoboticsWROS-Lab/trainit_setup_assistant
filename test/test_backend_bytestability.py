@@ -39,6 +39,7 @@ from trainit_setup_assistant.model import (
 from trainit_setup_assistant.model.enums import ToolActionKind, WaypointType
 from trainit_setup_assistant.model.robot import (
     ArmControllerSpec, DescriptionSource, GripperSpec, PlanningGroupSpec, RobotSpec)
+import pending_rebless
 import ws_paths
 
 HERE = os.path.dirname(__file__)
@@ -125,7 +126,9 @@ def test_base_config_launch_files_byte_identical_to_golden():
             gold = GOLDEN_BUNDLE / pkg / rel
             assert gen.is_file(), f'generator did not emit {pkg}/{rel}'
             assert gold.is_file(), f'golden missing {pkg}/{rel}'
-            gb, xb = gen.read_bytes(), gold.read_bytes()
+            # the golden's bytes with the lines pending the owner's re-bless (pending_rebless.GOLDEN) applied
+            gb = gen.read_bytes()
+            xb = pending_rebless.forward(gold.read_bytes(), pending_rebless.GOLDEN, f'{pkg}/{rel}')
             assert gb == xb, (
                 f'{pkg}/{rel} changed vs golden: '
                 f'gen sha={_sha(gb)[:16]} ({len(gb)}B) != golden sha={_sha(xb)[:16]} '

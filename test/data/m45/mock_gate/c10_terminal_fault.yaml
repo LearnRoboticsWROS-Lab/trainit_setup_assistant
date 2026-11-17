@@ -1,0 +1,8 @@
+# vNext M4.5 mock product gate (test_m45_mock_gate.py): a tp.scripted scenario, one step per capture Trigger.
+# Candidates in base_link, tool down (orientation xyzw [1, 0, 0, 0], approach -Z), 6 cm over the table, inside the
+# bin area under bin_view (0.45, 0.25, 0.3). The bundle's after_end decides what follows the last step.
+# case 10: two candidates; the grasp state is UNKNOWN (outcomes [unknown]): an end-effector FAULT
+steps:
+  - candidates:
+      - {id: a, position: [0.45, 0.25, 0.06], approach: [0, 0, -1], orientation: [1, 0, 0, 0], standoff_m: 0.05, eef: main, site: main, score: 0.9, object_class: capsule}
+      - {id: b, position: [0.40, 0.20, 0.06], approach: [0, 0, -1], orientation: [1, 0, 0, 0], standoff_m: 0.05, eef: main, site: main, score: 0.8, object_class: capsule}

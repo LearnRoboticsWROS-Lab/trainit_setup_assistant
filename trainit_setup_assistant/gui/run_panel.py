@@ -2,12 +2,14 @@
 
 Before a command starts, the panel shows its exact line (``$ ...``), which the user can copy and run
 themselves. The output follows in the log, each line tagged with its process (``[isaac] ...``), and the
-runner's verdict (``BT finished: SUCCESS``) is highlighted. One status line per command says whether it
+runner's verdict (``BT finished: SUCCESS``) is highlighted, with the run's OUTCOME and what the operator does next
+(M4.5d owner acceptance F8: a PICKABLE_EXHAUSTED stop read as a hang). One status line per command says whether it
 was started, runs or ended (owner Test A.2: with one shared state line, Isaac "running" hid that the
 planning environment was never started). The panel launches and observes only."""
 
 from __future__ import annotations
 
+import html
 from typing import Callable, List, Optional, Tuple
 
 from python_qt_binding.QtWidgets import (QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout,
@@ -51,6 +53,7 @@ class RunPanel(QWidget):
         self.log.setMaximumBlockCount(5000)
         v.addWidget(self.log, 1)
         self.verdict: Optional[str] = None
+        self.outcome: Optional[str] = None          # "<CODE> -- <operator text>", from the run's OUTCOME line
         self._show_status()
 
     # ---- actions ------------------------------------------------------------
@@ -76,6 +79,7 @@ class RunPanel(QWidget):
             return
         if command.kind == 'run':
             self.verdict = None
+            self.outcome = None
         self.log.appendPlainText(f'$ {command.display()}')
         self.state.setText(f'{command.title}: running')
         self.status[command.kind] = 'running'
@@ -86,10 +90,25 @@ class RunPanel(QWidget):
         if kind not in self.actions:
             return
         self.log.appendPlainText(f'[{kind}] {text}')
+        if kind == 'run' and 'OUTCOME: ' in text:
+            self.outcome = text.split('OUTCOME: ', 1)[1].strip()
+            self._show_verdict()
         if BT_SUCCESS in text or BT_FAILURE in text:
             self.verdict = BT_SUCCESS if BT_SUCCESS in text else BT_FAILURE
+            self._show_verdict()
+
+    def _show_verdict(self) -> None:
+        parts = []
+        if self.verdict is not None:
             ok = self.verdict == BT_SUCCESS
-            self.state.setText(f'<b style="color:{"#2e7d32" if ok else "#c62828"}">{self.verdict}</b>')
+            parts.append(f'<b style="color:{"#2e7d32" if ok else "#c62828"}">{self.verdict}</b>')
+        if self.outcome:
+            code, _, why = self.outcome.partition(' -- ')
+            action = why.startswith('OPERATOR ACTION:')
+            parts.append(f'<b>OUTCOME: {html.escape(code)}</b>'
+                         + (f'<br><span style="color:{"#c62828" if action else "#424242"}">{html.escape(why)}</span>'
+                            if why else ''))
+        self.state.setText('<br>'.join(parts))
 
     def finished(self, kind: str, code: int) -> None:
         if kind not in self.actions:

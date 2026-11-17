@@ -317,7 +317,9 @@ class GraspForm(_IdiomForm):
         self.mode.setCurrentIndex(1 if body.get('candidates') else 0)
         fill(self.at, ctx['waypoints'], body.get('at') or '')
         fill(self.candidates, ctx['sets'], body.get('candidates') or '')
-        self.index.setValue(int(body.get('index') or 0))
+        # vNext M4.5: 'index: all' (every candidate, best first) is kept as written: the spin box shows 0
+        self._every = body.get('index') == 'all'
+        self.index.setValue(0 if self._every else int(body.get('index') or 0))
         fill(self.orientation_from, ctx['waypoints'], body.get('orientation_from') or '')
         self._fill_idiom(body, ctx)
         self._shape(self.mode.currentIndex())
@@ -330,7 +332,9 @@ class GraspForm(_IdiomForm):
         else:
             body.pop('at', None)
             body['candidates'] = self.candidates.currentText().strip()
-            if 'index' in body or self.index.value() != 0:      # a stated index 0 stays stated
+            if getattr(self, '_every', False) and self.index.value() == 0:
+                body['index'] = 'all'                           # vNext M4.5: kept unless a candidate is chosen
+            elif 'index' in body or self.index.value() != 0:    # a stated index 0 stays stated
                 body['index'] = self.index.value()
             body['orientation_from'] = self.orientation_from.currentText()
         self._write_idiom(body)

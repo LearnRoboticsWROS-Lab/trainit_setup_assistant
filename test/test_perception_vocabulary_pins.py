@@ -75,7 +75,11 @@ RULE_TERMS_7_3 = {
 # --- the enums -------------------------------------------------------------------------------
 
 def test_detection_method_is_exactly_7_3_0s():
-    assert [(m.name, m.value) for m in E.DetectionMethod] == METHODS_7_3
+    # 7.3.0's members, unchanged and first; vNext M4 appended ONE: the grasp provider surface_grasp; vNext M4.5
+    # appended ONE: the scripted grasp provider
+    members = [(m.name, m.value) for m in E.DetectionMethod]
+    assert members[:len(METHODS_7_3)] == METHODS_7_3
+    assert members[len(METHODS_7_3):] == [('SURFACE_GRASP', 'surface_grasp'), ('SCRIPTED_GRASP', 'scripted_grasp')]
 
 
 def test_every_rule_of_7_3_0_keeps_its_name_value_and_relative_order():
@@ -121,7 +125,8 @@ def test_the_default_rule_preference():
 def test_what_each_method_provides():
     got = {k.value: (None if v is None else set(v)) for k, v in P.METHOD_PROVIDES.items()}
     assert got == {'color_mask': {'score', 'box_px', 'mask_area_px'}, 'custom': None,
-                   'pcl_cluster': None}
+                   'pcl_cluster': None, 'surface_grasp': None,     # vNext M4: a provider, no detections
+                   'scripted_grasp': None}                          # vNext M4.5: likewise
 
 
 def test_the_terms_of_every_rule_of_7_3_0():
@@ -228,7 +233,11 @@ def test_the_wizard_lists_7_3_0s_methods_and_rules(qapp):
     assert [tuple(m) for m in PerceptionPage.METHODS] == [
         ('color_mask', 'Colour mask (HSV)', True), ('shape_mask', 'Shape mask (contours)', False),
         ('pcl_cluster', 'PCL 3D cluster (C++ node)', False),
-        ('custom', 'Custom node (expert)', False)]
+        ('custom', 'Custom node (expert)', False),
+        # vNext M4: appended, greyed (a grasp provider is configured in the project file)
+        ('surface_grasp', 'SurfaceGrasp grasp provider (project file)', False),
+        # vNext M4.5: appended, greyed (likewise)
+        ('scripted_grasp', 'Scripted grasp provider, mock tests (project file)', False)]
     assert [tok for tok, _ in PerceptionPage.RULES[:10]] == [   # the GUI's own order
         'auto', 'candidate_x_visible', 'score_x_visible', 'candidate_2d3d',
         'candidate_x_nonoverlap', 'score_x_nonoverlap', 'candidate_x_clearance',

@@ -43,9 +43,11 @@ from ..model.capabilities import (CapabilityRefusal, CartesianLimits, MotionRequ
                                   SegmentRequest, candidate_providers, check_blend_geometry,
                                   check_provider_choices, project_cartesian_limits, resolve)
 from ..model.end_effector import EndEffectorCapability
-from ..model.enums import AppType, Backend, MotionType, WaypointType
+from ..model.enums import AppType, Backend, DetectionMethod, MotionType, WaypointType
 from ..model.motion import MotionConstraints, MotionIntent, PathContinuity
-from ..model.program import (CHANNEL_KINDS, CONTROL_KINDS, AnchorWhen, DetectSource, EventKind,
+from ..model.program import (CHANNEL_KINDS, CONTROL_KINDS, FAULTS_STOP, INDEX_ALL, ON_FAILURE_RETREAT,
+                             ORIENTATION_ALIGN_APPROACH, AnchorWhen, DetectSource,
+                             EventKind,
                              GraspExpectation, ProcessEventSpec, RelativeFrame, TaskDataType, TaskProgram,
                              TaskWaypoint, walk_steps)
 from .base import ApplicationTemplate, scene_dims_key, scene_pos_key
@@ -69,6 +71,86 @@ STEP_NAME_PREFIX = 'trainit_step:'
 CAPTURE_PREFIX = 'captures'
 # the blackboard names the runner itself sets (bt_context.hpp): no capture may write them
 RESERVED_BB_KEYS = ('trainit_context', 'trainit_profiles', 'ros_node', 'trainit_paths')
+# vNext M4.5 (ADR-0024 amendment M4.5), the composition keys -- '__' is TSA's (no waypoint, candidate set or
+# capture key holds it), no leading '_' (BehaviorTree.CPP keeps such a key private to its tree: _autoremap would
+# not carry it between the tasks):
+# the FAULT GATE (application.faults: stop): every `fault` output the tree's nodes write
+GATE_KEY = 'trainit__fault'
+#: TSA 8.8.0 (vNext M4.5d, ADR-0024 amendment M4.5d): the runtime's HELD state of a faults: stop program that grips.
+#: True after a close (and its verified hold), false after a hold verification that fails and after every open;
+#: every MoveWaypoint / FollowPath reads it (TMR 2.9.0 `holding`): a motion that fails while a part is held is a
+#: FAULT whatever its cause -- never a verdict a fallback, a retry or the next candidate consumes with the part
+#: still in the gripper.
+HOLD_KEY = 'trainit__holding'
+# the reason of the latest detect (repeat until: nothing_to_pick): reset before each detect and at the start of
+# each control body, so it says NO_CANDIDATES only when the latest failure was a fresh empty detection
+DETECT_REASON_KEY = 'trainit__detect'
+NO_CANDIDATES = 'NO_CANDIDATES'
+# TSA 8.7.0 (vNext M4.5b, ADR-0024 amendment M4.5b): the run's OUTCOME under faults: stop with a repeat `until` --
+# one value of OUTCOMES, logged once as "OUTCOME: <code>" when the run ends ('' = none of the defined ends)
+OUTCOME_KEY = 'trainit__outcome'
+# the presence capture's out_key (DetectObject writes <key>.position, ...)
+PRESENCE_KEY = 'trainit__presence'
+BIN_EMPTY = 'BIN_EMPTY'                        # SUCCESS: a fresh presence capture found no object
+PICKABLE_EXHAUSTED = 'PICKABLE_EXHAUSTED'      # FAILURE, not a fault: objects remain, none has a valid grasp
+RECOVERY_EXHAUSTED = 'RECOVERY_EXHAUSTED'      # FAILURE: the bounded recovery ran out
+TERMINAL_FAULT = 'TERMINAL_FAULT'              # FAILURE: a fault (the gate) ended the run
+NOTHING_PICKABLE = 'NOTHING_PICKABLE'          # SUCCESS: no candidate left, presence not configured (8.6.x)
+SUCCESS_OUTCOMES = (BIN_EMPTY, NOTHING_PICKABLE)
+FAILURE_OUTCOMES = (PICKABLE_EXHAUSTED, RECOVERY_EXHAUSTED)
+OUTCOMES = (BIN_EMPTY, PICKABLE_EXHAUSTED, RECOVERY_EXHAUSTED, TERMINAL_FAULT, NOTHING_PICKABLE)
+# M4.5d owner acceptance F8: each OUTCOME line says what the OPERATOR does next ("OUTCOME: <code> -- <text>"; the
+# code stays the first word after "OUTCOME: ", which is what tools and the TSA run panel read). XML-safe text.
+OPERATOR_TEXT = {
+    BIN_EMPTY: 'the bin is empty, the run is complete. Refill the bin to run again',
+    NOTHING_PICKABLE: 'no candidate left and no presence check is configured: the bin may still hold parts no '
+                      'grasp can reach. Check the bin',
+    PICKABLE_EXHAUSTED: 'OPERATOR ACTION: parts remain but none can be grasped safely (refused by the perception, '
+                        'e.g. too close to a wall, covered or tilted). Rearrange or remove them, then restart',
+    RECOVERY_EXHAUSTED: 'OPERATOR ACTION: a step kept failing after its retries (the last failure is logged above). '
+                        'Check the cell, then restart',
+    TERMINAL_FAULT: 'OPERATOR ACTION: a fault stopped the run (the reason is logged above). Clear it, check that '
+                    'the tool is empty, then restart',
+}
+# what a retreat that failed without a fault of its own writes into the gate (a failed retreat is a fault)
+RETREAT_FAILED = 'RETREAT_FAILED'
+# TSA 8.6.1: what a release with `on_failure: retreat` writes into the gate when it fails BEFORE its release pose was
+# reached -- the part is still held (the transport to the place, or the approach to the release pose, failed), so
+# the tool is not opened and the cycle must not run again with a part in the gripper: a FAULT (the run stops),
+# unless a node already gave its own fault. TSA 8.6.2 (the M4.5 review): "reached" is the release pose, no longer
+# the PreRelease -- a refused approach LIN from the PreRelease no longer opens the tool at the standoff
+PLACE_UNREACHABLE_WHILE_HOLDING = 'PLACE_UNREACHABLE_WHILE_HOLDING'
+# TSA 8.6.2 (the M4.5 review): under faults: stop with a payload, the run starts by proving the tool empty (VerifyGrasp
+# released at each payload site, where the device can observe a release) -- a failure that says the tool holds or is
+# still engaged (a verdict, or HELD_AT_START_REASONS) is this FAULT: a part still held from an earlier run is never
+# carried into a new cycle; any other fault (the state cannot be read: STATE_UNKNOWN, STATE_STALE, ...) keeps its own
+# reason -- the run stops either way. Then the payload is detached (a phantom attached object an earlier run left in
+# the planning scene is cleared; idempotent when there is none)
+HOLDING_AT_START = 'HOLDING_AT_START'
+# the VerifyGrasp released faults that mean "held / engaged" (TMR verify_grasp.cpp): not released in time, or the
+# grip's newest command is still an engage
+HELD_AT_START_REASONS = ('RELEASE_NOT_CONFIRMED', 'NO_RELEASE_COMMAND')
+# the TMR nodes TSA emits that have a `fault` output (bt_nodes.cpp): each writes the gate under faults: stop.
+# TSA 8.6.2: AttachObject / DetachObject (a planning-scene update move_group refused) and SetWaypointFromCandidate (a
+# configuration refusal) have one since TMR 2.8.1 -- the floor 'scene_fault' / 'candidate_fault' (catalog TMR_FLOORS)
+FAULT_NODES = ('MoveWaypoint', 'FollowPath', 'DetectCandidates', 'DetectObject', 'CloseGripper', 'OpenGripper',
+               'VerifyGrasp', 'CommandActuator', 'AttachObject', 'DetachObject', 'SetWaypointFromCandidate')
+
+
+#: TSA 8.7.0 (vNext M4.5b): the trainit_perception release whose grasp providers publish the objects a presence capture
+#: reads (/perception/<name>/objects, TP contracts/perception.md "Objects present"). An OUTPUT, so TP's vocabulary
+#: (which dates parameters) carries no date for it: the floor is kept here, beside the one feature that needs it
+PRESENCE_TP_SINCE = '0.7.0'
+
+
+def presence_providers(program) -> List[str]:
+    """TSA 8.7.0: the grasp providers a program's ``repeat: {until, presence}`` steps capture, in program order."""
+    out: List[str] = []
+    for task in (program.tasks if program is not None else []):
+        for _, s in walk_steps(task.steps):
+            if s.repeat is not None and s.repeat.presence and s.repeat.presence not in out:
+                out.append(s.repeat.presence)
+    return out
 
 
 def task_tree_id(task: str) -> str:
@@ -190,6 +272,19 @@ class StepPlan:
     call: Optional[str] = None
     count: Optional[int] = None
     bodies: List[List['StepPlan']] = field(default_factory=list)
+    # vNext M4.5 (ADR-0024 amendment M4.5): a repeat's declared normal end; a grasp's alternatives (one idiom per
+    # literal candidate index, `index: all`), its retreat's nodes and the key saying its PreGrasp was reached
+    # (TSA 8.6.1: a release with `on_failure: retreat` too -- its one idiom, its retreat, its PreRelease key)
+    until: Optional[str] = None
+    where: str = ''                              # vNext M4.5: the step as a log line names it
+    # TSA 8.7.0 (vNext M4.5b): the until end's presence capture -- the provider's name and its DetectObject
+    presence: str = ''
+    presence_node: str = ''
+    alternatives: List[List[str]] = field(default_factory=list)
+    retreat: List[str] = field(default_factory=list)
+    reached: str = ''
+    # TSA 8.6.1: the fault a failure BEFORE the reached key was set writes into the gate ('' = none: a grasp)
+    unreached_fault: str = ''
 
 
 def iter_plans(steps: Sequence[StepPlan]):
@@ -219,6 +314,11 @@ class CandidateSet:
     projected: Optional[bool]
     origin: str                                  # what produced it, as a message says it
     input: Optional[str] = None                  # the input of the task it is, unchanged
+    # vNext M4: the (eef, site) a GRASP PROVIDER states its candidates are for; None = not known here
+    for_site: Optional[Tuple[str, str]] = None
+    # vNext M4.5: produced by a GRASP PROVIDER (any: surface_grasp, scripted_grasp) -- its grasps need the
+    # fail-closed orientation envelope whether or not TSA knows the eef / site the candidates are for
+    from_provider: bool = False
 
 
 @dataclass
@@ -273,6 +373,10 @@ class ProgramPlan:
     process_controller: str = 'mock'             # vNext M3.5: 'ros' iff a process event uses a channel
     bound_entries: List[str] = field(default_factory=list)   # vNext M3.6: the entries the idioms derive
     running: List[str] = field(default_factory=list)  # vNext M3.7: main_task and the tasks it calls
+    # TSA 8.6.2 (the M4.5 review): what MainTree runs before the main task under faults: stop with a payload --
+    # each payload site's VerifyGrasp released (HOLDING_AT_START when held / engaged), then each payload's DetachObject
+    start_verify: List[str] = field(default_factory=list)
+    start_detach: List[str] = field(default_factory=list)
 
 
 # --- small geometry -------------------------------------------------------------------------------
@@ -407,6 +511,9 @@ class _Planner:
         self._gone: Dict[str, str] = {}          # set name -> the call that replaced it (messages)
         self._cyclic: set = set()                # the tasks of a refused call cycle (checks skipped)
         self._entry_path: Dict[str, Tuple[str, PathPlan]] = {}   # task -> the path it starts with
+        # vNext M4.5: the fault policy, and the grasp sites whose grasps attach a payload (their opens detach it)
+        self.stops_on_fault = self.program.faults == FAULTS_STOP
+        self._payload_sites: set = set()
 
     # -- helpers --
     def refuse(self, text: str) -> None:
@@ -899,6 +1006,15 @@ class _Planner:
             return False
         if det.emits_node:
             return True                          # trainit_perception's detector_node serves /detect
+        if det.produces_instances:
+            self.refuse(f"R-M3-16: {where}: '{name}' is an external segmenter (produces: instances): it publishes an "
+                        'instance image for a grasp provider, never detections, so a capture cannot sample it')
+            return False
+        if det.is_grasp_provider:
+            self.refuse(f"R-M3-16: {where}: '{name}' is a grasp provider ({det.method.value}): it publishes grasp "
+                        'candidates, never detections, so a capture event cannot sample it -- a detect step with '
+                        "source: candidates and 'trigger: true' captures it")
+            return False
         ext = det.external_node
         if ext is not None and ext.detect_service:
             return True
@@ -1239,15 +1355,43 @@ class _Planner:
             self.refuse(f"R-M3-03: {where}: no detector is named '{d.detector}' (perception.detectors: "
                         f'{known})')
             return None
-        if not det.emits_node and det.external_node is None:
+        if det.produces_instances:
+            # vNext M4.5: an external segmenter's instance image is a grasp provider's INPUT, never a candidate set
+            self.refuse(f"R-M3-03: {where}: '{d.detector}' is an external segmenter (produces: instances): it "
+                        'publishes an instance image (/perception/<name>/instances) for a grasp provider, never '
+                        'detections or candidates -- detect from the grasp provider whose segmentation.params.source '
+                        'names it')
+            return None
+        if not det.emits_node and not det.is_grasp_provider and det.external_node is None:
             self.refuse(f"R-M3-03: {where}: no node of this bundle runs detector '{d.detector}' (an "
                         'external-node method without an external_node block)')
             return None
         if d.source is DetectSource.CANDIDATES and det.emits_node:
             self.refuse(f"R-M3-03: {where}: detector '{d.detector}' is trainit_perception's detector node, "
                         'which publishes DETECTIONS, not grasp candidates: use source: detections '
-                        '(projected onto the candidate contract), or declare the grasp producer as an '
-                        'external node')
+                        '(projected onto the candidate contract), a grasp provider (method: surface_grasp), '
+                        'or declare the grasp producer as an external node')
+            return None
+        if det.is_grasp_provider:
+            if d.source is not DetectSource.CANDIDATES:
+                self.refuse(f"R-M3-03: {where}: '{d.detector}' is a grasp provider ({det.method.value}): it publishes "
+                            'grasp CANDIDATES, never detections -- use source: candidates')
+                return None
+            eef, site = det.params.get('eef'), det.params.get('site')
+            # vNext M4.5: every provider's set is marked (the fail-closed envelope); the eef / site only when the
+            # entry states them -- a scripted provider's come from its scenario file, which TSA does not read
+            sets[d.out] = CandidateSet(d.keep, False, 'its detect step', from_provider=True,
+                                       for_site=(eef, site) if isinstance(eef, str) and isinstance(site, str)
+                                       else None)
+        if det.method is DetectionMethod.SCRIPTED_GRASP and not d.trigger:
+            # vNext M4.5: the scripted provider publishes ONLY on its capture trigger (one scenario step per call)
+            self.refuse(f"R-M3-03: {where}: '{d.detector}' is a scripted grasp provider: it publishes one scenario "
+                        "step per capture and nothing otherwise -- set 'trigger: true'")
+            return None
+        if d.trigger and not (det.emits_node or det.is_grasp_provider
+                              or (det.external_node is not None and det.external_node.detect_service)):
+            self.refuse(f"R-M3-03: {where}: trigger: true calls /perception/{d.detector}/detect, and nothing "
+                        f"says '{d.detector}' serves it (an external node declares detect_service: true)")
             return None
         timeout = d.timeout_ms or (per.detect_timeout_ms if per else 3000)
         attrs = (f'source="{d.source.value}" detector="{d.detector}" '
@@ -1257,11 +1401,15 @@ class _Planner:
             attrs += f' class_id="{d.class_id}"'
         if d.approach is not None:
             attrs += ' default_approach="' + ';'.join(f'{v:.12g}' for v in d.approach) + '"'
+        if d.trigger:
+            attrs += ' trigger="true"'
         if d.source is DetectSource.CANDIDATES:
             how = f"the grasp candidates of '{d.detector}'"
         else:
             how = (f"the detections of '{d.detector}', projected onto grasp candidates (approach = "
                    f'-normal; without a normal {_vec_text(d.approach)})')
+        if d.trigger:
+            how += ' (a capture: sampled on demand, only a result stamped after it began)'
         how += f': the first {d.keep} in its order -> candidate set `{d.out}`'
         return StepPlan('detect', f'<DetectCandidates {attrs}/>', summary=('--', how, '--'))
 
@@ -1275,10 +1423,24 @@ class _Planner:
                                   MotionType.LIN, g.approach_profile),
                  self._bound_move(task, index, f'{where} Retract', f'{task}__s{_slot(index)}_retract',
                                   MotionType.LIN, g.approach_profile)]
+        retreating = g.on_failure == ON_FAILURE_RETREAT
+        if retreating:
+            # vNext M4.5: the retreat goes back to the PreGrasp along the approach -- a LIN of approach_profile, to
+            # an entry of its own (the PreGrasp's entry is the transfer's PTP)
+            moves.append(self._bound_move(task, index, f'{where} Retreat', f'{task}__s{_slot(index)}_retreat',
+                                          MotionType.LIN, g.approach_profile))
+            if not self.stops_on_fault:
+                self.refuse(f"R-M3-13: {where}: 'on_failure: retreat' needs 'faults: stop' in the application: a "
+                            'retreat that fails is a FAULT, and without the fault gate a fault would be retried and '
+                            'recovered like a verdict -- add application.faults: stop')
+                return None
         if dev is None or None in moves:
             return None
-        pre, grasp, retract = (m.waypoint for m in moves)
+        pre, grasp, retract = (m.waypoint for m in moves[:3])
+        retreat = moves[3].waypoint if retreating else None
         r = g.retract
+        if g.payload is not None and self._payload_problem(where, site):
+            return None
         if g.at is None:
             name = g.candidates if g.candidates is not None else (list(sets)[-1] if sets else None)
             held = sets.get(name) if name is not None else None
@@ -1291,48 +1453,176 @@ class _Planner:
                 self.refuse(f"R-M3-13: {where}: no detect step earlier in task '{task}' produces {what}"
                             + (f' -- {gone}' if gone else ''))
                 return None
-            if not self._grasp_needs(where, name, held, g.index, g.standoff_m is None):
+            every = g.index == INDEX_ALL
+            if every and held.keep is None:
+                self.refuse(f"R-M3-13: {where}: 'index: all' tries every candidate '{name}' keeps, and TSA cannot know "
+                            f'how many that is ({held.origin}): TSA unrolls the literal indices 0 .. keep-1 -- grasp '
+                            "in the task whose detect step produces the set, or name a literal 'index'")
                 return None
-            ref = self.target(g.orientation_from, f'{where} orientation_from')
-            if ref is None:
+            if not self._grasp_needs(where, name, held, 0 if every else g.index, g.standoff_m is None):
                 return None
-            if ref.type != 'tcp' or (ref.frame and ref.frame != self.robot.base_frame):
-                self.refuse(f"R-M3-05: {where}: orientation_from '{g.orientation_from}' must be a TCP pose "
-                            f"in the robot's base frame '{self.robot.base_frame}' (the frame the "
-                            'candidates are resolved in): align_approach tilts its orientation onto the '
-                            'approach')
+            if held.for_site is not None and held.for_site != (dev.id, site.id):
+                self.refuse(f"R-M3-13: {where}: the candidates of '{name}' are for {held.for_site[0]}/"
+                            f"{held.for_site[1]} (its grasp provider's eef / site), and this grasp uses "
+                            f"{dev.id}/{site.id}: a candidate for another site is never executed with this one")
                 return None
-            attrs = (f'from="{name}" index="{g.index}" grasp="{grasp}" pregrasp="{pre}" '
+            if g.orientation_from is not None:
+                ref = self.target(g.orientation_from, f'{where} orientation_from')
+                if ref is None:
+                    return None
+                if ref.type != 'tcp' or (ref.frame and ref.frame != self.robot.base_frame):
+                    self.refuse(f"R-M3-05: {where}: orientation_from '{g.orientation_from}' must be a TCP pose "
+                                f"in the robot's base frame '{self.robot.base_frame}' (the frame the "
+                                'candidates are resolved in): align_approach tilts its orientation onto the '
+                                'approach, and the envelope measures the tilt from it')
+                    return None
+            if (held.for_site is not None or held.from_provider) and g.max_tilt_deg is None:
+                # FAIL-CLOSED (the M3.6 owner requirement, vNext M4 review): a grasp provider's candidates are
+                # arbitrary measured surfaces -- the provider's cone bounds them in the CAMERA frame, and only
+                # max_tilt_deg bounds the wrist re-orientation from the taught reference in the robot's
+                self.refuse(f"R-M3-13: {where}: a grasp from a grasp provider's candidates ('{name}') needs "
+                            "'max_tilt_deg' and 'orientation_from': the fail-closed orientation envelope -- the "
+                            'largest tilt of the approach from the taught reference that this cell accepts (no '
+                            'default angle exists)')
+                return None
+            attrs = (f'from="{name}" index="{{index}}" grasp="{grasp}" pregrasp="{pre}" '
                      f'retract="{retract}"')
             if g.standoff_m is not None:
                 attrs += f' standoff_m="{_fmt(g.standoff_m)}"'
             attrs += (f' retract_along_approach="{_fmt(r.along_approach)}"' if r.along_approach is not None
                       else f' retract_dz="{_fmt(r.dz)}"')
-            attrs += (f' orientation="align_approach" orientation_from="{g.orientation_from}" '
-                      f'eef="{dev.id}" site="{site.id}"')
-            nodes = [f'<SetWaypointFromCandidate {attrs}/>']
-            src = f"candidate {g.index} of '{name}'"
+            mode = g.orientation or ORIENTATION_ALIGN_APPROACH
+            attrs += f' orientation="{mode}"'
+            if g.orientation_from is not None:
+                attrs += f' orientation_from="{g.orientation_from}"'
+            if g.max_tilt_deg is not None:
+                attrs += f' max_tilt_deg="{_fmt(g.max_tilt_deg)}"'
+            attrs += f' eef="{dev.id}" site="{site.id}"'
+            indices = list(range(held.keep)) if every else [g.index]
+            binders = [f'<SetWaypointFromCandidate {attrs.format(index=i)}/>' for i in indices]
+            src = (f"every candidate of '{name}' ({held.keep}, best first)" if every
+                   else f"candidate {g.index} of '{name}'")
+            how_o = (f"align_approach on '{g.orientation_from}'" if mode == ORIENTATION_ALIGN_APPROACH
+                     else "the candidate's own orientation")
+            if g.max_tilt_deg is not None:
+                how_o += f", tilt <= {_fmt(g.max_tilt_deg)} deg from '{g.orientation_from}'"
             for mp, role in zip(moves, ('PreGrasp', 'the grasp pose (Approach)', 'Retract')):
                 self._bind(mp.waypoint, {'type': 'tcp'}, mp,
                            f"{role} of task '{task}' step {index}: set at run time from {src} "
-                           f"(SetWaypointFromCandidate, orientation align_approach on '{g.orientation_from}')")
-            target_text = f'{src} (TCP orientation: align_approach on `{g.orientation_from}`)'
+                           f"(SetWaypointFromCandidate, orientation {how_o})")
+            if retreating:
+                self._bind(retreat, {'type': 'tcp'}, moves[3],
+                           f"Retreat of task '{task}' step {index}: the PreGrasp '{pre}', copied at run time "
+                           '(SetWaypointRelative) when a grasp that reached it fails')
+            target_text = (f'{src} (TCP orientation: align_approach on `{g.orientation_from}`)'
+                           if mode == ORIENTATION_ALIGN_APPROACH and g.max_tilt_deg is None
+                           else f'{src} (TCP orientation: {how_o})')
         else:
             if not self._taught(where, g.at, g.standoff_m, r, ('PreGrasp', 'the grasp pose', 'Retract'),
-                                moves, task, index):
+                                moves[:3], task, index):
                 return None
-            nodes = []
+            if retreating:
+                keys, _ = self.bound[pre]
+                pose = {k: v for k, v in keys.items() if k in ('type', 'position', 'orientation', 'frame')}
+                self._bind(retreat, pose, moves[3],
+                           f"Retreat of task '{task}' step {index}: the PreGrasp '{pre}' (resolved by TSA), "
+                           'reached along the approach when a grasp that reached it fails')
+            binders = [None]
             z = _rotate(self.targets[g.at].orientation, (0.0, 0.0, 1.0))
             target_text = f'`{g.at}` (taught; its approach is its tool +Z = {_vec_text(_round_vec(z))})'
-        nodes += [f'<MoveWaypoint waypoint="{pre}"/>', f'<MoveWaypoint waypoint="{grasp}"/>']
-        nodes += close_nodes(dev, site.id)
-        nodes.append(f'<MoveWaypoint waypoint="{retract}"/>')
+        reached = f'{task}__s{_slot(index)}_at_pregrasp' if retreating else ''
+
+        def idiom(binder: Optional[str]) -> List[str]:
+            nodes = [f'<Script code="{reached} := 0"/>'] if retreating else []
+            nodes += [binder] if binder else []
+            nodes.append(f'<MoveWaypoint waypoint="{pre}"/>')
+            if retreating:
+                nodes.append(f'<Script code="{reached} := 1"/>')
+            nodes.append(f'<MoveWaypoint waypoint="{grasp}"/>')
+            nodes += close_nodes(dev, site.id)
+            if g.payload is not None:
+                nodes.append(self._attach_node(g.payload, site))
+            nodes.append(f'<MoveWaypoint waypoint="{retract}"/>')
+            return nodes
+
+        alternatives = [idiom(b) for b in binders]
+        back: List[str] = []
+        if retreating:
+            back = open_nodes(self.project, dev, site.id, held_guard=False) + self._detach_nodes(site)
+            if g.at is None:
+                back.append(f'<SetWaypointRelative waypoint="{retreat}" from="{pre}"/>')
+            back.append(f'<MoveWaypoint waypoint="{retreat}"/>')
         how = (f'PreGrasp PTP ({g.profile}) {_standoff_text(g.standoff_m)} -> Approach LIN '
                f"({g.approach_profile}) -> close site '{site.id}'"
                + (' -> verify held' if dev.require_grasp_confirmation else '')
-               + f' -> Retract LIN {_retract_text(r)}')
-        return StepPlan('grasp', nodes=nodes, summary=(target_text, how, _limits_of(moves)),
-                        bound_moves=moves)
+               + (f' -> attach the payload {_vec_text(g.payload.dims)} m' if g.payload is not None else '')
+               + f' -> Retract LIN {_retract_text(r)}'
+               + ('; on failure after the PreGrasp: open, back to the PreGrasp LIN '
+                  f'({g.approach_profile}), then fail' if retreating else ''))
+        if len(alternatives) > 1:
+            how = f'each candidate in turn until one succeeds: {how}'
+        sp = StepPlan('grasp', nodes=alternatives[0], summary=(target_text, how, _limits_of(moves)),
+                      bound_moves=moves)
+        if len(alternatives) > 1 or retreating:
+            sp.alternatives, sp.retreat, sp.reached = alternatives, back, reached
+        return sp
+
+    # -- the held object (vNext M4.5, ADR-0024 amendment M4.5) --
+    @staticmethod
+    def payload_id(site) -> str:
+        """The planning-scene id of the object a grasp site holds: one per site, so a release detaches it."""
+        return f'held_{site.id}'
+
+    def _payload_problem(self, where: str, site) -> bool:
+        clash = [o.id for o in self.project.scene.objects if o.id == self.payload_id(site)]
+        if clash:
+            self.refuse(f"R-M3-13: {where}: the payload is attached to the planning scene as "
+                        f"'{self.payload_id(site)}', and a scene object has that id: rename the scene object")
+            return True
+        return False
+
+    def _attach_node(self, payload, site) -> str:
+        """TSA 8.6.2 (the M4.5 review): ``touch_links`` -- the attach link and the cell's links nearest the tool
+        (``scene.touch_links``, derived from the robot), which legitimately touch the held part (TMR 2.8.1)."""
+        offset = payload.offset if payload.offset is not None else [0.0, 0.0, 0.0]
+        touch = list(dict.fromkeys([site.tcp] + list(self.project.scene.touch_links)))
+        return (f'<AttachObject id="{self.payload_id(site)}" link="{site.tcp}" '
+                f'dims="{";".join(_fmt(v) for v in payload.dims)}" position="{";".join(_fmt(v) for v in offset)}" '
+                f'touch_links="{";".join(touch)}"/>')
+
+    def _start_nodes(self) -> Dict[str, List[str]]:
+        """TSA 8.6.2 (the M4.5 review): under ``faults: stop`` with a payload, what MainTree runs before the main task
+        -- a part still held, or a phantom attached object, never survives into a new run. Per payload site (the
+        device's order): VerifyGrasp released (held / engaged: HOLDING_AT_START, a state fault its own reason) where
+        the device observes a release on every deployed backend (else it cannot be proven: the detach only), then
+        its DetachObject (idempotent: SUCCESS with nothing attached)."""
+        dev = canonical_device(self.project)
+        if not self.stops_on_fault or dev is None or not self._payload_sites:
+            return {}
+        modes = [Backend(m) for m in self.project.deployment.modes]
+        observes = dev.provides_everywhere(EndEffectorCapability.RELEASE_DETECTION.value, modes)
+        sites = [s for s in dev.sites if s.id in self._payload_sites]
+        return {'start_verify': [verify_grasp(dev, s.id, 'released') for s in sites] if observes else [],
+                'start_detach': [n for s in sites for n in self._detach_nodes(s)]}
+
+    def _detach_nodes(self, site) -> List[str]:
+        """After an open of a site whose grasps attach a payload: the held object leaves the planning scene."""
+        if site.id not in self._payload_sites:
+            return []
+        return [f'<DetachObject id="{self.payload_id(site)}" link="{site.tcp}"/>']
+
+    def _scan_payloads(self) -> None:
+        """The grasp sites whose grasps attach a payload (planned before the tasks: a release may be planned
+        before the grasp it follows -- a called task is planned before its callers)."""
+        dev = canonical_device(self.project)
+        if dev is None:
+            return
+        for t in self.program.tasks:
+            for _, s in walk_steps(t.steps):
+                if s.grasp is not None and s.grasp.payload is not None:
+                    site = dev.site(s.grasp.site) if s.grasp.site is not None else dev.default_site()
+                    if site is not None:
+                        self._payload_sites.add(site.id)
 
     def _taught(self, where, at, standoff, r, roles, moves, task, index) -> bool:
         """A taught target's PreGrasp (or PreRelease) and Retract, resolved now: along its tool +Z --
@@ -1374,25 +1664,65 @@ class _Planner:
                                   MotionType.LIN, rel.approach_profile),
                  self._bound_move(task, index, f'{where} Retract', f'{task}__s{_slot(index)}_retract',
                                   MotionType.LIN, rel.approach_profile)]
+        retreating = rel.on_failure == ON_FAILURE_RETREAT
+        if retreating:
+            # TSA 8.6.1 (the M4.5 Isaac benchmark): the release's retreat mirrors the grasp's -- back to the
+            # PreRelease along the approach, a LIN of approach_profile to an entry of its own
+            moves.append(self._bound_move(task, index, f'{where} Retreat', f'{task}__s{_slot(index)}_retreat',
+                                          MotionType.LIN, rel.approach_profile))
+            if not self.stops_on_fault:
+                self.refuse(f"R-M3-13: {where}: 'on_failure: retreat' needs 'faults: stop' in the application: a "
+                            'retreat that fails is a FAULT, and without the fault gate a fault would be retried and '
+                            'recovered like a verdict -- add application.faults: stop')
+                return None
         if dev is None or None in moves:
             return None
         if not self._taught(where, rel.at, rel.standoff_m, rel.retract,
-                            ('PreRelease', 'the release pose', 'Retract'), moves, task, index):
+                            ('PreRelease', 'the release pose', 'Retract'), moves[:3], task, index):
             return None
-        pre, at, retract = (m.waypoint for m in moves)
-        nodes = [f'<MoveWaypoint waypoint="{pre}"/>', f'<MoveWaypoint waypoint="{at}"/>']
+        pre, at, retract = (m.waypoint for m in moves[:3])
+        # TSA 8.6.2 (the M4.5 review): the marker says the RELEASE POSE was reached -- set after the approach LIN,
+        # not after the PreRelease: a failure anywhere before it (the PTP to the PreRelease, the approach LIN) is
+        # PLACE_UNREACHABLE_WHILE_HOLDING with the tool closed; only a failure AT the release pose (the held guard's
+        # OBJECT_LOST, the open, the retract) retreats -- opens, detaches, goes back to the PreRelease
+        reached = f'{task}__s{_slot(index)}_at_release' if retreating else ''
+        nodes = [f'<Script code="{reached} := 0"/>'] if retreating else []
+        nodes.append(f'<MoveWaypoint waypoint="{pre}"/>')
+        nodes.append(f'<MoveWaypoint waypoint="{at}"/>')
+        if retreating:
+            nodes.append(f'<Script code="{reached} := 1"/>')
         held_first = bool(dev.require_grasp_confirmation) and continuous_everywhere(self.project, dev)
         nodes += open_nodes(self.project, dev, site.id, held_guard=True)
+        detach = self._detach_nodes(site)
+        nodes += detach
         nodes.append(f'<MoveWaypoint waypoint="{retract}"/>')
+        back: List[str] = []
+        if retreating:
+            keys, _ = self.bound[pre]
+            pose = {k: v for k, v in keys.items() if k in ('type', 'position', 'orientation', 'frame')}
+            self._bind(moves[3].waypoint, pose, moves[3],
+                       f"Retreat of task '{task}' step {index}: the PreRelease '{pre}' (resolved by TSA), "
+                       'reached along the approach when a release that reached its release pose fails')
+            # the tool left safe: opened without the held guard (the part may be gone), the release confirmation
+            # the contract requires kept, the payload detached -- then back to the PreRelease
+            back = (open_nodes(self.project, dev, site.id, held_guard=False) + detach
+                    + [f'<MoveWaypoint waypoint="{moves[3].waypoint}"/>'])
         how = (f'PreRelease PTP ({rel.profile}) {_standoff_text(rel.standoff_m)} -> Approach LIN '
                f'({rel.approach_profile})' + (' -> verify held' if held_first else '')
                + f" -> open site '{site.id}'"
                + (' -> verify released' if dev.require_release_confirmation else '')
-               + f' -> Retract LIN {_retract_text(rel.retract)}')
+               + (' -> detach the payload' if detach else '')
+               + f' -> Retract LIN {_retract_text(rel.retract)}'
+               + ('; on failure at the release pose: open, back to the PreRelease LIN '
+                  f'({rel.approach_profile}), then fail; before it (the part still held): the fault '
+                  f'{PLACE_UNREACHABLE_WHILE_HOLDING}' if retreating else ''))
         z = _rotate(self.targets[rel.at].orientation, (0.0, 0.0, 1.0))
         target = f'`{rel.at}` (taught; its approach is its tool +Z = {_vec_text(_round_vec(z))})'
-        return StepPlan('release', nodes=nodes, summary=(target, how, _limits_of(moves)),
-                        bound_moves=moves)
+        sp = StepPlan('release', nodes=nodes, summary=(target, how, _limits_of(moves)), bound_moves=moves)
+        if retreating:
+            sp.alternatives, sp.retreat, sp.reached = [nodes], back, reached
+            sp.unreached_fault = PLACE_UNREACHABLE_WHILE_HOLDING
+        return sp
 
     def plan_tool(self, task: str, index: str, step) -> Optional[StepPlan]:
         t = step.tool
@@ -1457,9 +1787,10 @@ class _Planner:
         else:
             # no held guard: a plain open is valid with nothing held (a cycle start); the guard belongs to the
             # release idiom, or to an explicit 'tool: {verify: {expect: held}}' step (architecture review M1)
-            nodes = open_nodes(self.project, dev, site.id, held_guard=False)
+            nodes = open_nodes(self.project, dev, site.id, held_guard=False) + self._detach_nodes(site)
             how = (f"open site '{site.id}' (no motion)"
-                   + (' -> verify released' if dev.require_release_confirmation else ''))
+                   + (' -> verify released' if dev.require_release_confirmation else '')
+                   + (' -> detach the payload' if site.id in self._payload_sites else ''))
         return StepPlan('tool', nodes=nodes, summary=('--', how, '--'))
 
     # -- the program --
@@ -1478,6 +1809,7 @@ class _Planner:
                             'runtime carries no joint goal tolerance (position_m and orientation_rad '
                             'only)')
         self.resolve_waypoints()
+        self._scan_payloads()
 
         paths: Dict[str, PathPlan] = {}
         for path in program.paths:
@@ -1820,6 +2152,19 @@ class _Planner:
         body = bodies[0]
         count = step.repeat.cycles if kind == 'repeat' else step.retry.attempts
         sp.count = count
+        if kind == 'repeat' and step.repeat.until is not None:
+            self._check_until(f"task '{task.name}' step {index} (repeat until {step.repeat.until})", body)
+            sp.until, sp.where = step.repeat.until, f'task {task.name} step {index}'
+            if step.repeat.presence is not None:
+                sp.presence = step.repeat.presence
+                sp.presence_node = self._presence_node(
+                    f"task '{task.name}' step {index} (repeat until {step.repeat.until}, presence "
+                    f'{step.repeat.presence})', step.repeat.presence, body)
+        elif kind == 'repeat' and step.repeat.presence is not None:
+            self.refuse(f"R-M3-07: task '{task.name}' step {index} (repeat, presence {step.repeat.presence}): "
+                        "'presence' tells an empty bin from parts no grasp can serve at the repeat's NORMAL end, and "
+                        "this repeat declares none -- add 'until: nothing_to_pick' (with application.faults: stop), "
+                        'or remove presence')
         end = self._exit(body, flow.at)
         entry = flow.copy()
         if count != 1:                     # a later run sees the sets the body wrote in the run before
@@ -1841,6 +2186,51 @@ class _Planner:
         flow.why = entry.why if flow.at is None else ''
         flow.sets, flow.captures = entry.sets, entry.captures
         return sp
+
+    def _check_until(self, where: str, body) -> None:
+        """vNext M4.5: ``until: nothing_to_pick`` reads the reason of a detect step of the body (or of a task it
+        calls, directly or not: a called task shares the application's blackboard), and needs the fault gate."""
+        if not self.stops_on_fault:
+            self.refuse(f"R-M3-07: {where}: 'until: nothing_to_pick' needs 'faults: stop' in the application: only "
+                        'with the fault gate can a FRESH empty detection be told from a fault (a silent or stale '
+                        'producer, a motion or end-effector fault), which must never read as an empty bin -- add '
+                        'application.faults: stop')
+        if not self._reaches_detect(body, set()):
+            self.refuse(f"R-M3-07: {where}: no detect step runs in its body (nor in a task it calls): 'until: "
+                        "nothing_to_pick' ends the repeat on a fresh detection that found no candidate -- add the "
+                        'detect step to the body, or remove until')
+
+    def _presence_node(self, where: str, name: str, body) -> str:
+        """TSA 8.7.0 (vNext M4.5b): the PRESENCE capture of ``repeat: {until, presence: <name>}`` -- TMR's existing
+        DetectObject on the provider's objects (``/perception/<name>/objects``, TP 0.7.0), triggered through the
+        provider's own capture service, in the program's target frame, keep 1, the timeout of the body's detect
+        step on that provider (else the perception default). '' when refused."""
+        per = self.project.perception
+        det = per.detector_by_name(name) if per else None
+        if det is None or not det.is_grasp_provider:
+            known = ', '.join(x.name for x in (per.detectors if per else []) if x.is_grasp_provider) or 'none'
+            what = 'no perception entry is named so' if det is None else (
+                f'it is a {det.method.value} entry, not a trainit_perception grasp provider')
+            self.refuse(f"R-M3-07: {where}: presence '{name}': {what} -- a presence capture reads the objects a "
+                        f'grasp provider (method surface_grasp or scripted_grasp) publishes beside its candidates '
+                        f'(grasp providers here: {known})')
+            return ''
+        timeout = next((s.detect.timeout_ms for _, s in walk_steps(body)
+                        if s.detect is not None and s.detect.detector == name and s.detect.timeout_ms), None)
+        timeout = timeout or (per.detect_timeout_ms if per else 3000)
+        return (f'<DetectObject detector="{name}" topic="/perception/{name}/objects" trigger="true" '
+                f'target_frame="{self.robot.base_frame}" timeout_ms="{timeout}" keep="1" '
+                f'out_key="{PRESENCE_KEY}"/>')
+
+    def _reaches_detect(self, steps, seen: set) -> bool:
+        for _, s in walk_steps(steps):
+            if s.detect is not None:
+                return True
+            if s.task is not None and s.task not in seen and s.task in self._tasks:
+                seen.add(s.task)
+                if self._reaches_detect(self._tasks[s.task].steps, seen):
+                    return True
+        return False
 
     def _first_path(self, task, steps, prefix: str):
         """The path a list of steps runs before any other motion, as (where, its plan); None when a
@@ -2022,7 +2412,7 @@ class _Planner:
             start_tolerance=runtime.allowed_start_tolerance if runtime else None,
             limits=self._limits, warnings=list(self.warnings),
             process_controller='ros' if channels else 'mock', bound_entries=list(self.bound),
-            running=running)
+            running=running, **self._start_nodes())
 
 
 def _merged(values: Sequence[CandidateSet], origin: str) -> CandidateSet:
@@ -2239,6 +2629,8 @@ def program_overview(program: TaskProgram) -> str:
                  + 'the registry defaults')
     if program.runtime is not None and program.runtime.allowed_start_tolerance is not None:
         lines.append(f'Start-state tolerance: {program.runtime.allowed_start_tolerance} rad')
+    if program.faults is not None:
+        lines.append(f'Faults: {program.faults} (a fault ends the run, never retried or recovered)')
     return '\n'.join(lines)
 
 
@@ -2282,10 +2674,12 @@ def _overview_steps(program: TaskProgram, steps, prefix: str, pad: int) -> List[
             lines.append(f'{sp}{n}  detect {d.source.value} of {d.detector} -> {d.out} (keep {d.keep})')
         elif step.grasp is not None:
             g = step.grasp
-            lines.append(f'{sp}{n}  {g.describe()}, profiles {g.profile} / {g.approach_profile}')
+            extra = (', on failure retreat' if g.on_failure else '') + (', with a payload' if g.payload else '')
+            lines.append(f'{sp}{n}  {g.describe()}, profiles {g.profile} / {g.approach_profile}{extra}')
         elif step.release is not None:
             r = step.release
-            lines.append(f'{sp}{n}  {r.describe()}, profiles {r.profile} / {r.approach_profile}')
+            extra = ', on failure retreat' if r.on_failure else ''
+            lines.append(f'{sp}{n}  {r.describe()}, profiles {r.profile} / {r.approach_profile}{extra}')
         elif step.tool is not None:
             t = step.tool
             if t.actuate is not None:
@@ -2300,7 +2694,10 @@ def _overview_steps(program: TaskProgram, steps, prefix: str, pad: int) -> List[
             lines.append(f'{sp}{n}  task  {step.task} (call)')
         elif step.repeat is not None:
             c = step.repeat.cycles
-            lines.append(f'{sp}{n}  repeat ' + ('until a step fails' if c == -1 else f'{c} cycles') + ':')
+            end = ', until nothing is left to pick' if step.repeat.until else ''
+            if step.repeat.until and step.repeat.presence:       # TSA 8.7.0 (vNext M4.5b)
+                end += f' (then a presence capture of {step.repeat.presence}: an empty bin or parts left)'
+            lines.append(f'{sp}{n}  repeat ' + ('until a step fails' if c == -1 else f'{c} cycles') + end + ':')
             lines += _overview_steps(program, step.repeat.body, label, pad + 4)
         elif step.retry is not None:
             lines.append(f'{sp}{n}  retry, {step.retry.attempts} tries at most:')
@@ -2378,12 +2775,17 @@ def program_tree_xml(project: CanonicalProject, plan: ProgramPlan) -> str:
                            f'dims="{{{scene_dims_key(obj.id)}}}" '
                            f'position="{{{scene_pos_key(obj.id)}}}"/>')
     # _autoremap: a task's nodes read the waypoints and the runtime from the root blackboard
-    out.append(f'      <SubTree ID="{task_tree_id(plan.main_task)}" _autoremap="true"/>')
+    call = f'<SubTree ID="{task_tree_id(plan.main_task)}" _autoremap="true"/>'
+    gating = _Gating.of(project.application.program, plan)
+    if gating is None:
+        out.append(f'      {call}')
+    else:
+        out += gating.main_lines(call, '      ')
     out += ['    </Sequence>', '  </BehaviorTree>']
     for task in project.application.program.tasks:
         out.append(f'  <BehaviorTree ID="{task_tree_id(task.name)}">')
         out.append('    <Sequence>')
-        out += _steps_xml(plan.tasks[task.name], '      ')
+        out += _steps_xml(plan.tasks[task.name], '      ', gating)
         out += ['    </Sequence>', '  </BehaviorTree>']
     out.append('</root>')
     return '\n'.join(out) + '\n'
@@ -2393,35 +2795,286 @@ def program_tree_xml(project: CanonicalProject, plan: ProgramPlan) -> str:
 _CONTROL_XML = {'repeat': ('Repeat', 'num_cycles'), 'retry': ('RetryUntilSuccessful', 'num_attempts')}
 
 
-def _steps_xml(steps: Sequence[StepPlan], indent: str) -> List[str]:
+@dataclass(frozen=True)
+class _Gating:
+    """vNext M4.5 (ADR-0024 amendment M4.5): what the composition additions change in the tree. None = none is
+    used: the tree is exactly the M3.7 / D0.5 one.
+
+    ``gate`` (``application.faults: stop``): every ``fault`` output is remapped to GATE_KEY, reset when the run
+    starts; every retry body and every fallback alternative carries ``_failureIf`` on it (a FAULT is never
+    retried, recovered or read as "nothing to pick"); MainTree logs the reason and ends with FAILURE.
+    ``until`` (a ``repeat`` with ``until: nothing_to_pick``): every DetectCandidates writes its ``reason`` to
+    DETECT_REASON_KEY, reset before each detect and as the first step of every control body."""
+
+    gate: bool
+    until: bool
+
+    start_verify: Tuple[str, ...] = ()
+    start_detach: Tuple[str, ...] = ()
+    holding: bool = False
+
+    @staticmethod
+    def of(program: TaskProgram, plan: ProgramPlan) -> Optional['_Gating']:
+        gate = program.faults == FAULTS_STOP
+        until = any(sp.until for steps in plan.tasks.values() for sp in iter_plans(steps))
+        # TSA 8.8.0 (M4.5d): the held state is tracked iff the program stops on a fault and something grips
+        grips = any(st.grasp is not None or (st.tool is not None and st.tool.close is not None)
+                    for t in program.tasks for _, st in walk_steps(t.steps))
+        return (_Gating(gate, until, tuple(plan.start_verify), tuple(plan.start_detach), gate and grips)
+                if gate or until else None)
+
+    @property
+    def fail_on_fault(self) -> str:
+        return f' _failureIf="{GATE_KEY} != \'\'"' if self.gate else ''
+
+    def node(self, node: str) -> str:
+        """One node with its outputs remapped: ``fault`` to the gate, a detect's ``reason`` (until)."""
+        tag = node[1:].split(' ', 1)[0].split('/', 1)[0]
+        extra = ''
+        if self.gate and tag in FAULT_NODES and ' fault=' not in node:
+            extra += f' fault="{{{GATE_KEY}}}"'
+        if self.until and tag == 'DetectCandidates' and ' reason=' not in node:
+            extra += f' reason="{{{DETECT_REASON_KEY}}}"'
+        if self.holding:
+            # TSA 8.8.0 (M4.5d, ADR-0024 amendment M4.5d): the held state, written by the gripping nodes' own
+            # outcomes (BehaviorTree.CPP's post-conditions), read by every motion
+            if tag in ('MoveWaypoint', 'FollowPath') and ' holding=' not in node:
+                extra += f' holding="{{{HOLD_KEY}}}"'
+            elif tag == 'CloseGripper':
+                # FAIL CLOSED: a close that succeeds counts as HELD until the contract says otherwise -- also when
+                # no VerifyGrasp follows (require_grasp_confirmation off, a tool close): an unconfirmed hold is never
+                # assumed empty. Confirm the grasp to get an exact state (ADR-0024 amendment M4.5d).
+                extra += f' _onSuccess="{HOLD_KEY} := true"'
+            elif tag == 'VerifyGrasp' and 'expect="held"' in node:
+                # _onFailure fires on a "not held" verdict AND on a state fault (unreadable gripper); the latter is
+                # gated (the run stops on the fault before any motion), so clearing the key there is harmless. If a
+                # state fault ever became recoverable, this would be a false FREE: split the two then.
+                extra += f' _onSuccess="{HOLD_KEY} := true" _onFailure="{HOLD_KEY} := false"'
+            elif tag == 'OpenGripper':
+                extra += f' _onSuccess="{HOLD_KEY} := false"'
+        if not extra or not node.endswith('/>'):
+            return node
+        return node[:-2] + extra + '/>'
+
+    def body_start(self) -> List[str]:
+        return [f"<Script code=\"{DETECT_REASON_KEY} := ''\"/>"] if self.until else []
+
+    def main_lines(self, call: str, indent: str) -> List[str]:
+        """MainTree: the keys reset, then the main task; a fault's reason logged before the run ends FAILURE.
+        TSA 8.6.2: with a payload, the main task runs after the start check (``ProgramPlan.start_verify`` /
+        ``start_detach``), inside the same Fallback -- a HOLDING_AT_START is logged like any fault."""
+        resets = [f"{k} := ''" for k, on in ((GATE_KEY, self.gate), (DETECT_REASON_KEY, self.until),
+                                             (OUTCOME_KEY, self.outcomes)) if on]
+        if self.holding:
+            resets.append(f'{HOLD_KEY} := false')        # TSA 8.8.0 (M4.5d): nothing is held when the run starts
+        lines = [f'{indent}<Script code="{"; ".join(resets)}"/>']
+        if not self.gate:
+            return lines + [f'{indent}{call}']
+        if self.outcomes:
+            # TSA 8.7.0 (M4.5b): the run's body one level deeper, then its OUTCOME reported once
+            return lines + self._report(self._run_lines(call, indent + '    '), indent)
+        return lines + self._run_lines(call, indent)
+
+    @property
+    def outcomes(self) -> bool:
+        """TSA 8.7.0 (vNext M4.5b): the run reports an explicit OUTCOME -- faults: stop with a repeat ``until``."""
+        return self.gate and self.until
+
+    def _report(self, run: List[str], indent: str) -> List[str]:
+        """TSA 8.7.0 (vNext M4.5b): the OUTCOME, set by the ends that decide it (a repeat ``until``'s end,
+        RECOVERY_EXHAUSTED) and checked against how the run ends -- a SUCCESS keeps only a success outcome
+        (BIN_EMPTY, NOTHING_PICKABLE), a FAILURE only a failure one (PICKABLE_EXHAUSTED, RECOVERY_EXHAUSTED), and
+        any fault makes it TERMINAL_FAULT -- then logged ONCE, "OUTCOME: <code>"; a run that ends otherwise (a
+        verdict outside the repeat, a finite repeat that completes) logs none."""
+        i2, i3 = indent + '  ', indent + '    '
+
+        def keep(codes) -> str:
+            return ' || '.join(f"{OUTCOME_KEY} == '{c}'" for c in codes)
+
+        def log(codes) -> List[str]:
+            return [f"{i3}<Log _skipIf=\"{OUTCOME_KEY} != '{c}'\" message=\"OUTCOME: {c} -- {OPERATOR_TEXT[c]}\"/>"
+                    for c in codes]
+
+        return ([f'{indent}<Fallback>', f'{i2}<Sequence>'] + run
+                + [f"{i3}<Script _skipIf=\"{keep(SUCCESS_OUTCOMES)}\" code=\"{OUTCOME_KEY} := ''\"/>"]
+                + log(SUCCESS_OUTCOMES)
+                + [f'{i2}</Sequence>', f'{i2}<Sequence>',
+                   f"{i3}<Script _skipIf=\"{keep(FAILURE_OUTCOMES)}\" code=\"{OUTCOME_KEY} := ''\"/>",
+                   f"{i3}<Script _skipIf=\"{GATE_KEY} == ''\" code=\"{OUTCOME_KEY} := '{TERMINAL_FAULT}'\"/>"]
+                + log(FAILURE_OUTCOMES + (TERMINAL_FAULT,))
+                + [f'{i3}<AlwaysFailure/>', f'{i2}</Sequence>', f'{indent}</Fallback>'])
+
+    def _run_lines(self, call: str, indent: str) -> List[str]:
+        """The main task (after the start check, when there is one) inside the fault gate's Fallback."""
+        i2, i3 = indent + '  ', indent + '    '
+        first = [f'{i2}{call}']
+        if self.start_verify or self.start_detach:
+            # TSA 8.6.2 (the M4.5 review): the tool proven empty (held / engaged: HOLDING_AT_START; a state fault
+            # keeps its reason), the payload detached
+            i4, i5 = i3 + '  ', i3 + '    '
+            # the gate after a failed verification: '' (a verdict) or a held / engaged reason -> HOLDING_AT_START, any
+            # other fault kept (BehaviorTree.CPP's script ternary: no '&' in the tree file)
+            held = ' || '.join([f"{GATE_KEY} == ''"] + [f"{GATE_KEY} == '{r}'" for r in HELD_AT_START_REASONS])
+            mark = f"{GATE_KEY} := ({held}) ? '{HOLDING_AT_START}' : {GATE_KEY}"
+            first = [f'{i2}<Sequence>']
+            for verify in self.start_verify:
+                first += [f'{i3}<Fallback>', f'{i4}{self.node(verify)}', f'{i4}<Sequence>',
+                          f'{i5}<Script code="{mark}"/>', f'{i5}<AlwaysFailure/>',
+                          f'{i4}</Sequence>', f'{i3}</Fallback>']
+            first += [f'{i3}{self.node(n)}' for n in self.start_detach]
+            first += [f'{i3}{call}', f'{i2}</Sequence>']
+        return [f'{indent}<Fallback>'] + first + [
+            f"{i2}<Sequence _failureIf=\"{GATE_KEY} == ''\">",
+            f'{i3}<Log message="FAULT: the run stops (application.faults: stop), never retried or '
+            f'recovered; the reason follows"/>',
+            f'{i3}<Log message="{{{GATE_KEY}}}"/>',
+            f'{i3}<AlwaysFailure/>', f'{i2}</Sequence>', f'{indent}</Fallback>']
+
+
+def _body_xml(body: Sequence[StepPlan], indent: str, gating: Optional[_Gating], gated: bool) -> List[str]:
+    """ONE body Sequence of a control step (vNext M4.5: gated -- a retry's body, a fallback's alternative -- and
+    resetting the detect reason first, when the program uses them)."""
+    head = f'{indent}<Sequence{gating.fail_on_fault if gating and gated else ""}>'
+    starts = [f'{indent}  {line}' for line in (gating.body_start() if gating else [])]
+    return [head] + starts + _steps_xml(body, indent + '  ', gating) + [f'{indent}</Sequence>']
+
+
+def _until_xml(sp: StepPlan, indent: str, gating: _Gating) -> List[str]:
+    """vNext M4.5: a repeat with ``until: nothing_to_pick`` -- its failure is its NORMAL end only when the latest
+    failure was a fresh NO_CANDIDATES (a detect reset the key before it ran) and the gate is clear; any other
+    failure is "recovery exhausted" (FAILURE). A fault keeps FAILURE (MainTree logs its reason).
+
+    TSA 8.7.0 (vNext M4.5b): each end sets the run's OUTCOME (MainTree logs it once). Without ``presence`` the
+    normal end is NOTHING_PICKABLE (SUCCESS, the 8.6.x end); with it a PRESENCE capture follows the fresh empty
+    detection (TMR's DetectObject on the provider's objects): a fresh empty answer (FAILURE without a fault) is
+    BIN_EMPTY (SUCCESS), objects present (SUCCESS) are PICKABLE_EXHAUSTED (FAILURE, not a fault), a fault of the
+    capture is the gate's (TERMINAL_FAULT). "Recovery exhausted" is RECOVERY_EXHAUSTED."""
+    i2, i3, i4, i5 = (indent + '  ' * k for k in (1, 2, 3, 4))
+    tag, port = _CONTROL_XML['repeat']
+    clear = f"{GATE_KEY} != '' || " if gating.gate else ''
+
+    def outcome(code: str, at: str, skip: str = '') -> str:
+        return f'{at}<Script{skip} code="{OUTCOME_KEY} := \'{code}\'"/>' if gating.outcomes else ''
+
+    if not sp.presence_node:
+        normal = [f'{i3}<Log message="{sp.where}: nothing pickable: a fresh detection found no candidate (the bin '
+                  f'may still hold parts no grasp can reach): the repeat ends normally"/>',
+                  outcome(NOTHING_PICKABLE, i3)]
+        exhausted_if = gating.fail_on_fault
+    else:
+        normal = [f'{i3}<Log message="{sp.where}: no candidate left: a presence capture tells an empty bin from '
+                  f'parts no grasp can serve"/>',
+                  f'{i3}<Fallback>',
+                  f'{i4}<Inverter>', f'{i5}{gating.node(sp.presence_node)}', f'{i4}</Inverter>',
+                  f"{i4}<Sequence _failureIf=\"{GATE_KEY} != ''\">",
+                  outcome(PICKABLE_EXHAUSTED, i5),
+                  f'{i5}<Log message="{sp.where}: pickable exhausted: objects remain, none has a valid grasp (not a '
+                  f'fault: the cell needs an operator)"/>',
+                  f'{i5}<AlwaysFailure/>', f'{i4}</Sequence>', f'{i3}</Fallback>',
+                  outcome(BIN_EMPTY, i3, f" _failureIf=\"{GATE_KEY} != ''\""),
+                  f'{i3}<Log message="{sp.where}: bin empty: a fresh presence capture found no object: the repeat '
+                  f'ends normally"/>']
+        # the presence end decided (a failure there is PICKABLE_EXHAUSTED or a fault): never "recovery exhausted"
+        exhausted_if = f" _failureIf=\"{clear}{DETECT_REASON_KEY} == '{NO_CANDIDATES}'\""
+    return ([f'{indent}<Fallback>', f'{i2}<{tag} {port}="{sp.count}">']
+            + _body_xml(sp.bodies[0], i3, gating, False)
+            + [f'{i2}</{tag}>',
+               f"{i2}<Sequence _failureIf=\"{clear}{DETECT_REASON_KEY} != '{NO_CANDIDATES}'\">",
+               # TSA 8.6.2 (the M4.5 review): an empty CANDIDATE set is not an empty bin -- parts no grasp can
+               # reach (outside the envelope, not eligible) may remain: TSA 8.7.0 tells them apart with `presence`
+               *[line for line in normal if line],
+               f'{i2}</Sequence>',
+               f'{i2}<Sequence{exhausted_if}>',
+               f'{i3}<Log message="{sp.where}: recovery exhausted (the repeat failed, not on an empty '
+               f'detection)"/>']
+            + ([outcome(RECOVERY_EXHAUSTED, i3)] if gating.outcomes else [])
+            + [f'{i3}<AlwaysFailure/>', f'{i2}</Sequence>', f'{indent}</Fallback>'])
+
+
+def _grasp_xml(sp: StepPlan, indent: str, gating: Optional[_Gating], wrap: str) -> List[str]:
+    """vNext M4.5: a grasp with alternatives (``index: all``: one idiom per literal candidate index, best first,
+    in a Fallback) and/or a retreat (``on_failure: retreat``) -- TSA 8.6.1: also a release with a retreat (its one
+    idiom, the same shape, plus a third alternative: failed before its PreRelease, the part still held, it writes
+    ``unreached_fault`` into the gate -- a fault ends the run). ``wrap``: the step id's Sequence name when the id is carried by each alternative (an
+    attempt per candidate in the execution events), else ''."""
+    def one(nodes: List[str], at: str) -> List[str]:
+        if not sp.retreat:
+            return [f'{at}{_node(n, gating)}' for n in nodes]
+        a2, a3, a4, a5 = (at + '  ' * k for k in (1, 2, 3, 4))
+        clear = f"{GATE_KEY} != ''"
+        return ([f'{at}<Fallback>', f'{a2}<Sequence>'] + [f'{a3}{_node(n, gating)}' for n in nodes]
+                + [f'{a2}</Sequence>',
+                   f'{a2}<Sequence _failureIf="{clear}" _skipIf="{sp.reached} == 0">',
+                   f'{a3}<Fallback>', f'{a4}<Sequence>']
+                + [f'{a5}{_node(n, gating)}' for n in sp.retreat]
+                + [f'{a4}</Sequence>',
+                   f"{a4}<Script _skipIf=\"{clear}\" code=\"{GATE_KEY} := '{RETREAT_FAILED}'\"/>",
+                   f'{a3}</Fallback>', f'{a3}<AlwaysFailure/>', f'{a2}</Sequence>']
+                + ([f'{a2}<Sequence _failureIf="{clear} || {sp.reached} != 0">',
+                    f"{a3}<Script code=\"{GATE_KEY} := '{sp.unreached_fault}'\"/>",
+                    f'{a3}<AlwaysFailure/>', f'{a2}</Sequence>'] if sp.unreached_fault else [])
+                + [f'{at}</Fallback>'])
+
+    if len(sp.alternatives) == 1:
+        return one(sp.alternatives[0], indent)
+    out = [f'{indent}<Fallback>']
+    i2 = indent + '  '
+    for nodes in sp.alternatives:
+        out.append(f'{i2}<Sequence{gating.fail_on_fault if gating else ""}>')
+        if wrap:
+            out += [f'{i2}  <Sequence name="{wrap}">'] + one(nodes, i2 + '    ') + [f'{i2}  </Sequence>']
+        else:
+            out += one(nodes, i2 + '  ')
+        out.append(f'{i2}</Sequence>')
+    out.append(f'{indent}</Fallback>')
+    return out
+
+
+def _node(node: str, gating: Optional[_Gating]) -> str:
+    return gating.node(node) if gating is not None else node
+
+
+def _steps_xml(steps: Sequence[StepPlan], indent: str, gating: Optional[_Gating] = None) -> List[str]:
     """The BT nodes of a list of step plans: a step's node(s), a call's SubTree (``_autoremap``: the
     called task reads and writes the application's one blackboard, so its data is bound by name), a
-    repeat or retry around its body, a fallback around its alternatives."""
+    repeat or retry around its body, a fallback around its alternatives. ``gating`` (vNext M4.5): the
+    composition additions the program uses (None: the M3.7 / D0.5 tree, byte for byte)."""
     out: List[str] = []
     base = indent
     for sp in steps:
-        indent = base + '  ' if sp.step_id else base       # D18: an identified step is wrapped, nothing else
+        name = f'{STEP_NAME_PREFIX}{sp.step_id}:{sp.kind}' if sp.step_id else ''
+        # vNext M4.5: an identified grasp over several candidates carries its id on each candidate's attempt
+        per_alternative = bool(name) and len(sp.alternatives) > 1
+        wrapped = bool(name) and not per_alternative
+        indent = base + '  ' if wrapped else base       # D18: an identified step is wrapped, nothing else
         inner = indent + '  '
-        if sp.step_id:
-            out.append(f'{base}<Sequence name="{STEP_NAME_PREFIX}{sp.step_id}:{sp.kind}">')
-        if sp.kind in _CONTROL_XML:
+        if wrapped:
+            out.append(f'{base}<Sequence name="{name}">')
+        if sp.kind == 'repeat' and sp.until and gating is not None:
+            out += _until_xml(sp, indent, gating)
+        elif sp.kind in _CONTROL_XML:
             tag, port = _CONTROL_XML[sp.kind]
             out.append(f'{indent}<{tag} {port}="{sp.count}">')
-            out += [f'{inner}<Sequence>'] + _steps_xml(sp.bodies[0], inner + '  ') + [f'{inner}</Sequence>']
+            out += _body_xml(sp.bodies[0], inner, gating, sp.kind == 'retry')
             out.append(f'{indent}</{tag}>')
         elif sp.kind == 'fallback':
             out.append(f'{indent}<Fallback>')
             for body in sp.bodies:
-                out += [f'{inner}<Sequence>'] + _steps_xml(body, inner + '  ') + [f'{inner}</Sequence>']
+                out += _body_xml(body, inner, gating, True)
             out.append(f'{indent}</Fallback>')
+        elif sp.kind in ('grasp', 'release') and sp.alternatives:
+            out += _grasp_xml(sp, indent, gating, name if per_alternative else '')
         else:
-            out += [f'{indent}{node}' for node in (sp.nodes or [sp.xml])]
-        if sp.step_id:
+            if sp.kind == 'detect' and gating is not None:
+                out += [f'{indent}{line}' for line in gating.body_start()]
+            out += [f'{indent}{_node(node, gating)}' for node in (sp.nodes or [sp.xml])]
+        if wrapped:
             out.append(f'{base}</Sequence>')
     return out
 
 
-__all__ = ['CAPTURE_PREFIX', 'MIN_MOVE_SCALING', 'named_state_values',
+__all__ = ['CAPTURE_PREFIX', 'MIN_MOVE_SCALING', 'named_state_values', 'PRESENCE_TP_SINCE', 'presence_providers',
+           'OUTCOME_KEY', 'OUTCOMES',
            'percent', 'task_tree_id', 'MovePlan', 'PathPlan', 'PlannedEvent',
            'CandidateSet', 'TaskSummary', 'iter_plans',
            'ProgramPlan', 'ProgramRefusals', 'StepPlan',

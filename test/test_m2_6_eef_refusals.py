@@ -577,6 +577,17 @@ CASES = {
         lambda t: F.suction_simple(
             t, contract=F.suction_contract(adapters={
                 'mock': {'adapter': 'trainit_mock', 'flavour': 'effort'}}))),
+    # vNext M4.5: the mock's outcome sequence names a site the device has, with the adapter's outcomes
+    'r15_mock_outcomes_for_an_unknown_site': (
+        15, 'outcomes names site "jaw"',
+        lambda t: F.suction_simple(
+            t, contract=F.suction_contract(adapters={
+                'mock': {'adapter': 'trainit_mock', 'outcomes': {'jaw': ['held']}}}))),
+    'r15_mock_outcomes_with_an_unknown_outcome': (
+        15, 'must be a non-empty list of',
+        lambda t: F.suction_simple(
+            t, contract=F.suction_contract(adapters={
+                'mock': {'adapter': 'trainit_mock', 'outcomes': {'main': ['held', 'unavailable']}}}))),
     'r15_ros2_control_for_a_binary_jaw': (
         15, '"ros2_control" does not serve set_bool',
         lambda t: F.jaw_binary(

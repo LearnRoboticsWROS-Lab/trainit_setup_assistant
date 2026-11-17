@@ -1,0 +1,169 @@
+# vNext M4.5 (M4_5_DESIGN.md §2, §6, §7, §9, §11; ADR-0024 amendment M4.5): CAPSULE BIN PICKING as a Canonical
+# Task Program -- an EXAMPLE of the composition additions on the public UR5e sample cell (its robot, its suction
+# contract `main` / site `main`, grasp and release CONFIRMED). A generation test, never shipped; the capsule cell
+# itself (Isaac, YOLO-seg instances) is the private cell's. No BinPick node, no capsule-specific code: only the
+# canonical steps.
+#
+#   repeat until nothing_to_pick            the bin is emptied; a FRESH empty detection ends the cycle, then
+#     (presence capsules)                   (TSA 8.7.0) a presence capture of the provider's objects: none =
+#                                           OUTCOME BIN_EMPTY (SUCCESS), objects left = PICKABLE_EXHAUSTED
+#                                           (FAILURE, not a fault); recovery exhausted = RECOVERY_EXHAUSTED,
+#                                           a fault = TERMINAL_FAULT (one "[BT] OUTCOME: <code>" line)
+#     retry 2                               the place failed (a part dropped in transport): the cycle again
+#       retry 3                             no candidate / every candidate failed -> re-detect (bounded)
+#         move bin_view; detect keep 3 (a capture)
+#         grasp index all                   best first, each candidate in turn (K = 3); a failed grasp that
+#           (orientation candidate,         reached its PreGrasp RETREATS (open, back to the PreGrasp) and the
+#            max_tilt 60, payload)          next candidate runs; the verified-held capsule is attached
+#       release at place                    verify held, open, verify released, detach; a VERDICT after the
+#         (on_failure retreat)              PreRelease (OBJECT_LOST: the part was dropped) RETREATS (open,
+#                                           detach, back to the PreRelease), then fails: the outer retry
+#   faults: stop                            a FAULT (perception, motion, end effector) ends the run, never
+#                                           retried, never read as "bin empty"
+#
+# The capsule: a 41.9 x 18 mm disc held as a 0.042 x 0.042 x 0.018 m box centred 9 mm along the TCP +Z.
+schema_version: 4
+project_name: m45_capsule_bin_picking
+
+bundle:
+  description_package: m45_description
+  moveit_config_package: m45_trainit_config
+  app_package: m45_app
+
+meta:                          # written into the three generated package.xml files: put yours
+  maintainer_name: TrainIt sample user
+  maintainer_email: user@example.com
+  license: Apache-2.0
+  version: 0.1.0
+
+robot:
+  robot_name: ur5e_suction
+  description:
+    urdf_dir: ../../../examples/ur5e_suction/urdf   # the public sample's, relative to this directory
+    top_xacro: ur5e_suction.urdf.xacro
+  base_frame: base_link
+  tip_link: tcp
+  planning_group:
+    name: ur_manipulator
+    base_link: base_link
+    tip_link: tcp              # the cup lip: every TCP waypoint below is a pose of this link
+    joints: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint,
+             wrist_3_joint]
+  gripper:
+    kind: suction
+    eef_parent_link: tcp       # the grasp site's TCP: the short form derives it from this link
+    contract:
+      actuator: {command_interface: set_bool}
+      verification: {require_grasp_confirmation: true, require_release_confirmation: true}
+      adapters: {mock: trainit_mock}
+  named_states:
+    - name: home               # tool down, TCP at about (0.49, 0.13, 0.39) m
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                     wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+    - name: above_pick         # TCP at (0.45, 0.25, 0.205), tool down: 15 cm above the pick
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.2452, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -1.3256}
+    - name: above_place        # TCP at (0.45, -0.25, 0.205), tool down: 15 cm above the place
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: -0.769, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -2.3398}
+  joint_limits:
+    per_joint:                 # velocity under the URDF's pi rad/s (Pilz refuses more than the
+                               # URDF); acceleration: ur_moveit_config's 5.0
+      shoulder_pan_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      shoulder_lift_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      elbow_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_1_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_2_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_3_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+  ompl:
+    projection_evaluator: joints(shoulder_pan_joint,shoulder_lift_joint)
+  initial_positions: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                      wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+  # The self-collision matrix: the 11 pairs of ur_moveit_config's srdf/ur_macro.srdf.xacro
+  # (Apache-2.0), transcribed, plus the tool's one: the cup body touches the flange face.
+  disable_collisions:
+    - {link1: base_link, link2: base_link_inertia, reason: Adjacent}
+    - {link1: base_link_inertia, link2: shoulder_link, reason: Adjacent}
+    - {link1: tool0, link2: wrist_1_link, reason: Never}
+    - {link1: tool0, link2: wrist_2_link, reason: Never}
+    - {link1: tool0, link2: wrist_3_link, reason: Adjacent}
+    - {link1: forearm_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: forearm_link, link2: wrist_1_link, reason: Adjacent}
+    - {link1: shoulder_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_2_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_3_link, reason: Never}
+    - {link1: wrist_2_link, link2: wrist_3_link, reason: Adjacent}
+    - {link1: suction_body, link2: wrist_3_link, reason: Adjacent}
+
+scene:
+  objects:                     # the table top is 5 mm under the robot base (its mesh starts at 0)
+    - {id: table, shape: box, dims: [1.2, 1.2, 0.05], frame: base_link,
+       position: [0.3, 0.0, -0.03]}
+
+deployment:
+  modes: [mock]
+  default_mode: mock
+
+perception:
+  detectors:
+    - name: capsules           # trainit_perception's SurfaceGrasp provider (M4): grasp CANDIDATES for main / main
+      method: surface_grasp
+      continuous: false
+      rate_hz: 5.0
+      segmentation:
+        method: color_mask
+        params: {class_id: capsule, max_objects: 10}
+      params: {eef: main, site: main, contact_radius_m: 0.009, approach_cone_deg: 60.0, standoff_m: 0.05}
+application:
+  type: task_program
+  faults: stop
+
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+    approach: {speed: 20, acceleration: 20}
+
+  waypoints:                   # base_link, tool down
+    - {name: home, type: joint, named: home}
+    - {name: bin_view, position: [0.45, 0.25, 0.3], orientation: [1.0, 0.0, 0.0, 0.0]}   # also the tilt reference
+    - {name: place, position: [0.3, -0.3, 0.15], orientation: [1.0, 0.0, 0.0, 0.0]}
+
+  tasks:
+    - name: empty_the_bin
+      description: pick capsules, best candidate first, until nothing is left to pick
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+        - id: cycle
+          repeat:
+            cycles: -1
+            until: nothing_to_pick
+            presence: capsules       # TSA 8.7.0: an empty bin (BIN_EMPTY) vs parts left (PICKABLE_EXHAUSTED)
+            body:
+              - retry:                 # the whole cycle again (re-detect) when the place fails: a part dropped
+                  attempts: 2
+                  body:
+                    - retry:           # no candidate / every candidate failed: detect again
+                        attempts: 3
+                        body:
+                          - move: {to: bin_view, type: ptp, profile: transit}
+                          - id: look
+                            detect: {detector: capsules, source: candidates, keep: 3, trigger: true, out: ranked}
+                          - id: pick
+                            grasp:
+                              candidates: ranked
+                              index: all
+                              orientation: candidate
+                              orientation_from: bin_view
+                              max_tilt_deg: 60
+                              standoff_m: 0.05
+                              profile: transit
+                              approach_profile: approach
+                              retract: {along_approach: 0.1}
+                              on_failure: retreat
+                              payload: {dims: [0.042, 0.042, 0.018], offset: [0.0, 0.0, 0.009]}
+                    - id: place
+                      release: {at: place, standoff_m: 0.05, profile: transit, approach_profile: approach,
+                                retract: {dz: 0.08}, on_failure: retreat}
+  main_task: empty_the_bin

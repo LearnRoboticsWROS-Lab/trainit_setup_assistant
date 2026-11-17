@@ -585,7 +585,7 @@ def test_the_launch_template_still_renders_with_no_external_detectors_variable()
     common = dict(robot_name='cell', moveit_config_package='cell_trainit_config',
                   app_package='cell_app', tree_filename='pick_place.xml',
                   default_planner_mode='ompl', gazebo_supported=False,
-                  cell_namespace='', detectors=[])
+                  cell_namespace='', detectors=[], grasp_providers=[])     # vNext M4: grasp_providers
     with pytest.raises(UndefinedError):
         tpl.render(**common)
     assert 'EXTERNAL-NODE' not in tpl.render(**common, external_detectors=[])

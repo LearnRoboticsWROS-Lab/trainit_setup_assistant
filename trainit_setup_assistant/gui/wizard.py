@@ -1083,7 +1083,10 @@ class PerceptionPage(QWizardPage):
     METHODS = [('color_mask', 'Colour mask (HSV)', True),
                ('shape_mask', 'Shape mask (contours)', False),
                ('pcl_cluster', 'PCL 3D cluster (C++ node)', False),
-               ('custom', 'Custom node (expert)', False)]
+               ('custom', 'Custom node (expert)', False),
+               # vNext M4: a GRASP PROVIDER, configured in the project file (YAML-first, M3 D5)
+               ('surface_grasp', 'SurfaceGrasp grasp provider (project file)', False),
+               ('scripted_grasp', 'Scripted grasp provider, mock tests (project file)', False)]
 
     # WHICH candidate goes out first — and therefore THE RANKING (ADR-0017 Decision 1:
     # the rank is a DETECTOR parameter, so it belongs beside the detector's parameters).
@@ -1180,6 +1183,25 @@ class PerceptionPage(QWizardPage):
                          'camera_info topics from what the camera actually publishes.')
         sniff.clicked.connect(self._sniff_topics)
         cf.addRow(sniff)
+        # TSA 8.8.0 (vNext M4.5d): the camera -> robot chain, shown and CHECKED -- never typed as a matrix. The
+        # runtime transforms every observation with TF2 at the image's stamp; this asks TF2 the same question.
+        self.c_target = QLabel('-')
+        self.c_target.setToolTip('The robot\'s base frame (Step 1) -- the planning frame of the MoveIt configuration '
+                                 'TSA generates: every detection is transformed into it by TF2 at the image\'s '
+                                 'timestamp, at run time. The check reads the absolute /tf (not a namespaced TF).')
+        cf.addRow('Target (robot base) frame', self.c_target)
+        tfb = QPushButton('Check camera -> robot transform (live)')
+        tfb.setToolTip('Reads one CameraInfo and asks TF2 for <planning frame> <- <its frame> at its stamp: the '
+                       'question the runtime asks. Reports the perception frame, TF AVAILABLE / MISSING and the '
+                       'intrinsics VALID / MISSING. Needs the bring-up running.')
+        tfb.clicked.connect(self._check_camera_frames)
+        self._tf_button = tfb
+        cf.addRow(tfb)
+        self.c_tf = QLabel('')
+        self.c_tf.setWordWrap(True)
+        self.c_tf.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.c_tf.setStyleSheet('font-family: monospace;')
+        cf.addRow(self.c_tf)
         left.addWidget(cam)
 
         timing = QGroupBox('Timing (cycle rules)')
@@ -1252,7 +1274,17 @@ class PerceptionPage(QWizardPage):
         mrow.addRow('Grasp face', facerow)
         right.addLayout(mrow)
 
+        # M4.5d owner acceptance F1: a detector whose method this page cannot edit (a grasp
+        # provider or an external node, configured in project.yaml) is SHOWN read-only, never
+        # dressed in the colour-mask form -- whose Save would have overwritten it
+        self.readonly_note = QLabel('')
+        self.readonly_note.setWordWrap(True)
+        self.readonly_note.setStyleSheet('color:#8a5a00;')
+        self.readonly_note.setVisible(False)
+        right.addWidget(self.readonly_note)
+
         params = QGroupBox('Colour mask parameters (tuned live)')
+        self.params_box = params
         pf = QFormLayout(params)
         self.h_lo, r = self._slider_row(179, 170)
         pf.addRow('H low', r)
@@ -1311,6 +1343,7 @@ class PerceptionPage(QWizardPage):
         save = QPushButton('Save detector')
         save.setToolTip('Store the tuned parameters under the selected name')
         save.clicked.connect(self._save_detector)
+        self.save_btn = save
         trow.addWidget(save)
         right.addLayout(trow)
 
@@ -1507,15 +1540,38 @@ class PerceptionPage(QWizardPage):
                 'topic name — use letters, digits and underscores, starting with a '
                 'letter (e.g. red_cube).')
             return
+        if self._refuse_project_file_detector(name):
+            return
         self._deleted.discard(name)
         self._detectors[name] = self._detector_from_form()
         self._refresh_list(select=name)
+
+    #: the methods this page EDITS: the enabled rows of METHODS (today the colour mask)
+    @classmethod
+    def _editable(cls, method: str) -> bool:
+        return any(tok == method and on for tok, _, on in cls.METHODS)
+
+    def _refuse_project_file_detector(self, name: str) -> bool:
+        """True (and say why) when ``name`` holds a detector this page cannot edit."""
+        d = self._detectors.get(name)
+        if d is None or self._editable(d['method']):
+            return False
+        self._status(f'"{name}" is a {self._method_label(d["method"])} detector, configured in '
+                     f'the project file: this page cannot edit it, so nothing was saved. Edit it in '
+                     f'project.yaml (Step 7 -> YAML), or Remove it and Add a colour mask.')
+        return True
+
+    @classmethod
+    def _method_label(cls, method: str) -> str:
+        return next((label for tok, label, _ in cls.METHODS if tok == method), method)
 
     def _save_detector(self) -> None:
         name = self.det_list.currentItem().text() if self.det_list.currentItem() else ''
         name = name or self.det_name.text().strip()
         if not name:
             self._status('Select (or name) a detector to save into.')
+            return
+        if self._refuse_project_file_detector(name):
             return
         self._detectors[name] = self._detector_from_form()
         self._refresh_list(select=name)
@@ -1529,9 +1585,32 @@ class PerceptionPage(QWizardPage):
             self._detectors.pop(item.text(), None)
             self._deleted.add(item.text())    # reconciled into the project on Next
             self._refresh_list()
+            self._show_method('color_mask')   # F1 (review): nothing selected -> the editable form, not a locked one
+
+    def _show_method(self, method: str) -> None:
+        """Show the picked detector's OWN method; lock the colour-mask form when this page
+        cannot edit that method (F1), with its project-file parameters as plain text."""
+        i = next((k for k, (tok, _, _) in enumerate(self.METHODS) if tok == method), -1)
+        if i >= 0:
+            self.method.setCurrentIndex(i)
+        editable = self._editable(method)
+        for w in (self.params_box, self.p_class, self.p_rule, self.p_cont, self.p_rate,
+                  self.save_btn):
+            w.setEnabled(editable)
+        self.readonly_note.setVisible(not editable)
 
     def _on_pick_detector(self, name: str) -> None:
         d = self._detectors.get(name)
+        if d and not self._editable(d['method']):
+            self._show_method(d['method'])
+            shown = ', '.join(f'{k}={v}' for k, v in sorted(d['params'].items())
+                              if isinstance(v, (str, int, float, bool)))
+            self.readonly_note.setText(
+                f'"{name}" — {self._method_label(d["method"])}: configured in the project file, '
+                f'shown read-only (edit it in project.yaml, Step 7 -> YAML). Leaving this page '
+                f'keeps it exactly as written.' + (f'\nParameters: {shown}' if shown else ''))
+            return
+        self._show_method(d['method'] if d else 'color_mask')
         if d:
             self._form_from_params(d['params'])
             i = self.p_rule.findData(d.get('candidate_rule') or '')
@@ -1649,6 +1728,34 @@ class PerceptionPage(QWizardPage):
         except Exception as exc:  # noqa: BLE001
             self._status(f'TF {base} -> {optical} failed: {exc}')
 
+    def _check_camera_frames(self):  # pragma: no cover - needs a live ROS session
+        # the probe waits up to ~4 s for the live graph: it runs on a WORKER thread (its own rclpy executor) and the
+        # GUI polls its future, so the window never freezes; the button is disabled while it runs
+        from concurrent.futures import ThreadPoolExecutor
+        from ..livesession.camera_frames import probe
+        target = self.ctrl.robot_summary()['base_frame']
+        args = (self.c_info.text().strip(), target, self.c_frame.text().strip())
+        pool = ThreadPoolExecutor(max_workers=1)
+        fut = pool.submit(probe, *args)
+        pool.shutdown(wait=False)
+        self._tf_button.setEnabled(False)
+        self.c_tf.setText('checking the live graph ...')
+
+        def poll():
+            if not fut.done():
+                QTimer.singleShot(100, poll)
+                return
+            self._tf_button.setEnabled(True)
+            try:
+                rep = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                self.c_tf.setText(f'check failed: {exc}')
+                return
+            self.c_tf.setText('\n'.join(rep.lines()))
+            self._status('camera -> robot: ' + ('OK (TF AVAILABLE, intrinsics VALID)' if rep.ok else
+                                                'NOT OK -- see the Camera box'), ok=rep.ok)
+        QTimer.singleShot(100, poll)
+
     def _sniff_topics(self):  # pragma: no cover - needs a live ROS session
         try:
             from ..livesession.camera_capture import sniff_camera_topics
@@ -1669,6 +1776,10 @@ class PerceptionPage(QWizardPage):
 
     # ---- lifecycle -----------------------------------------------------------
     def initializePage(self) -> None:
+        try:
+            self.c_target.setText(self.ctrl.robot_summary()['base_frame'])
+        except Exception:  # noqa: BLE001 - no robot loaded yet
+            self.c_target.setText('- (load the robot first)')
         try:
             per = self.ctrl.project.perception
         except Exception:  # noqa: BLE001
@@ -1878,26 +1989,52 @@ class ApplicationPage(QWizardPage):
         self.restart_note.setWordWrap(True)
         form.addRow(self.restart_note)
 
+    #: M4.5d owner acceptance F2: an EXISTING program pre-selects no template -- a pre-selected
+    #: "Simple motion" read as the current program; the restart button waits for a real choice
+    _NO_TEMPLATE = '— choose a template only to start over —'
+
+    def _set_template_placeholder(self, on: bool) -> None:
+        has = self.template.count() > 0 and self.template.itemData(0) is None
+        self.template.blockSignals(True)
+        if on and not has:
+            self.template.insertItem(0, self._NO_TEMPLATE, None)
+            self.template.setCurrentIndex(0)
+        elif not on and has:
+            self.template.removeItem(0)
+            self.template.setCurrentIndex(0)
+        self.template.blockSignals(False)
+        self._template_changed(self.template.currentIndex())
+
     def _template_changed(self, idx: int) -> None:
-        if 0 <= idx < len(self.templates):
-            t = self.templates[idx]
-            from ..composer.templates import requirements
-            need = requirements(t.application)
-            extra = []
-            if need['detectors']:
-                extra.append('needs the detector(s) ' + ', '.join(need['detectors']) + ' (Step 5)')
-            if need['named_states']:
-                extra.append('uses the MoveIt named state(s) ' + ', '.join(need['named_states']))
-            if need['channels']:
-                extra.append('switches the logical channel(s) ' + ', '.join(need['channels']))
-            # owner Test C (row 29): say what the text describes -- the template the button WOULD apply
+        tid = self.template.itemData(idx) if idx >= 0 else None
+        t = next((x for x in self.templates if x.id == tid), None)
+        if hasattr(self, 'restart_button'):
+            self.restart_button.setEnabled(t is not None)
+        if t is None:
             self.template_text.setText(
-                f"Template '{t.title}': {t.description.rstrip('.')}" + ('; ' + '; '.join(extra) if extra else '')
-                + '. "Start over from the template above" would replace the program with it (the current program '
-                'is unchanged until you confirm); its waypoints are placeholders to re-teach in Step 7.')
+                'This project already has its program (summarised below), and nothing here changes it. '
+                'To REPLACE it with a template instead, choose one above, then "Start over" (it asks to '
+                'confirm).')
+            return
+        from ..composer.templates import requirements
+        need = requirements(t.application)
+        extra = []
+        if need['detectors']:
+            extra.append('needs the detector(s) ' + ', '.join(need['detectors']) + ' (Step 5)')
+        if need['named_states']:
+            extra.append('uses the MoveIt named state(s) ' + ', '.join(need['named_states']))
+        if need['channels']:
+            extra.append('switches the logical channel(s) ' + ', '.join(need['channels']))
+        # owner Test C (row 29): say what the text describes -- the template the button WOULD apply
+        self.template_text.setText(
+            f"Template '{t.title}': {t.description.rstrip('.')}" + ('; ' + '; '.join(extra) if extra else '')
+            + '. "Start over from the template above" would replace the program with it (the current program '
+            'is unchanged until you confirm); its waypoints are placeholders to re-teach in Step 7.')
 
     def restart_from_template(self) -> None:
         tid = self.template.currentData()
+        if tid is None:                        # F2: the placeholder is not a template
+            return
         if getattr(self, '_confirm_restart', None) != tid:
             self._confirm_restart = tid
             self.restart_note.setText(f"⚠ This REPLACES the whole program with '{self.template.currentText()}'. "
@@ -1907,6 +2044,7 @@ class ApplicationPage(QWizardPage):
         self.ctrl.apply_template(tid)
         self.restart_note.setText(f"The program now starts from '{self.template.currentText()}'.")
         self.initializePage()
+        self.template.setCurrentIndex(0)       # F2: back on the placeholder, the program is the applied one
 
     def _show_program(self, program: bool) -> None:
         label = self._form.labelForField(self.app_type)
@@ -1915,6 +2053,7 @@ class ApplicationPage(QWizardPage):
                 widget.setVisible(not program)
         self.template_box.setVisible(program)                   # program: the restart template
         self.restart_button.setVisible(program)
+        self._set_template_placeholder(program)
         if program:
             self.bin_box.setVisible(False)
             self.setSubTitle('This project\'s application is set by its file: a Canonical Task '

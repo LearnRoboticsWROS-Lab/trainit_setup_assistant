@@ -40,12 +40,20 @@ and re-blessed four times, each time owner-approved and with its exact diff show
                            manager its copied moveit_controllers.yaml names (an exec_depend and
                            its two-line comment), and in generation_manifest.yaml that file's
                            sha256, generator_version 7.8.0 -> 7.8.1 and the catalog_sha256 of
-                           7.8.1's snapshot (tree d69cb4f8...).
+                           7.8.1's snapshot (tree d69cb4f8...);
+  M4.5b PB-7 (2026-11-10)  TSA 8.6.1's application launch ends with its tree (end_with_tree): the
+                           app's trainit_bt.launch.py and bringup.launch.py, and in
+                           generation_manifest.yaml those two files' sha256 -- exactly the lines
+                           pending_rebless.GOLDEN listed (a temp candidate diffed line by line, the
+                           owner-approved exact diff in forensics/m45b/rebless_diff.txt); the
+                           provenance stays 7.8.1's, by decision: refreshing it would record
+                           unpublished releases (tree 1917b020...).
 
-The other 32 files are the M0A bytes. Re-blessing the golden is an explicit, explained change of
+The other 30 files are the M0A bytes. Re-blessing the golden is an explicit, explained change of
 that constant -- never a side effect of a generator change. Between a generator change and its
 re-bless, ``pending_rebless.GOLDEN`` lists the exact lines the golden may differ by (owner answer
-Q1, vNext M2.4); it is empty since the M2.4 re-bless.
+Q1, vNext M2.4); it was empty after the M2.4 re-bless, TSA 8.6.1 listed the two launch files (the
+application launch ends with its tree), and the M4.5b re-bless emptied it again.
 
 Fast and ROS-free: generation is pure.
 """
@@ -68,7 +76,7 @@ INPUT = 'project.yaml'
 # What compiled a bundle, not what it is: never compared with the golden (see the docstring).
 PROVENANCE = ('generator_version', 'capability_snapshot')
 # sha256 over "<sha256>  <posix relative path>\n", paths sorted as Python strings (locale-free)
-GOLDEN_TREE_SHA256 = 'd69cb4f8675023c67b064136b2d8af02a0540c7f37fa400faf85a6d30202b40f'
+GOLDEN_TREE_SHA256 = '1917b0200264d2d448fd30b8b416173676bb0a68e1ebf706831e0d442422b792'
 
 pytestmark = pytest.mark.skipif(not GOLDEN.is_dir(), reason='golden bundle not present')
 
@@ -100,10 +108,15 @@ def _expected(gold: dict) -> dict:
             for rel, data in gold.items()}
 
 
-def test_the_pending_list_names_only_golden_package_xml_files():
+# what a pending substitution may touch: the package.xml runtime floors (vNext M2.4) and the two launch files
+# of TSA 8.6.1 (the application launch ends with its tree)
+PENDING_FILES = ('/package.xml', '/launch/trainit_bt.launch.py', '/launch/bringup.launch.py')
+
+
+def test_the_pending_list_names_only_golden_package_xml_and_launch_files():
     gold = _files(GOLDEN)
     assert set(pending_rebless.GOLDEN) <= set(gold)
-    assert all(rel.endswith('/package.xml') for rel in pending_rebless.GOLDEN)
+    assert all(rel.endswith(PENDING_FILES) for rel in pending_rebless.GOLDEN)
 
 
 def test_every_generated_file_is_the_goldens_byte_for_byte():

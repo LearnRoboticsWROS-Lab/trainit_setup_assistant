@@ -15,12 +15,23 @@
 # wait for ever on an action nobody serves. The DETECTOR nodes below stay GLOBAL: they
 # publish /perception/<name>/detections, which DetectObject reads by absolute name, and
 # the detector that watches the bin is one detector however many arms reach into it.
+{% endif %}{% set perception_nodes = detectors or grasp_providers or external_detectors %}
+{% if perception_nodes %}#
+# It ENDS WITH THE TREE: the perception nodes it starts beside the runner would keep the
+# launch alive after trainit_run_bt exits, so the runner's exit shuts this launch down
+# (end_with_tree:=true, the default). An app bringup.launch.py that includes it passes
+# end_with_tree:=false: there the cell -- the perception with it -- stays up after the tree.
 {% endif %}# -----------------------------------------------------------------------------
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+{% if perception_nodes %}
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, Shutdown
+from launch.event_handlers import OnProcessExit
+{% else %}
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
+{% endif %}
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -67,11 +78,11 @@ def launch_setup(context, *args, **kwargs):
         "groot_monitor": LaunchConfiguration("groot_monitor"),
     }
 
-{% if detectors %}
+{% if detectors or grasp_providers %}
     perception = os.path.join(pkg, "config", "perception.yaml")
 
 {% endif %}
-    return [
+    {{ 'actions =' if perception_nodes else 'return' }} [
 {% for d in detectors %}
         # One detector_node per entry of config/perception.yaml: it publishes the
         # perception contract; the tree's DetectObject consumes it.
@@ -84,7 +95,35 @@ def launch_setup(context, *args, **kwargs):
                          "use_sim_time": use_sim}],
         ),
 {% endfor %}
+{% for g in grasp_providers %}
+{% set d = g.name %}
+{% if g.node == "surface_grasp_node" %}
+        # GRASP PROVIDER "{{ d }}" (vNext M4, tp.surface_grasp): fits the measured surfaces of
+        # config/perception.yaml's entry and publishes grasp CANDIDATES on
+        # /perception/{{ d }}/grasp_candidates (+ grasp_diagnostics, grasp_markers, detect);
+        # the tree's DetectCandidates source="candidates" consumes them. GLOBAL like the detectors.
+{% else %}
+        # GRASP PROVIDER "{{ d }}" (vNext M4.5, {{ g.node }}): publishes the grasp CANDIDATES of
+        # config/perception.yaml's entry on /perception/{{ d }}/grasp_candidates (+ grasp_diagnostics,
+        # detect); the tree's DetectCandidates source="candidates" consumes them. GLOBAL like the detectors.
+{% endif %}
+        Node(
+            package="trainit_perception",
+            executable="{{ g.node }}",
+            name="grasp_provider_{{ d }}",
+            output="screen",
+            parameters=[{"config_file": perception, "detector_name": "{{ d }}",
+                         "use_sim_time": use_sim}],
+        ),
+{% endfor %}
 {% for e in external_detectors %}
+{% if e.produces_instances is defined and e.produces_instances %}
+        # EXTERNAL SEGMENTER "{{ e.detector }}" (vNext M4.5): its own node publishes an INSTANCE IMAGE
+        # on /perception/{{ e.detector }}/instances (+ instance_info), never detections; the grasp
+        # provider whose segmentation is instance_topic with source "{{ e.detector }}" reads it.
+        # Launched by name only: its package is NOT an <exec_depend> of this bundle (ADR-0003);
+        # install it beside the bundle. See the comment in package.xml.
+{% else %}
         # EXTERNAL-NODE detector "{{ e.detector }}" (D-015): this method is implemented by
         # this node, not by trainit_perception, and it publishes the SAME contract on
         # /perception/{{ e.detector }}/detections, so DetectObject consumes it without
@@ -93,6 +132,7 @@ def launch_setup(context, *args, **kwargs):
         # Its package is NOT an <exec_depend> of this bundle (ADR-0003: a package name
         # rosdep cannot resolve would break `rosdep install` for the whole workspace);
         # install it beside the bundle. See the comment in package.xml.
+{% endif %}
         Node(
             package="{{ e.package }}",
             executable="{{ e.executable }}",
@@ -115,6 +155,18 @@ def launch_setup(context, *args, **kwargs):
 {% endif %}
         ),
     ]
+{% if perception_nodes %}
+    if LaunchConfiguration("end_with_tree").perform(context).lower() in ("true", "1"):
+        # The launch ends when the tree ends: trainit_run_bt (the list's last action) exits, and
+        # the perception nodes above would otherwise keep the launch running for ever.
+        runner = actions[-1]
+        actions.append(RegisterEventHandler(OnProcessExit(
+            target_action=runner,
+            on_exit=lambda event, _context: [Shutdown(
+                reason=f"trainit_run_bt exited (return code {event.returncode}): the application "
+                       "has ended, so its perception nodes stop with it")])))
+    return actions
+{% endif %}
 
 
 def generate_launch_description():
@@ -126,6 +178,11 @@ def generate_launch_description():
         DeclareLaunchArgument("groot_monitor", default_value="true",
                               description="Groot2 live monitor (needs libzmq)"),
         DeclareLaunchArgument("use_sim_time", default_value="true"),
+{% if perception_nodes %}
+        DeclareLaunchArgument("end_with_tree", default_value="true",
+                              description="Shut this launch down (its perception nodes included) "
+                                          "when trainit_run_bt exits; bringup.launch.py passes false"),
+{% endif %}
 {% if gazebo_supported %}
         DeclareLaunchArgument("mode", default_value="isaac",
                               description="backend for the robot_description hardware plugin "

@@ -82,6 +82,23 @@ def test_a_grasp_without_a_grasp_target_in_the_scene_is_a_warning_at_the_grasp()
     assert not [w for w in configuration_advice(CanonicalProject.parse_obj(data)) if w.startswith('R-I0-06')]
 
 
+def test_a_grasp_that_declares_its_payload_is_not_warned_that_nothing_attaches():
+    """TSA 8.6.1 (the M4.5 Isaac benchmark): a grasp with ``payload`` attaches its own held box after the verified
+    grasp (ADR-0024 amendment M4.5), so R-I0-06 -- "nothing attaches to the tool" -- is false for it."""
+    c = pick_and_place()
+    data = project_to_dict(c.project)
+    grasps = [s for s in data['application']['tasks'][0]['steps'] if 'grasp' in s]
+    assert len(grasps) == 1
+    grasps[0]['grasp']['payload'] = {'dims': [0.02, 0.02, 0.02]}
+    assert not [w for w in configuration_advice(CanonicalProject.parse_obj(data)) if w.startswith('R-I0-06')]
+    # a second grasp without one is named
+    data['application']['tasks'][0]['steps'].append({'grasp': {k: v for k, v in grasps[0]['grasp'].items()
+                                                              if k != 'payload'}})
+    n = len(data['application']['tasks'][0]['steps'])
+    warnings = [w for w in configuration_advice(CanonicalProject.parse_obj(data)) if w.startswith('R-I0-06')]
+    assert len(warnings) == 1 and warnings[0].startswith(f"R-I0-06: task 'pick_and_place' step {n}: a grasp")
+
+
 def test_the_end_effector_live_check_is_above_the_scroll(qapp):
     from python_qt_binding.QtWidgets import QScrollArea
     from trainit_setup_assistant.gui.composer.eef_panel import EndEffectorPanel

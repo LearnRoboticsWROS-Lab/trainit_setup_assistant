@@ -192,6 +192,17 @@ def project_to_dict(project: CanonicalProject) -> dict:
         node = det.get('external_node') if isinstance(det, dict) else None
         if isinstance(node, dict) and node.get('detect_service') is False:
             node.pop('detect_service')
+        # vNext M4: a grasp provider's segmentation is written only when set (every other detector saves
+        # byte-identical)
+        if isinstance(det, dict) and det.get('segmentation') is None:
+            det.pop('segmentation', None)
+        # vNext M4.5: a provider's eligibility, an external segmenter's `produces` and an external node's
+        # `name_parameter` likewise
+        for key in ('eligibility', 'produces'):
+            if isinstance(det, dict) and det.get(key) is None:
+                det.pop(key, None)
+        if isinstance(node, dict) and node.get('name_parameter') is None:
+            node.pop('name_parameter', None)
     # vNext I0.1: the world binding and the scene's provenance are written only when set, so a
     # project without them saves byte-identical to TSA 8.0
     for section, key in (('deployment', 'isaac'), ('scene', 'provenance')):

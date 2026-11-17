@@ -45,7 +45,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import yaml
 
-from ..catalog import EEF_ADAPTER_ROWS, EEF_BRIDGE_ROLES, HARDWARE_LAYER
+from ..catalog import EEF_ADAPTER_ROWS, EEF_BRIDGE_ROLES, EEF_MOCK_OUTCOMES, HARDWARE_LAYER
 from ..model import CanonicalProject
 from ..model.deployment import LaunchNodeSpec
 from ..model.end_effector import (IMPLIED_CAPABILITIES, NAME_TOKEN,
@@ -994,6 +994,20 @@ class _Checks:
         D2.B) -- the value provides() reads too, so R7, R15 and R16 never disagree."""
         return b.effective_flavour
 
+    def _outcome_problems(self, where: str, b) -> List[str]:
+        """vNext M4.5: a mock binding's outcome SEQUENCE per site -- a known site, a non-empty sequence of the
+        mock adapter's outcomes (``unavailable`` is not one: a site's deciding source is fixed at start-up)."""
+        out = []
+        sites = [s.id for s in self.dev.sites]
+        for sid, seq in b.outcomes.items():
+            if sid not in sites:
+                out.append(f'{_prefix(15)}: {where}: outcomes names site "{sid}", and the device\'s sites are '
+                           f'{sites}.')
+            elif not seq or any(o not in EEF_MOCK_OUTCOMES for o in seq):
+                out.append(f'{_prefix(15)}: {where}: outcomes.{sid} {seq!r} must be a non-empty list of '
+                           f'{list(EEF_MOCK_OUTCOMES)} (the n-th engage takes the n-th, the last repeats).')
+        return out
+
     def r15_bindings(self) -> List[str]:
         out, dev = [], self.dev
         for backend in self.modes:
@@ -1016,10 +1030,12 @@ class _Checks:
                                'require_release_confirmation are both false.')
                 continue
             if b.long_form:
-                extra = [k for k in ('stage_cmd_topic', 'stage_status_topic', 'flavour')
+                extra = [k for k in ('stage_cmd_topic', 'stage_status_topic', 'flavour', 'outcomes')
                          if getattr(b, k) is not None and k not in row['binding_keys']]
                 if extra:
                     out.append(f'{_prefix(15)}: {where}: "{b.adapter}" reads no {extra}.')
+                elif b.outcomes is not None:
+                    out += self._outcome_problems(where, b)
             for key in row['requires']:
                 if not getattr(b, key):
                     out.append(f'{_prefix(15)}: {where}: "{b.adapter}" needs {key} -- set it in '
@@ -1904,6 +1920,11 @@ def adapter_rows(project: CanonicalProject) -> List[LaunchNodeSpec]:
             if chosen:
                 for s in dev.sites:
                     own[f'mock.sites.{s.id}.evidence'] = chosen
+        if b.adapter == 'trainit_mock' and b.outcomes:
+            # vNext M4.5: the scripted outcome SEQUENCE per site (trainit_hardware_layer >= 0.4.0), in site order
+            for s in dev.sites:
+                if b.outcomes.get(s.id):
+                    own[f'mock.sites.{s.id}.outcomes'] = ','.join(b.outcomes[s.id])
         if trigger is not None:
             own['compat.trigger_on'], own['compat.trigger_off'] = trigger
         if echo is not None and echo.upper is not None and echo.lower is not None:

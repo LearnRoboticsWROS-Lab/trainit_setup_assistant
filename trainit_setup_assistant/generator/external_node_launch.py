@@ -114,6 +114,8 @@ def _resolved_node_names(project: CanonicalProject) -> Dict[str, List[str]]:
     for det in (per.detectors if per else []):
         if det.emits_node:
             name = f'detector_{det.name}'
+        elif det.is_grasp_provider:                      # vNext M4: trainit_perception's surface_grasp_node
+            name = f'grasp_provider_{det.name}'
         elif det.external_node is not None:
             name = det.external_node.resolved_node_name(det.name)
         else:
@@ -176,6 +178,20 @@ def external_node_problems(project: CanonicalProject) -> List[str]:
                 f'file a path (absolute, or relative to {ext.package or "the package"}\'s '
                 f'share directory, e.g. "config/{det.name}.yaml"), or remove the key — '
                 f'a node may well take all its parameters inline.')
+        if ext.name_parameter is not None:
+            # vNext M4.5: the entry's name goes into this parameter -- a blank one would be a parameter named
+            # "", and an explicit value under the same name would contradict the entry's name
+            name_param = ext.name_parameter.strip()
+            if not name_param:
+                problems.append(
+                    f'detector "{det.name}": external_node.name_parameter is blank. Name the parameter the node '
+                    f'reads its output name from (e.g. "output_name"), or remove the key.')
+            elif name_param in ext.parameters and ext.parameters[name_param] != det.name:
+                problems.append(
+                    f'detector "{det.name}": external_node.parameters.{name_param} = '
+                    f'{ext.parameters[name_param]!r}, and name_parameter writes the entry\'s name '
+                    f'"{det.name}" there: the node would publish under another name than the one the project '
+                    f'gives it. Remove the explicit value.')
         empty = sorted(role for role, param in ext.topic_parameters.items()
                        if not str(param).strip())
         if empty:
@@ -225,9 +241,16 @@ def external_node_warnings(project: CanonicalProject) -> List[str]:
     per = project.perception
     launched = []
     for det in (per.detectors if per else []):
-        if det.emits_node:
+        if det.emits_node or det.is_grasp_provider:      # TSA launches trainit_perception's own node for both
             continue
-        if det.external_node is None:
+        if det.external_node is None and det.produces_instances:
+            out.append(
+                f'detector "{det.name}" is an EXTERNAL SEGMENTER (produces: instances) with no '
+                f'external_node block: the bundle launches nothing for it and '
+                f'/perception/{det.name}/instances stays silent unless you start its node yourself. Set '
+                f'perception.detectors["{det.name}"].external_node (package + executable) to have the bundle '
+                f'launch it.')
+        elif det.external_node is None:
             out.append(
                 f'detector "{det.name}" ({det.method.value}) is an EXTERNAL-NODE method '
                 f'with no external_node block: the bundle launches nothing for it and '
@@ -257,6 +280,8 @@ def _entry(project: CanonicalProject, det: DetectorSpec) -> Dict[str, Any]:
     # Inline parameters: the project's own, then the camera topics under the parameter
     # names the node reads them from, then use_sim_time. Sorted, so the bytes are stable.
     inline: Dict[str, Any] = dict(ext.parameters)
+    if ext.name_parameter and ext.name_parameter.strip():      # vNext M4.5: the entry's name, from the entry
+        inline[ext.name_parameter.strip()] = det.name
     for role in INPUT_ROLES:                      # fixed order, not the dict's
         param = ext.topic_parameters.get(role)
         if param:
@@ -286,7 +311,7 @@ def _entry(project: CanonicalProject, det: DetectorSpec) -> Dict[str, Any]:
             lines.append(f'{_ARG}({_py(key)}, {_py(ext.remappings[key])}),')
         lines.append(_KW + '],')
 
-    return {
+    entry = {
         'detector': det.name,
         'package': ext.package.strip(),
         'executable': ext.executable.strip(),
@@ -295,6 +320,9 @@ def _entry(project: CanonicalProject, det: DetectorSpec) -> Dict[str, Any]:
         # the first line of a multi-line expression, so the indentation is built here.
         'arguments_block': '\n'.join(lines),
     }
+    if det.produces_instances:                  # vNext M4.5: an external segmenter (its own comment)
+        entry['produces_instances'] = True
+    return entry
 
 
 def external_node_context(project: CanonicalProject) -> List[Dict[str, Any]]:

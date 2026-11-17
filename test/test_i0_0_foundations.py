@@ -483,13 +483,17 @@ def _model_fields(cls) -> set:
 # is classified -- a waypoint reference (ops.WAYPOINT_FIELDS) or not.
 PINNED_FIELDS = {
     'MoveStep': {'center', 'profile', 'provider', 'to', 'type', 'via'},
-    'GraspStep': {'approach_profile', 'at', 'candidates', 'eef', 'index', 'orientation', 'orientation_from',
-                  'profile', 'retract', 'site', 'standoff_m'},
-    'ReleaseStep': {'approach_profile', 'at', 'eef', 'profile', 'retract', 'site', 'standoff_m'},
+    # vNext M4: max_tilt_deg (an angle, not a waypoint reference); vNext M4.5: on_failure (a word) and payload
+    # (a box: dims, offset) -- neither names a waypoint
+    'GraspStep': {'approach_profile', 'at', 'candidates', 'eef', 'index', 'max_tilt_deg', 'on_failure',
+                  'orientation', 'orientation_from', 'payload', 'profile', 'retract', 'site', 'standoff_m'},
+    'ReleaseStep': {'approach_profile', 'at', 'eef', 'on_failure', 'profile', 'retract', 'site',
+                    'standoff_m'},                             # TSA 8.6.1: on_failure (a choice, not a reference)
     'RelativeTarget': {'dx', 'dy', 'dz', 'frame', 'to'},
     'PathSegment': {'center', 'profile', 'type', 'via'},
     'EventAnchor': {'segment', 'state', 'when'},
-    'DetectStep': {'approach', 'class_id', 'detector', 'keep', 'out', 'source', 'timeout_ms'},
+    'DetectStep': {'approach', 'class_id', 'detector', 'keep', 'out', 'source', 'timeout_ms',
+                   'trigger'},                                 # vNext M4: trigger (a flag, not a reference)
     'ToolActuate': {'actuator', 'eef', 'target'},
     'ToolVerify': {'eef', 'expect', 'site'},
     'ProcessStep': {'channel', 'class_id', 'detector', 'kind', 'ms', 'out', 'sync', 'timeout_ms', 'value'},

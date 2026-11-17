@@ -350,6 +350,21 @@ class DetectorSpec(BaseModel):
     # generator says so instead of silently emitting nothing. See
     # :mod:`trainit_setup_assistant.model.external_node`.
     external_node: Optional[ExternalNodeSpec] = None
+    # vNext M4, method surface_grasp only: the TP detector the provider fits its surfaces on --
+    # ``{method: <a TP method that exposes masks>, params: {...}}``, written verbatim into perception.yaml.
+    # ``params`` then holds the PROVIDER's own parameters (eef, site, contact_radius_m, approach_cone_deg,
+    # standoff_m, ...), held to TP's committed schema (``surface_grasp_problems``).
+    segmentation: Optional[Dict[str, Any]] = None
+    # vNext M4.5, method surface_grasp only: the workspace ELIGIBILITY filter (TP >= 0.7.0) -- ``{roi_px: [[u, v],
+    # ...], min_inside, z_min_m, z_max_m}``, written verbatim into the entry beside ``segmentation``. None = none.
+    eligibility: Optional[Dict[str, Any]] = None
+    # vNext M4.5: WHAT this entry's node publishes, when it is not the perception contract's detections. Only
+    # ``instances`` (:data:`PRODUCES_INSTANCES`) exists: an EXTERNAL SEGMENTER (method ``custom`` + an
+    # ``external_node`` block) publishing an instance image ``/perception/<name>/instances`` (16UC1) and its labels
+    # ``/perception/<name>/instance_info`` (vision_msgs/Detection2DArray) -- what a grasp provider's
+    # ``segmentation: {method: instance_topic, params: {source: <name>}}`` reads. Never detections, so no detect
+    # step, capture or ranking consumes it. None = the method's own output (byte-identical when unset).
+    produces: Optional[str] = None
 
     @property
     def class_id(self) -> str:
@@ -371,6 +386,18 @@ class DetectorSpec(BaseModel):
         itself, and generating a detector_node for them would crash at startup
         (make_detector raises KeyError on an unknown method)."""
         return self.method is DetectionMethod.COLOR_MASK
+
+    @property
+    def is_grasp_provider(self) -> bool:
+        """True for a trainit_perception GRASP PROVIDER (vNext M4): the bundle runs the provider's own node,
+        which publishes grasp CANDIDATES on /perception/<name>/grasp_candidates, never detections."""
+        return self.method in GRASP_PROVIDER_METHODS
+
+    @property
+    def produces_instances(self) -> bool:
+        """True for an EXTERNAL SEGMENTER entry (vNext M4.5): its node publishes an instance image, never
+        detections."""
+        return self.produces == PRODUCES_INSTANCES
 
     @property
     def launches_external_node(self) -> bool:
@@ -402,6 +429,13 @@ class DetectorSpec(BaseModel):
                 camera.camera_info_topic if camera
                 else DEFAULT_INPUT_TOPICS['camera_info']),
         }
+
+
+# vNext M4.5: the methods whose node is a trainit_perception GRASP PROVIDER (TSA launches TP's own node, named in
+# TP's vocabulary, ``grasp_providers.<method>.node``)
+GRASP_PROVIDER_METHODS = (DetectionMethod.SURFACE_GRASP, DetectionMethod.SCRIPTED_GRASP)
+# vNext M4.5: the one value of ``DetectorSpec.produces`` -- an external segmenter's instance image
+PRODUCES_INSTANCES = 'instances'
 
 
 class VisionBinding(BaseModel):
@@ -453,3 +487,349 @@ class PerceptionSpec(BaseModel):
             if d.name == name:
                 return d
         return None
+
+
+# --- vNext M4: the SurfaceGrasp provider's configuration, held to TP's committed schema -----------------------
+def grasp_provider_schema(name: str) -> Optional[Dict[str, Any]]:
+    """TP's record of a grasp provider (TSA's snapshot, ADR-0021): node, modes, segmentation methods,
+    parameters. None when the snapshot has no such provider."""
+    return (_TP.get('grasp_providers') or {}).get(name)
+
+
+def _number(v) -> bool:
+    import math
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def surface_grasp_problems(det: 'DetectorSpec') -> List[str]:
+    """Why a ``surface_grasp`` detector entry cannot be generated, as sentences (empty = it can). The same
+    refusals the provider's node makes at start-up, made before a bundle exists: a provider without an end
+    effector, an envelope or a valid standoff never starts, so a bundle carrying one would fail three layers
+    from its cause."""
+    where = f'detector "{det.name}" (surface_grasp)'
+    schema = grasp_provider_schema(DetectionMethod.SURFACE_GRASP.value)
+    if schema is None:
+        return [f'{where}: TSA\'s snapshot of trainit_perception has no surface_grasp provider: refresh the catalog '
+                'from trainit_perception >= 0.6.0']
+    out: List[str] = []
+    if det.external_node is not None:
+        out.append(f'{where}: a grasp provider runs trainit_perception\'s own node: no external_node block')
+    if det.candidate_rule is not None or 'candidate_rule' in det.params:
+        out.append(f'{where}: a grasp provider ranks its candidates by its own terms: no candidate_rule')
+    seg = det.segmentation
+    if not isinstance(seg, dict) or not seg.get('method'):
+        out.append(f'{where}: needs segmentation: {{method: <one of {", ".join(schema["segmentation_methods"])}>, '
+                   'params: {...}}} -- the detector whose masks the surfaces are fitted on')
+    else:
+        stray = sorted(set(seg) - {'method', 'params'})
+        if stray:
+            out.append(f'{where}: segmentation has unknown key(s) {", ".join(stray)} (method, params)')
+        if seg['method'] not in schema['segmentation_methods']:
+            out.append(f'{where}: segmentation.method {seg["method"]!r} exposes no masks (accepted: '
+                       f'{", ".join(schema["segmentation_methods"])})')
+        elif seg['method'] in (schema.get('segmentation_parameters') or {}):
+            # vNext M4.5: a segmentation SOURCE that is not a TP detector (`instance_topic`: an external segmenter's
+            # instance image), held to its own schema -- the same rules as the node's InstanceConfig
+            out += _source_problems(where, seg['method'], seg.get('params') or {},
+                                    schema['segmentation_parameters'][seg['method']]['parameters'])
+        else:
+            known = (_TP['detector_methods'][seg['method']].get('parameters') or {})
+            unknown = sorted(k for k in (seg.get('params') or {}) if k not in known)
+            if unknown:
+                out.append(f'{where}: segmentation.params {", ".join(unknown)} are not {seg["method"]} parameters')
+            for key, v in (seg.get('params') or {}).items():           # held to the method's schema, like params
+                row = known.get(key)
+                if row is None:
+                    continue
+                t = row['type']
+                if t == 'range':
+                    ok = (isinstance(v, list) and len(v) == 2 and all(isinstance(x, int) and not isinstance(x, bool)
+                                                                     for x in v))
+                    vals = v if ok else []
+                elif t == 'int':
+                    ok, vals = isinstance(v, int) and not isinstance(v, bool), [v]
+                elif t == 'float':
+                    ok, vals = _number(v), [v]
+                else:
+                    ok, vals = isinstance(v, str), []
+                if not ok:
+                    out.append(f'{where}: segmentation.params.{key} = {v!r} is not a valid {t}')
+                    continue
+                if any(('min' in row and x < row['min']) or ('max' in row and x > row['max']) for x in vals):
+                    out.append(f'{where}: segmentation.params.{key} = {v!r} is outside [{row.get("min")}, '
+                               f'{row.get("max")}]')
+    if det.eligibility is not None:
+        out += eligibility_problems(det)
+    params = schema['parameters']
+    for key in sorted(set(det.params) - set(params)):
+        out.append(f'{where}: unknown parameter {key!r} (the provider refuses it)')
+    for key, row in params.items():
+        if key not in det.params:
+            if row.get('required'):
+                out.append(f'{where}: {key} is required ({row["type"]}): the provider has no default for it')
+            continue
+        v, t = det.params[key], row['type']
+        if t == 'str':
+            ok = isinstance(v, str) and (bool(v) or not row.get('required'))
+        elif t == 'int':
+            ok = isinstance(v, int) and not isinstance(v, bool)
+        elif t == 'float':
+            ok = _number(v)
+        else:                                                    # vec3
+            ok = (isinstance(v, list) and len(v) == 3 and all(_number(x) for x in v)
+                  and sum(x * x for x in v) ** 0.5 > 1e-9)
+        if not ok:
+            out.append(f'{where}: {key} = {v!r} is not a valid {t}')
+            continue
+        if 'choices' in row and v not in row['choices']:
+            out.append(f'{where}: {key} = {v!r} is not one of {", ".join(row["choices"])}')
+        if t in ('int', 'float') and (('min' in row and v < row['min']) or ('max' in row and v > row['max'])):
+            out.append(f'{where}: {key} = {v!r} is outside [{row.get("min")}, {row.get("max")}]')
+    # the semantic refusals the provider makes (M4_DESIGN.md §8-§10) -- the SAME rules as TP's
+    # SurfaceGraspConfig.from_params, so a bundle TSA generates is never refused by its node at start-up (review M4)
+    def val(key):
+        return det.params.get(key, (params.get(key) or {}).get('default'))
+
+    def num(key, default=0.0):
+        v = val(key)
+        return float(v) if _number(v) else default
+    if _number(det.params.get('inlier_mm')) and not det.params['inlier_mm'] > 0:
+        out.append(f'{where}: inlier_mm must be > 0')
+    view = det.params.get('max_view_angle_deg')
+    if _number(view) and not 0 < view <= 90:
+        out.append(f'{where}: max_view_angle_deg {view} must be in (0, 90]')
+    if not (0 <= num('z_min_m') < num('z_max_m', 1.0)):
+        out.append(f'{where}: the depth band [z_min_m, z_max_m] = [{val("z_min_m")}, {val("z_max_m")}] is empty')
+    face = val('grasp_face') or 'disc'
+    faces = _TP.get('faces') or {}
+    if face not in faces:
+        out.append(f'{where}: grasp_face {face!r} is not a face trainit_perception registers '
+                   f'({", ".join(sorted(faces))})')
+    if num('tool_radius_m') > 0 and not num('tool_reach_mm') > 0:
+        out.append(f'{where}: tool_radius_m > 0 needs tool_reach_mm > 0 (the clearance term needs the grip window)')
+    if num('min_clearance') > 0 and not num('tool_radius_m') > 0:
+        out.append(f'{where}: min_clearance > 0 needs tool_radius_m > 0 (the clearance term is not evaluated)')
+    if num('min_visible_fraction') > 0 and face in faces and not all(
+            num(k) > 0 for k in faces[face].get('params') or ()):
+        out.append(f'{where}: min_visible_fraction > 0 needs the size of face {face!r} '
+                   f'({", ".join(faces[face].get("params") or ())}): visibility is not evaluated without it')
+    axis, xref = val('approach_cone_axis'), val('reference_x_axis')
+    if isinstance(axis, list) and isinstance(xref, list) and len(axis) == len(xref) == 3 \
+            and all(_number(x) for x in axis + xref):
+        na = sum(x * x for x in axis) ** 0.5
+        nx = sum(x * x for x in xref) ** 0.5
+        if na > 1e-9 and nx > 1e-9:
+            c = abs(sum(a * b for a, b in zip(axis, xref))) / (na * nx)
+            if (1 - min(1.0, c) ** 2) ** 0.5 < 1e-6:
+                out.append(f'{where}: reference_x_axis is parallel to approach_cone_axis: the rotation about the '
+                           'approach would be undefined')
+    cone = det.params.get('approach_cone_deg')
+    if _number(cone) and not 0 < cone < 90:
+        out.append(f'{where}: approach_cone_deg {cone} must be in (0, 90) deg (an envelope, never a default)')
+    if _number(det.params.get('contact_radius_m')) and not det.params['contact_radius_m'] > 0:
+        out.append(f'{where}: contact_radius_m must be > 0 (the contact the grasp site needs on the surface)')
+    s = det.params.get('standoff_m')
+    lo = det.params.get('standoff_min_m', (params.get('standoff_min_m') or {}).get('default'))
+    hi = det.params.get('standoff_max_m', (params.get('standoff_max_m') or {}).get('default'))
+    if _number(s) and _number(lo) and _number(hi) and not (0 < lo <= s <= hi):
+        out.append(f'{where}: standoff_m {s} must lie in [standoff_min_m, standoff_max_m] = [{lo}, {hi}] (> 0): '
+                   'never clamped')
+    return out
+
+
+# --- vNext M4.5: instance_topic segmentation, workspace eligibility, the scripted provider -------------------------
+_ROS_NAME_TOKEN = __import__('re').compile(r'^[A-Za-z][A-Za-z0-9_]*$')
+
+
+def _source_problems(where: str, method: str, params: Dict[str, Any], rows: Dict[str, Any]) -> List[str]:
+    """A segmentation SOURCE's params (``instance_topic``) against TP's schema for it -- the same refusals as the
+    node's ``InstanceConfig.from_params``: the source one ROS name token, the classes a list of non-empty names,
+    the numbers in their ranges."""
+    out: List[str] = []
+    unknown = sorted(k for k in params if k not in rows)
+    if unknown:
+        out.append(f'{where}: segmentation.params {", ".join(unknown)} are not {method} parameters')
+    for key, row in rows.items():
+        if key not in params:
+            if row.get('required'):
+                out.append(f'{where}: segmentation.params.{key} is required ({row["type"]}): {method} has no '
+                           'default for it')
+            continue
+        v, t = params[key], row['type']
+        if t == 'str':
+            ok = isinstance(v, str) and (not row.get('required') or bool(_ROS_NAME_TOKEN.match(v)))
+        elif t == 'str_list':
+            ok = v is None or (isinstance(v, list) and all(isinstance(x, str) and x for x in v))
+        elif t == 'int':
+            ok = isinstance(v, int) and not isinstance(v, bool)
+        elif t == 'float':
+            ok = _number(v)
+        else:
+            ok = False                                       # a type this TSA does not know how to check
+        if not ok:
+            out.append(f'{where}: segmentation.params.{key} = {v!r} is not a valid {t}'
+                       + (' (one ROS name token: the segmenter\'s entry name)' if key == 'source' else ''))
+            continue
+        if t in ('int', 'float') and (('min' in row and v < row['min']) or ('max' in row and v > row['max'])):
+            out.append(f'{where}: segmentation.params.{key} = {v!r} is outside [{row.get("min")}, {row.get("max")}]')
+    return out
+
+
+def _cross(p1, p2, q1, q2) -> bool:
+    """Whether the closed segments p1p2 and q1q2 share a point (TP's eligibility rule, the same tolerances)."""
+    def orient(a, b, c):
+        v = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        return 0 if abs(v) < 1e-12 else (1 if v > 0 else -1)
+
+    def on(a, b, c):
+        return (min(a[0], b[0]) - 1e-12 <= c[0] <= max(a[0], b[0]) + 1e-12
+                and min(a[1], b[1]) - 1e-12 <= c[1] <= max(a[1], b[1]) + 1e-12)
+
+    o1, o2, o3, o4 = orient(p1, p2, q1), orient(p1, p2, q2), orient(q1, q2, p1), orient(q1, q2, p2)
+    if o1 != o2 and o3 != o4:
+        return True
+    return ((o1 == 0 and on(p1, p2, q1)) or (o2 == 0 and on(p1, p2, q2))
+            or (o3 == 0 and on(q1, q2, p1)) or (o4 == 0 and on(q1, q2, p2)))
+
+
+def polygon_px_problems(roi, width: Optional[int] = None, height: Optional[int] = None) -> List[str]:
+    """Why ``roi`` is not a usable workspace polygon in colour pixels (empty = it is): >= 3 vertices of two finite
+    numbers, no two consecutive ones equal, simple (no two non-adjacent edges meet), at least 1 px^2 -- the rules of
+    TP's ``eligibility.polygon_problems``. With the colour image's size, every vertex on the image too. TSA has no
+    camera resolution in a project today, so generation passes none: the node checks it against its CameraInfo."""
+    if not isinstance(roi, list) or len(roi) < 3:
+        return [f'roi_px must be a list of >= 3 [u, v] vertices, got {roi!r}']
+    pts = []
+    for i, p in enumerate(roi):
+        if not isinstance(p, list) or len(p) != 2 or not all(_number(x) for x in p):
+            return [f'roi_px vertex {i} must be two finite numbers [u, v], got {p!r}']
+        pts.append((float(p[0]), float(p[1])))
+    out: List[str] = []
+    n = len(pts)
+    same = next((i for i in range(n) if pts[i] == pts[(i + 1) % n]), None)
+    if same is not None:
+        out.append(f'roi_px vertices {same} and {(same + 1) % n} coincide')
+    else:
+        crossing = next(((i, j) for i in range(n) for j in range(i + 2, n) if not (i == 0 and j == n - 1)
+                         and _cross(pts[i], pts[(i + 1) % n], pts[j], pts[(j + 1) % n])), None)
+        if crossing is not None:
+            out.append(f'roi_px edges {crossing[0]} and {crossing[1]} intersect: the polygon must be simple')
+        else:
+            area = abs(sum(pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1]
+                           for i in range(n))) / 2
+            if area < 1.0:
+                out.append(f'roi_px encloses {area:g} px^2: a degenerate polygon (collinear vertices) admits no region')
+    if width is not None and height is not None:
+        bad = [i for i, (u, v) in enumerate(pts) if not (0.0 <= u <= width and 0.0 <= v <= height)]
+        if bad:
+            out.append(f'roi_px vertex(es) {bad} lie outside the {width}x{height} colour image')
+    return out
+
+
+def eligibility_problems(det: 'DetectorSpec', width: Optional[int] = None,
+                         height: Optional[int] = None) -> List[str]:
+    """Why a provider entry's ``eligibility`` block would be refused by its node (empty = it would not): a mapping
+    of the provider's eligibility parameters (TP's committed schema), ``roi_px`` required and a usable polygon,
+    ``min_inside`` in (0, 1], the depth band ordered: 0 <= z_min_m < z_max_m <= 20."""
+    where = f'detector "{det.name}" ({det.method.value})'
+    schema = grasp_provider_schema(det.method.value) or {}
+    section = schema.get('eligibility') or {}
+    if not section:
+        return [f'{where}: this provider has no workspace eligibility filter (trainit_perception\'s vocabulary '
+                'declares none): remove the eligibility block']
+    block = det.eligibility
+    if not isinstance(block, dict):
+        return [f'{where}: eligibility must be a mapping {{roi_px, min_inside, z_min_m, z_max_m}}, got {block!r}']
+    rows = section['parameters']
+    out: List[str] = []
+    unknown = sorted(set(block) - set(rows))
+    if unknown:
+        out.append(f'{where}: eligibility has unknown key(s) {", ".join(map(str, unknown))} '
+                   f'(have: {", ".join(rows)})')
+    if 'roi_px' not in block:
+        out.append(f'{where}: eligibility.roi_px is required: the workspace polygon in colour pixels (no default: a '
+                   'workspace is the cell\'s)')
+    else:
+        out += [f'{where}: eligibility: {p}' for p in polygon_px_problems(block['roi_px'], width, height)]
+    mi = block.get('min_inside', 0.9)
+    if not _number(mi) or not 0.0 < mi <= 1.0:
+        out.append(f'{where}: eligibility.min_inside must be in (0, 1], got {mi!r}')
+    zmin = block.get('z_min_m', (rows.get('z_min_m') or {}).get('default', 0.0))
+    zmax = block.get('z_max_m', (rows.get('z_max_m') or {}).get('default', 20.0))
+    if not (_number(zmin) and _number(zmax) and 0.0 <= zmin < zmax <= 20.0):
+        out.append(f'{where}: eligibility: the depth band [z_min_m, z_max_m] = [{zmin!r}, {zmax!r}] must satisfy '
+                   '0 <= z_min_m < z_max_m <= 20')
+    return out
+
+
+def scripted_grasp_problems(det: 'DetectorSpec') -> List[str]:
+    """Why a ``scripted_grasp`` entry cannot be generated (empty = it can): the node's own start-up refusals made
+    before a bundle exists -- its params held to TP's schema (scenario_file and frame_id non-empty, after_end one
+    of its choices, the two axes valid and not parallel), and the entry shape it accepts: ``{method, params,
+    continuous: false}`` only (it reads no camera, has no rate and answers the capture trigger only).
+
+    The scenario FILE is not read: its candidates' eef / site, poses and steps are validated by the node at
+    start-up (TSA never parses a TP scenario format). A relative path is the node's working directory's, so an
+    absolute one is asked for."""
+    where = f'detector "{det.name}" (scripted_grasp)'
+    schema = grasp_provider_schema(DetectionMethod.SCRIPTED_GRASP.value)
+    if schema is None:
+        return [f'{where}: TSA\'s snapshot of trainit_perception has no scripted_grasp provider: refresh the '
+                'catalog from trainit_perception >= 0.7.0']
+    out: List[str] = []
+    if det.external_node is not None:
+        out.append(f'{where}: a grasp provider runs trainit_perception\'s own node: no external_node block')
+    if det.candidate_rule is not None:
+        out.append(f'{where}: a grasp provider ranks its candidates by its own terms: no candidate_rule')
+    stray = sorted(k for k in ('segmentation', 'eligibility', 'produces', 'rgb_topic', 'depth_topic',
+                               'camera_info_topic') if getattr(det, k) is not None)
+    if det.rate_hz != DetectorSpec.__fields__['rate_hz'].default:
+        stray.append('rate_hz')
+    if stray:
+        out.append(f'{where}: {", ".join(stray)}: a scripted provider reads no camera and no segmenter, and has no '
+                   'rate -- its entry is {method, params, continuous: false}')
+    # `continuous` is not judged: the entry is always written `continuous: false` (the node refuses true), and a
+    # detect step on it must capture (`trigger: true`), which the task program refuses otherwise (R-M3-03)
+    params = schema['parameters']
+    for key in sorted(set(det.params) - set(params)):
+        out.append(f'{where}: unknown parameter {key!r} (the provider refuses it)')
+    for key, row in params.items():
+        if key not in det.params:
+            if row.get('required'):
+                out.append(f'{where}: {key} is required ({row["type"]}): the provider has no default for it')
+            continue
+        v, t = det.params[key], row['type']
+        if t == 'str':
+            ok = isinstance(v, str) and (bool(v) or not row.get('required'))
+        elif t == 'vec3':
+            ok = (isinstance(v, list) and len(v) == 3 and all(_number(x) for x in v)
+                  and sum(x * x for x in v) ** 0.5 > 1e-9)
+        else:
+            ok = isinstance(v, (int, float)) and not isinstance(v, bool)
+        if not ok:
+            out.append(f'{where}: {key} = {v!r} is not a valid {t}')
+            continue
+        if 'choices' in row and v not in row['choices']:
+            out.append(f'{where}: {key} = {v!r} is not one of {", ".join(row["choices"])}')
+    scenario = det.params.get('scenario_file')
+    if isinstance(scenario, str) and scenario and not scenario.startswith('/'):
+        out.append(f'{where}: scenario_file {scenario!r} must be an absolute path: the node opens it from its own '
+                   'working directory, which the bundle does not fix')
+    axis = det.params.get('approach_cone_axis', (params.get('approach_cone_axis') or {}).get('default'))
+    xref = det.params.get('reference_x_axis', (params.get('reference_x_axis') or {}).get('default'))
+    if isinstance(axis, list) and isinstance(xref, list) and len(axis) == len(xref) == 3 \
+            and all(_number(x) for x in axis + xref):
+        na, nx = sum(x * x for x in axis) ** 0.5, sum(x * x for x in xref) ** 0.5
+        if na > 1e-9 and nx > 1e-9:
+            c = abs(sum(a * b for a, b in zip(axis, xref))) / (na * nx)
+            if (1 - min(1.0, c) ** 2) ** 0.5 < 1e-6:
+                out.append(f'{where}: reference_x_axis is parallel to approach_cone_axis: the rotation about the '
+                           'approach would be undefined')
+    return out
+
+
+def grasp_provider_entry_problems(det: 'DetectorSpec') -> List[str]:
+    """The provider-specific refusals of one grasp-provider entry, by its method."""
+    if det.method is DetectionMethod.SCRIPTED_GRASP:
+        return scripted_grasp_problems(det)
+    return surface_grasp_problems(det)

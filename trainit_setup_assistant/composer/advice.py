@@ -12,7 +12,10 @@ joints) reaches it the same way every cycle. A configuration-consistent PTP to a
 
 ``R-I0-06`` -- a grasp, and no object of the cell scene (when it has one) is a grasp target (Step 2). The grasp commands the end
 effector, but nothing attaches to the tool in MoveIt's planning scene: RViz does not show the part held and
-the planner ignores it (owner Test F.1, friction row 38: "the cube was not grasped").
+the planner ignores it (owner Test F.1, friction row 38: "the cube was not grasped"). A grasp that declares its
+``payload`` (vNext M4.5, ADR-0024 amendment M4.5) attaches its own held box after the verified grasp, so it is
+never flagged: the warning names the first grasp WITHOUT a payload (TSA 8.6.1; the M4.5 Isaac benchmark found it
+firing on the capsule program, whose every grasp declares one).
 """
 
 from __future__ import annotations
@@ -64,8 +67,10 @@ def configuration_advice(project: CanonicalProject) -> List[str]:
     for task in program.tasks:
         walk(task.name, task.steps, '')
     if project.scene.objects and not project.scene.grasp_target_ids():
+        # a grasp with a payload attaches its own held box (AttachObject after the verified grasp): not flagged
         first = next(((task.name, label) for task in program.tasks
-                      for label, step in walk_steps(task.steps) if step.grasp is not None), None)
+                      for label, step in walk_steps(task.steps)
+                      if step.grasp is not None and step.grasp.payload is None), None)
         if first is not None:
             out.append(f"R-I0-06: task '{first[0]}' step {first[1]}: a grasp, and no object of the cell scene is a "
                        "grasp target: nothing attaches to the tool in the planning scene (RViz does not show the "

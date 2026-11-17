@@ -53,7 +53,7 @@ from typing import (Dict, FrozenSet, Iterable, List, Mapping, NamedTuple, Option
 import yaml
 
 from ..catalog import (BT_BUILTIN_NODES, EEF_ADAPTER_ROWS, EEF_CONTRACT_CAPABILITIES,
-                       HARDWARE_LAYER, TASK_PROGRAM_CAPABILITIES, TMR_BT_NODES, TMR_FIRST_VERSION,
+                       EEF_MOCK_SEQUENCE_SINCE, HARDWARE_LAYER, TASK_PROGRAM_CAPABILITIES, TMR_BT_NODES, TMR_FIRST_VERSION,
                        TMR_FLOORS)
 
 _TMR = 'trainit_motion_runtime'
@@ -146,10 +146,24 @@ def _tree_capabilities(root: ET.Element, namespaced: bool, used: Set[str]) -> bo
             used.add('detect_fault')                 # ADR-0022 D5: the canonical gate
         if tag == 'DetectObject' and el.get('trigger', 'false') != 'false':
             used.add('detect_trigger')               # vNext M3.5: a capture
+        if tag == 'DetectCandidates' and el.get('trigger', 'false') != 'false':
+            used.add('candidate_capture')            # vNext M4: a capture of a grasp producer
+        if tag == 'SetWaypointFromCandidate' and el.get('orientation') == 'candidate':
+            used.add('candidate_orientation')        # vNext M4: the producer's own orientation
+        if tag == 'SetWaypointFromCandidate' and 'max_tilt_deg' in el.attrib:
+            used.add('grasp_envelope')               # vNext M4: the fail-closed orientation envelope
+        if tag in ('AttachObject', 'DetachObject') and 'fault' in el.attrib:
+            used.add('scene_fault')                  # TSA 8.6.2: a refused planning-scene update is a fault
+        if tag == 'AttachObject' and 'touch_links' in el.attrib:
+            used.add('attach_touch_links')           # TSA 8.6.2: the links the held object may touch
+        if tag == 'SetWaypointFromCandidate' and 'fault' in el.attrib:
+            used.add('candidate_fault')              # TSA 8.6.2: a configuration refusal is a fault
         if tag == 'FollowPath' and ('from' in el.attrib or 'to' in el.attrib):
             used.add('follow_path_range')            # vNext M3.5: a path's event-free run
         if tag == 'MoveWaypoint' and 'fault' in el.attrib:
             used.add('move_waypoint_fault')          # ADR-0022 amendment M2.7: the motion gate
+        if tag in ('MoveWaypoint', 'FollowPath') and 'holding' in el.attrib:
+            used.add('held_motion_fault')            # ADR-0024 amendment M4.5d: a held part's failed motion
         if namespaced and tag in _SCENE_SERVICE_NODES:
             used.add('scene_services_namespace')
     return policy
@@ -358,6 +372,7 @@ def hardware_layer_requirement(launches: Texts) -> Optional[Requirement]:
     dated = {row['executable']: row['since'] for row in EEF_ADAPTER_ROWS.values()
              if row['package'] == HARDWARE_LAYER and row['executable'] and row['since']}
     started: Dict[str, str] = {}
+    sequenced: Set[str] = set()          # vNext M4.5: the adapters started with a mock outcome SEQUENCE
     for name, text in _named(launches, 'launch'):
         try:
             tree = ast.parse(text)
@@ -365,8 +380,13 @@ def hardware_layer_requirement(launches: Texts) -> Optional[Requirement]:
             raise RuntimeError(f'{_where(name, exc)} does not parse, so its {HARDWARE_LAYER} '
                                'requirement cannot be read (ADR-0022): the bundle would run '
                                'without its end-effector adapters declared') from None
-        executables = [str(r.get('executable')) for r in _bridge_rows(name, tree)
-                       if r.get('package') == HARDWARE_LAYER]
+        rows = [r for r in _bridge_rows(name, tree) if r.get('package') == HARDWARE_LAYER]
+        executables = [str(r.get('executable')) for r in rows]
+        for r in rows:
+            for params in (r.get('parameters') or ()):
+                if isinstance(params, dict) and any(str(k).startswith('mock.sites.') and str(k).endswith('.outcomes')
+                                                    for k in params):
+                    sequenced.add(str(r.get('executable')))
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and _called(node) == 'Node':
                 kw = {k.arg: k.value for k in node.keywords if k.arg}
@@ -375,12 +395,17 @@ def hardware_layer_requirement(launches: Texts) -> Optional[Requirement]:
         for exe in executables:
             if exe in dated:
                 started[exe] = dated[exe]
+    for exe in sequenced:                 # the outcome sequence is read from this release on (vNext M4.5)
+        if exe in started:
+            started[exe] = max(started[exe], EEF_MOCK_SEQUENCE_SINCE, key=_version_key)
     if not started:
         return None
     floor = max(started.values(), key=_version_key)
     names = ', '.join(exe for exe in sorted(started) if started[exe] == floor)
+    why = (' with its outcome sequence' if any(e in sequenced for e in started if started[e] == floor)
+           and floor == EEF_MOCK_SEQUENCE_SINCE else '')
     return Requirement(floor, _comment(f'{HARDWARE_LAYER} >= {floor} for: the end-effector '
-                                       f'adapter(s) {names} (ADR-0022)'))
+                                       f'adapter(s) {names}{why} (ADR-0022)'))
 
 
 def uses_policy_runtime(trees: Texts = (), launches: Texts = ()) -> bool:

@@ -20,10 +20,9 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Tuple
 
-import yaml
-
 from ..model import CanonicalProject
 from ..model.data_collection import DataCollectionSpec, DataTrigger
+from .determinism import generated_yaml
 
 CODE_SHAPE = 'R-D0-01'          # the model's own shape refusals (model/data_collection.py)
 CODE_CAMERA = 'R-D0-02'
@@ -359,7 +358,7 @@ HEADER = ('# trainit-recording/1.0 -- the data recorder of this cell in mode {mo
 
 
 def recording_yaml(mode: str, document: dict) -> str:
-    return HEADER.format(mode=mode) + yaml.safe_dump(document, sort_keys=False, width=100)
+    return HEADER.format(mode=mode) + generated_yaml(document, sort_keys=False, width=100)
 
 
 def sim_time_modes() -> Tuple[str, ...]:

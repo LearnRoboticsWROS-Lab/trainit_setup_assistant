@@ -119,6 +119,17 @@ PINNED_FLOORS = {
     'SetWaypointFromCandidate': ('2.5.0', 'cb4d1a2'),
     # ADR-0028: a pose's taught joint configuration, TMR 2.6.0 (5635584)
     'pose_configuration': ('2.6.0', '5635584'),
+    # vNext M4 (ADR-0026 amendment M4): a grasp provider's capture, the candidate's own orientation and the
+    # orientation envelope, TMR 2.8.0 (7d01f5b)
+    'candidate_capture': ('2.8.0', '7d01f5b'),
+    'candidate_orientation': ('2.8.0', '7d01f5b'),
+    'grasp_envelope': ('2.8.0', '7d01f5b'),
+    # TSA 8.6.2 (the M4.5 independent review): the scene nodes' and the candidate consumer's fault outputs,
+    # AttachObject's touch_links, TMR 2.8.1
+    'scene_fault': ('2.8.1', '532c0d3'),
+    'attach_touch_links': ('2.8.1', '532c0d3'),
+    'candidate_fault': ('2.8.1', '532c0d3'),
+    'held_motion_fault': ('2.9.0', 'f3e374e'),        # TSA 8.8.0 (M4.5d, ADR-0024 amendment M4.5d)
 }
 
 
@@ -168,17 +179,21 @@ def test_versions_are_compared_as_numbers(monkeypatch):
 # the M2.4 floor scan: present in 1.4.0 unless TMR_FLOORS (or the note) says otherwise. A name
 # that is not here fails ``test_every_tmr_surface_a_bundle_carries_is_dated``: date it first.
 DATED_PORTS = {
-    'MoveWaypoint': {'waypoint', 'fault'},           # fault: 2.1.0 (ADR-0022 amendment M2.7)
+    'MoveWaypoint': {'waypoint', 'fault',           # fault: 2.1.0 (ADR-0022 amendment M2.7)
+                     'holding'},                   # TSA 8.8.0 (M4.5d): held_motion_fault, 2.9.0
     'ServoTrack': {'waypoint'},                                            # ServoTrack: 1.5.0
     # the end-effector contract's ports (ADR-0022, 2.0.0): a canonical tree's package always
     # carries the eef block, whose row dates them
-    'OpenGripper': {'eef', 'site', 'fault', 'reason'},
-    'CloseGripper': {'eef', 'site', 'fault', 'reason'}, 'ResetScene': set(),
-    'VerifyGrasp': {'eef', 'site', 'expect', 'fault', 'reason'},                # 2.0.0
+    # + TSA 8.8.0 (M4.5d): the held state written by BehaviorTree.CPP's own post-conditions (_onSuccess / _onFailure)
+    'OpenGripper': {'eef', 'site', 'fault', 'reason', '_onSuccess'},
+    'CloseGripper': {'eef', 'site', 'fault', 'reason', '_onSuccess'}, 'ResetScene': set(),
+    'VerifyGrasp': {'eef', 'site', 'expect', 'fault', 'reason', '_onSuccess', '_onFailure'},   # 2.0.0
     'CommandActuator': {'eef', 'actuator', 'target', 'fault', 'reason'},        # 2.0.0
     'EnableProcess': {'channel'}, 'DisableProcess': {'channel'},
     'AddCollisionObject': {'id', 'frame', 'dims', 'position'},
-    'AttachObject': {'id', 'link', 'dims', 'position'}, 'DetachObject': {'id', 'link'},
+    'AttachObject': {'id', 'link', 'dims', 'position',
+                     'touch_links', 'fault'},          # TSA 8.6.2: attach_touch_links / scene_fault, 2.8.1
+    'DetachObject': {'id', 'link', 'fault'},           # fault: scene_fault, 2.8.1
     'SetAttachedCollisionCheck': {'value'}, 'SetReleasePolicy': {'policy'},
     'DetectObject': {'detector', 'class_id', 'target_frame', 'timeout_ms', 'out_key',
                      'topic', 'keep',                                        # keep: 1.6.0
@@ -190,25 +205,34 @@ DATED_PORTS = {
     'RunPolicy': {'service', 'status_topic', 'mode', 'timeout_ms'},           # 1.5.0
     'CheckRobotState': {'position', 'position_tolerance', 'require_attached', 'attached_topic',
                         'timeout_ms'},                                         # 1.5.0
-    'Log': {'message'},
+    'Log': {'message',
+            '_skipIf'},                  # TSA 8.7.0 (M4.5b): the one OUTCOME line (BehaviorTree.CPP's precondition)
     # BehaviorTree.CPP's own
     'root': {'BTCPP_format', 'main_tree_to_execute'}, 'BehaviorTree': {'ID'},
     # _failureIf: BehaviorTree.CPP's own precondition, the canonical bin-picking gate (ADR-0022 D5)
-    'Sequence': {'name', '_failureIf'}, 'Fallback': {'name', '_failureIf'}, 'Sleep': {'msec'},
-    'Script': {'code'},
+    'Sequence': {'name', '_failureIf',
+                 '_skipIf'},                         # vNext M4.5: a grasp's retreat runs once its PreGrasp was reached
+    'Fallback': {'name', '_failureIf'}, 'Sleep': {'msec'},
+    'Script': {'code', '_skipIf',
+               '_failureIf'},                        # TSA 8.7.0 (M4.5b): BIN_EMPTY only with the gate clear
+    'AlwaysFailure': set(),                          # vNext M4.5 (ADR-0024 amendment M4.5)
+    'Inverter': set(),                               # TSA 8.7.0 (M4.5b): the presence capture found nothing
     'Repeat': {'num_cycles'}, 'RetryUntilSuccessful': {'num_attempts'},
     # vNext M3.3: a task program's path (TMR 2.2.0) and its task subtrees (BehaviorTree.CPP's own)
-    'FollowPath': {'path',
-                   'from', 'to'},                       # vNext M3.5: follow_path_range, 2.4.0
+    'FollowPath': {'path', 'holding',                   # holding: TSA 8.8.0 (M4.5d), held_motion_fault 2.9.0
+                   'from', 'to',                        # vNext M3.5: follow_path_range, 2.4.0
+                   'fault'},                            # FollowPath's own since 2.2.0 (M3.1); vNext M4.5 remaps it
     'SubTree': {'ID', '_autoremap'},
     # vNext M3.5: the generic process event (2.4.0)
     'ProcessEvent': {'kind', 'channel', 'value'},
     # vNext M3.6 (ADR-0026), 2.5.0
     'DetectCandidates': {'source', 'detector', 'target_frame', 'timeout_ms', 'keep', 'out_key', 'class_id',
-                         'default_approach'},
+                         'default_approach',
+                         'fault', 'reason'},       # its own since 2.5.0; vNext M4.5 remaps them (the gate, until)
     'SetWaypointFromCandidate': {'from', 'index', 'grasp', 'pregrasp', 'retract', 'standoff_m',
                                  'retract_along_approach', 'retract_dz', 'orientation', 'orientation_from',
-                                 'eef', 'site'},
+                                 'eef', 'site',
+                                 'fault'},             # TSA 8.6.2: candidate_fault, 2.8.1
 }
 DATED_BT_PARAMS = {'planner_mode', 'process_path_backend', 'group', 'base_frame', 'tip_link',
                    'gripper_action', 'process_controller', 'bt_tree_id', 'enforce_validation',
@@ -320,6 +344,10 @@ PATH_RANGE = "FollowPath from / to (a path's event-free runs)"
 PATH_EVENTS = 'paths.yaml events (where a path stops for a process event)'
 DETECT_CANDIDATES = 'DetectCandidates (a grasp-candidate set; trainit_interfaces >= 0.2.0 through TMR)'   # M3.6
 CANDIDATE_TARGETS = "SetWaypointFromCandidate (a grasp idiom's targets)"
+SCENE_FAULT = "AttachObject / DetachObject's fault output"                 # TSA 8.6.2 (the M4.5 review)
+TOUCH_LINKS = 'AttachObject touch_links'
+CANDIDATE_FAULT = "SetWaypointFromCandidate's fault output"
+HELD_MOTION = "MoveWaypoint / FollowPath holding (a held part's failed motion is a fault)"   # TSA 8.8.0 (M4.5d)
 
 
 def _for(version: str, *reasons: str) -> str:
@@ -601,6 +629,32 @@ def _task_program_manipulation(_card=None):
     return p
 
 
+def _task_program_composition(_card=None):
+    """vNext M4.5 (ADR-0024 amendment M4.5): Validation C with every composition addition -- the fault gate,
+    a repeat until nothing_to_pick (TSA 8.7.0: with a presence capture), a grasp over every kept candidate that
+    retreats and attaches a payload -- every M4.5 surface a bundle can carry (standard BehaviorTree.CPP and TMR's
+    existing ports: no new floor)."""
+    import yaml
+    from trainit_setup_assistant.model import CanonicalProject
+    data = yaml.safe_load((M3_6 / 'validation_c.yaml').read_text())
+    app = data['application']
+    app['faults'] = 'stop'
+    detect, grasp, release = app['tasks'][0]['steps']
+    detect['detect'].update(keep=2)
+    grasp['grasp'].update(index='all', on_failure='retreat', payload={'dims': [0.04, 0.04, 0.02]})
+    # TSA 8.7.0 (vNext M4.5b): the until end's presence capture of a grasp provider (a scripted one: no camera)
+    data['perception']['detectors'].append({'name': 'presence_src', 'method': 'scripted_grasp',
+                                            'params': {'scenario_file': '/nonexistent/scenario.yaml',
+                                                       'frame_id': 'base_link'}})
+    app['tasks'][0]['steps'] = [{'repeat': {'cycles': -1, 'until': 'nothing_to_pick', 'presence': 'presence_src',
+                                            'body': [{'retry': {'attempts': 2, 'body': [detect, grasp]}}, release]}}]
+    with _cwd(M3_6):
+        p = CanonicalProject.parse_obj(data)
+    p.robot.description.urdf_dir = str(UR5E / 'urdf')
+    p.bundle = BundleSpec.from_prefix('cell')
+    return p
+
+
 @contextlib.contextmanager
 def _cwd(path):
     old = os.getcwd()
@@ -812,6 +866,8 @@ CASES = {   # name -> (needs the golden, builder(card))
     # vNext M3.5: process events (ProcessEvent, DetectObject trigger, FollowPath from/to, path events)
     'T_task_program_process': (False, _task_program_process),
     'T_task_program_manipulation': (False, _task_program_manipulation),
+    # vNext M4.5: the composition additions (Script, _failureIf, _skipIf, AlwaysFailure, the gate's remaps)
+    'T_task_program_composition': (False, _task_program_composition),
 }
 # F (no policy) is every case without a policy step; G (no perception) every case without a TP
 # detector node: A, C, D, E, P (but the golden-based ones), S, Z, N, J, U.
@@ -890,6 +946,12 @@ EXPECTED = {
     # step's VerifyGrasp, 2.0.0, is below the floor and not named)
     'T_task_program_manipulation': ({APP: ('2.5.0', _for('2.5.0', DETECT_CANDIDATES, CANDIDATE_TARGETS)),
                                      CFG: BASE}, None, False),
+    # vNext M4.5: the composition's control nodes add no floor; TSA 8.6.2 (the M4.5 review): under faults: stop
+    # with a payload the scene nodes' and the candidate consumer's fault outputs and AttachObject's touch_links
+    # need TMR 2.8.1 (an older TMR refuses the unknown ports); TSA 8.8.0 (M4.5d): it grips under faults: stop, so its
+    # motions read the held state -- TMR 2.9.0
+    'T_task_program_composition': ({APP: ('2.9.0', _for('2.9.0', HELD_MOTION)),
+                                    CFG: BASE}, '0.7.0', False),   # TSA 8.7.0: the presence capture's provider
 }
 # the package whose launch starts the end-effector adapters, per canonical case (ADR-0022 [D])
 HARDWARE = {'Q_canonical_suction': (CFG, 'isaac_eef_adapter, mock_eef_adapter'),
@@ -902,7 +964,8 @@ HARDWARE = {'Q_canonical_suction': (CFG, 'isaac_eef_adapter, mock_eef_adapter'),
             'T_task_program': (APP, 'mock_eef_adapter'),
             'T_task_program_move_tolerance': (APP, 'mock_eef_adapter'),
             'T_task_program_process': (APP, 'mock_eef_adapter'),
-            'T_task_program_manipulation': (APP, 'mock_eef_adapter')}
+            'T_task_program_manipulation': (APP, 'mock_eef_adapter'),
+            'T_task_program_composition': (APP, 'mock_eef_adapter')}
 
 
 # the generated text a package reference can live in: the closed world of dependencies (vNext
@@ -982,7 +1045,7 @@ def test_the_application_matrix(bundles, name):
         assert _tmr_lines(files[f'{pkg}/package.xml']) == [(version, f'<!-- {comment} -->')], pkg
     app = _deps(files[f'{APP}/package.xml'])
     tp_lines = [attrs for tag, dep, attrs in app if dep == 'trainit_perception']
-    assert tp_lines == ({'plain': [{}], None: []}[tp]), tp_lines
+    assert tp_lines == ({'plain': [{}], None: []}[tp] if tp in ('plain', None) else [{'version_gte': tp}]), tp_lines
     assert [dep for tag, dep, attrs in app if dep == 'trainit_policy_runtime'] == \
         (['trainit_policy_runtime'] if policy else [])
     # TP and the policy runtime only ever in the app; the description package names no component
@@ -1452,7 +1515,7 @@ def test_1_a_snapshot_capability_is_not_a_dependency(bundles):
     names = {dep for rel, text in files.items() if rel.endswith('package.xml')
              for _t, dep, _a in _deps(text)}
     assert not names & {'trainit_perception', 'trainit_policy_runtime', 'moveit_servo'}
-    assert snap['derived_with']['trainit_motion_runtime'] == '2.7.0'      # refreshed for TMR 2.7.0 (D0.5, ExecutionEvent)
+    assert snap['derived_with']['trainit_motion_runtime'] == '2.9.0'      # refreshed for TMR 2.9.0 (TSA 8.8.0)
     assert {v for rel, text in files.items() if rel.endswith('package.xml')
             for v, _c in _tmr_lines(text)} == {'1.4.0'}
 
@@ -1503,7 +1566,8 @@ def test_1_the_requirement_never_reads_the_catalog_snapshot():
             for a in n.names} == {'BT_BUILTIN_NODES', 'TMR_BT_NODES', 'TMR_FIRST_VERSION',
                                   'TMR_FLOORS', 'EEF_CONTRACT_CAPABILITIES', 'EEF_ADAPTER_ROWS',
                                   'HARDWARE_LAYER',       # vNext M2.6: constants, like the others
-                                  'TASK_PROGRAM_CAPABILITIES'}                      # vNext M3.3
+                                  'TASK_PROGRAM_CAPABILITIES',                      # vNext M3.3
+                                  'EEF_MOCK_SEQUENCE_SINCE'}                        # vNext M4.5
     absolute = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
                 and not n.level} | {a.name for n in ast.walk(tree) if isinstance(n, ast.Import)
                                     for a in n.names}
@@ -1563,12 +1627,16 @@ def test_4_tp_is_a_dependency_only_where_a_tp_node_runs(bundles):
     """TP's snapshot release (0.5.0) is never a floor, and a bundle that launches no TP
     detector_node -- motion only, an external node, a policy without a detector -- names no TP."""
     tp_release = catalog.snapshot()['derived_with']['trainit_perception']
-    assert tp_release == '0.5.0'
+    assert tp_release == '0.8.0'                                          # vNext M4.5d's snapshot
     for name, files in bundles.items():
         app = files[f'{APP}/package.xml']
         launches_tp = 'package="trainit_perception"' in files[f'{APP}/launch/trainit_bt.launch.py']
         named = [attrs for _t, dep, attrs in _deps(app) if dep == 'trainit_perception']
         assert bool(named) == launches_tp == (EXPECTED[name][1] is not None), name
+        if name == 'T_task_program_composition':
+            # TSA 8.7.0 (M4.5b): its presence capture's provider is DATED 0.7.0 (the scripted provider's `since`,
+            # the objects' release): a date, not the snapshot (0.8.0 since M4.5d)
+            assert named == [{'version_gte': '0.7.0'}], name
         assert all(attrs.get('version_gte') != tp_release for attrs in named), name
 
 

@@ -7,8 +7,17 @@ exactly once; any other difference fails. At the re-bless the pinned bytes take 
 the list empties.
 
 vNext M2.4 used it for the package.xml runtime requirement; the owner re-blessed the golden and the
-policy reference trees on 2026-10-08, so the list is EMPTY: every gate that routes through it is
-byte for byte.
+policy reference trees on 2026-10-08, so the list was EMPTY.
+
+TSA 8.6.1 (the M4.5 Isaac benchmark's launch defect) lists the golden's two launch files: its
+trainit_bt.launch.py starts a detector_node beside trainit_run_bt, so the launch never ended with
+the tree; it now shuts itself down when the runner exits (``end_with_tree``, default true), and the
+app bringup.launch.py that includes it passes ``end_with_tree: false`` (the cell stays up after the
+tree, as before). Nothing else of the golden moves (generation_manifest.yaml: those two files'
+sha256 only). The policy reference trees (the golden project, generated as 'cell') move in the same two
+files: POLICY_REFERENCE. The owner re-blessed the golden and re-pinned the policy reference trees at M4.5b
+(PB-7, 2026-11-10: the two launch files and their two manifest sha256, each changed line verified against a temp
+candidate first), so the lists are EMPTY again.
 
 Not collected by pytest (the name is not test_*.py).
 """
@@ -16,8 +25,11 @@ from typing import Dict, List, Tuple
 
 Substitutions = Dict[str, List[Tuple[str, str]]]
 
-# the golden bundle's pending lines, by bundle path: none since the M2.4 re-bless
+
+# the golden bundle's pending lines, by bundle path (empty: nothing pending since the M4.5b re-bless)
 GOLDEN: Substitutions = {}
+# the policy reference trees (test_policy_reference_trees.py: the golden project as 'cell')
+POLICY_REFERENCE: Substitutions = {}
 
 
 def _apply(data: bytes, subs: List[Tuple[str, str]], rel: str, backward: bool) -> bytes:

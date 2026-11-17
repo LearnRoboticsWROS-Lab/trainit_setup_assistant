@@ -21,7 +21,8 @@ from python_qt_binding.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, Q
                                          QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout,
                                          QWidget)
 
-from ...catalog import EEF_ADAPTER_ROWS, EEF_INTERFACES as INTERFACES, EEF_KINDS as KINDS
+from ...catalog import (EEF_ADAPTER_ROWS, EEF_INTERFACES as INTERFACES, EEF_KINDS as KINDS,
+                        EEF_MAPPING_BINDING_KEYS)
 from ...composer import eef_ops
 from ...composer.ops import ComposerError
 from ...model.end_effector import ResultPolicy
@@ -498,8 +499,10 @@ class EndEffectorPanel(QWidget):
             i = combo.findData(token or '')
             combo.setCurrentIndex(max(i, 0))
             # the keys the rows of this backend read (catalog binding_keys): no backend is named here
+            # (a mapping-valued key -- the mock's outcome sequence -- is edited in the project file and KEPT on
+            # apply, never offered as a one-line field: vNext M4.5)
             keys = list(dict.fromkeys(k_ for r, info in EEF_ADAPTER_ROWS.items() if m in info['modes']
-                                      for k_ in info['binding_keys']))
+                                      for k_ in info['binding_keys'] if k_ not in EEF_MAPPING_BINDING_KEYS))
             edits = {}
             row = QHBoxLayout()
             row.addWidget(combo)
@@ -694,6 +697,11 @@ class EndEffectorPanel(QWidget):
         token = combo.currentData()
         keys = {k: e.text().strip() for k, e in edits.items()
                 if e.text().strip() and token and k in EEF_ADAPTER_ROWS[token]['binding_keys']}
+        # the mapping-valued keys this page does not edit are KEPT when the row stays the same (vNext M4.5)
+        current = ((eef_ops.contract_of(self.composer()) or {}).get('adapters') or {}).get(mode)
+        if token and isinstance(current, dict) and current.get('adapter') == token:
+            keys.update({k: current[k] for k in EEF_MAPPING_BINDING_KEYS
+                         if current.get(k) and k in EEF_ADAPTER_ROWS[token]['binding_keys']})
         if not token:
             binding = None
         elif keys:

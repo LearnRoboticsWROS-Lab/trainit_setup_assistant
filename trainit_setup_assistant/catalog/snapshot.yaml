@@ -4,11 +4,11 @@
 # test_catalog.py fails when a registry moves and this file does not (vNext M1, M2.1).
 catalog_version: 1
 derived_with:
-  trainit_setup_assistant: 8.4.0
-  trainit_motion_runtime: 2.7.0
-  trainit_perception: 0.5.0
+  trainit_setup_assistant: 8.8.0
+  trainit_motion_runtime: 2.9.0
+  trainit_perception: 0.8.0
   trainit_policy_runtime: 0.1.0
-  trainit_data_ros: 0.9.0
+  trainit_data_ros: 0.10.0
 providers:
 - id: moveit.ompl
   family: motion_planning
@@ -148,7 +148,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -166,7 +166,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -184,7 +184,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_setup_assistant
-    version: 8.4.0
+    version: 8.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -202,7 +202,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -220,7 +220,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -238,7 +238,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -256,7 +256,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -274,7 +274,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -292,7 +292,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -310,7 +310,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -328,7 +328,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -346,7 +346,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -364,7 +364,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -382,7 +382,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -400,7 +400,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -418,7 +418,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -436,7 +436,43 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_perception
-    version: 0.5.0
+    version: 0.8.0
+    declared: Apache-2.0
+    note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
+    checked_on: '2026-10-06'
+- id: tp.grasp.scripted_grasp
+  family: grasp_generation
+  kind: in_tree
+  integration: ros_node
+  name: 'grasp provider scripted_grasp (TrainIt scripted scenario: GraspCandidateArray)'
+  vendor: TrainIt
+  tsa_selectable: true
+  distribution: community_candidate
+  requirements:
+    gpu: null
+  license_status: REQUIRES_REVIEW
+  license_source:
+    file: package.xml (installed)
+    package: trainit_perception
+    version: 0.8.0
+    declared: Apache-2.0
+    note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
+    checked_on: '2026-10-06'
+- id: tp.grasp.surface_grasp
+  family: grasp_generation
+  kind: in_tree
+  integration: ros_node
+  name: 'grasp provider surface_grasp (TrainIt surface grasp: GraspCandidateArray)'
+  vendor: TrainIt
+  tsa_selectable: true
+  distribution: pro_candidate
+  requirements:
+    gpu: null
+  license_status: REQUIRES_REVIEW
+  license_source:
+    file: package.xml (installed)
+    package: trainit_perception
+    version: 0.8.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -454,7 +490,7 @@ providers:
   license_source:
     file: package.xml (installed)
     package: trainit_motion_runtime
-    version: 2.7.0
+    version: 2.9.0
     declared: Apache-2.0
     note: 'declared only: the repository has no LICENSE file (vNext M0B licence plan L1)'
     checked_on: '2026-10-06'
@@ -698,6 +734,8 @@ registries:
     - color_mask
     - custom
     - pcl_cluster
+    - surface_grasp
+    - scripted_grasp
     candidate_rule:
     - auto
     - detector_order
@@ -746,10 +784,10 @@ registries:
     - ompl_planning.yaml
     - pilz_industrial_motion_planner_planning.yaml
   trainit_perception:
-    version: 0.5.0
+    version: 0.8.0
     vocabulary:
       file: tp_registry_snapshot.yaml
-      sha256: 7c12e997c0670eb7c1336bf33c9dff51e795706b2ef07bba50a78c7772cb230d
+      sha256: a46207857c1bb25f78247606398af670643a410646bad89b2ba6f379ec16a010
       schema_version: 1
     in_process_methods:
     - color_mask
@@ -771,15 +809,27 @@ registries:
     - cylinder_side
     - disc
     - rect
+    grasp_providers:
+    - scripted_grasp
+    - surface_grasp
     param_since:
       blur_px: 0.2.0
       candidate_rule: 0.3.0
+      centre_estimator: 0.8.0
       depth_max_m: 0.2.0
       depth_min_m: 0.2.0
       expected_half_a_m: 0.4.0
       expected_half_b_m: 0.4.0
       expected_height_m: 0.4.0
       expected_radius_m: 0.3.0
+      face_mask_dilate_px: 0.8.0
+      face_max_ambiguity_mm: 0.8.0
+      face_max_outside: 0.8.0
+      face_max_rms_mm: 0.8.0
+      face_min_arc_deg: 0.8.0
+      face_min_coverage: 0.8.0
+      face_occlusion_mm: 0.8.0
+      face_radius_tol: 0.8.0
       grasp_face: 0.3.0
       min_pose_quality: 0.3.0
       pose_quality_max_rms_mm: 0.3.0
@@ -793,10 +843,10 @@ registries:
     - 0.0001
     - 1.0
   trainit_data_ros:
-    version: 0.9.0
+    version: 0.10.0
     recording_vocabulary:
       file: data_recording_vocabulary.yaml
-      sha256: 409f6b6318f27150046c097bb0b9dece73c5c1b0da41bff101e9c8dea1377e8c
+      sha256: 4076cceae824309b7290784f56079637727f86c5d8775bf847d7889fa88e6602
       schema: trainit-recording-vocabulary/1.0
   trainit_hardware_layer:
     camera_profiles:

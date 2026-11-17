@@ -85,6 +85,10 @@ class Orchestrator:
         # rule whose terms nobody can compute is not a partial bundle, it is a bundle that
         # runs and ranks nothing while looking like it ranks.
         refuse_uncomputable_candidate_rules(project)
+        # vNext M4: a grasp provider the provider itself would refuse (no end effector, no envelope, an invalid
+        # standoff, an eef / site the cell does not have) -- before any file, like the rules above.
+        from .perception_yaml import refuse_grasp_provider_problems
+        refuse_grasp_provider_problems(project)
         # Same reasoning for the external-node LAUNCH half (D-015): a block with no
         # package or no executable leaves a bundle that builds, launches, publishes
         # nothing on /perception/<name>/detections and times out in DetectObject three

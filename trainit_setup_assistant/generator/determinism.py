@@ -75,8 +75,27 @@ def fmtlist(values) -> str:
     return '[' + ', '.join(fmtnum(v) for v in values) + ']'
 
 
-class _CanonicalDumper(yaml.SafeDumper):
-    """SafeDumper that keeps mapping insertion order (no key sorting)."""
+class NoAliasSafeDumper(yaml.SafeDumper):
+    """SafeDumper that never writes YAML anchors / aliases.
+
+    M4.5d owner acceptance F5: PyYAML anchors an object the data holds TWICE, so the generated
+    TEXT depended on in-memory sharing -- one ``roi_px`` list shared by three detectors came out
+    ``&id001`` / ``*id001`` from the CLI and written out in full from the GUI (which copies each
+    detector it re-applies). Same content, different bytes. Every generated YAML goes through a
+    dumper that writes each value where it is used.
+    """
+
+    def ignore_aliases(self, data) -> bool:
+        return True
+
+
+def generated_yaml(data: Any, **kwargs) -> str:
+    """``yaml.safe_dump`` for generated files: the same options, never an anchor or alias."""
+    return yaml.dump(data, Dumper=NoAliasSafeDumper, **kwargs)
+
+
+class _CanonicalDumper(NoAliasSafeDumper):
+    """SafeDumper that keeps mapping insertion order (no key sorting) and writes no aliases."""
 
 
 def _represent_dict(dumper: yaml.Dumper, data: dict):

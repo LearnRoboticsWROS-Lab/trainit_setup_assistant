@@ -672,8 +672,8 @@ Composer** -- the SAME canonical program as the YAML below, never a second model
   **Open gripper** -- the tool where the robot is, no motion -- and tool steps), and **YAML** (what a save
   writes; a hand edit is reloaded).
 - Editor warnings beside the validator's refusals: `R-I0-05` (a PTP to a TCP pose before Cartesian motion:
-  reach it through a joint waypoint) and `R-I0-06` (a grasp, and no object of the cell scene is a grasp
-  target: nothing attaches to the tool in the planning scene).
+  reach it through a joint waypoint) and `R-I0-06` (a grasp without a `payload`, and no object of the cell
+  scene is a grasp target: nothing attaches to the tool in the planning scene).
 - Every edit is validated by the canonical model; the diagnostics locate each problem (double click to
   go to it) and suggest a misspelt name.
 - Step 4 builds and starts the planning environment (and Isaac on the bound stage); Step 8 builds,
@@ -875,6 +875,109 @@ loop, retry and alternative, with no condition, variable or expression of their 
   `<Sequence name="trainit_step:<id>:<kind>">` in the generated tree; a step without one -- and so every
   project that names none -- generates exactly the tree it did before.
 
+**Bin-picking composition (vNext M4.5, ADR-0024 amendment M4.5).** Opt-in additions; a program that
+uses none of them generates exactly the tree it did before. The recommended cycle shape (TSA 8.6.1): Standard BehaviorTree.CPP only (`Script`,
+`_failureIf`, `_skipIf`, `Fallback`, `AlwaysFailure`) and TMR's existing nodes and ports:
+
+```yaml
+application:
+  type: task_program
+  faults: stop                                   # a FAULT ends the run: never retried, never recovered
+  tasks:
+    - name: empty_the_bin
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+        - repeat:
+            cycles: -1
+            until: nothing_to_pick               # a FRESH empty detection is the normal end (SUCCESS)
+            body:
+              - retry:
+                  attempts: 2                    # the place failed (a part dropped): the whole cycle again
+                  body:
+                    - retry:
+                        attempts: 3              # no candidate / every candidate failed: detect again
+                        body:
+                          - move: {to: bin_view, type: ptp, profile: transit}
+                          - detect: {detector: capsules, source: candidates, keep: 3, trigger: true, out: ranked}
+                          - grasp:
+                              candidates: ranked
+                              index: all         # every kept candidate, best first, until one succeeds
+                              orientation: candidate
+                              orientation_from: bin_view
+                              max_tilt_deg: 60
+                              standoff_m: 0.05
+                              profile: transit
+                              approach_profile: approach
+                              retract: {along_approach: 0.1}
+                              on_failure: retreat   # a failure after the PreGrasp: open, back to the PreGrasp
+                              payload: {dims: [0.042, 0.042, 0.018], offset: [0.0, 0.0, 0.009]}
+                    - release: {at: place, standoff_m: 0.05, profile: transit, approach_profile: approach,
+                                retract: {dz: 0.08}, on_failure: retreat}   # dropped: open, detach, back up
+  main_task: empty_the_bin
+```
+
+An empty bin ends the repeat after 2 x 3 fresh empty detections (the outer retry runs the inner one
+again); a part dropped on every run of the cycle ends it "recovery exhausted" (FAILURE) after two runs; a place
+that cannot be reached while a part is held ends the run at once (the fault `PLACE_UNREACHABLE_WHILE_HOLDING`).
+
+- `faults: stop` (application): every `fault` output of the nodes TSA emits (MoveWaypoint, FollowPath,
+  DetectCandidates, a capture's DetectObject, CloseGripper, OpenGripper, VerifyGrasp, CommandActuator, and
+  since TSA 8.6.2 / TMR 2.8.1 AttachObject, DetachObject -- a planning-scene update move_group refused,
+  `PLANNING_SCENE_UPDATE_FAILED` -- and SetWaypointFromCandidate -- a configuration refusal) is
+  remapped to ONE key, `trainit__fault`, cleared when the run starts. Every `retry` body and every `fallback`
+  alternative carries `_failureIf="trainit__fault != ''"`: a fault is never retried, recovered or read as an
+  empty bin; the run ends with FAILURE and MainTree logs the fault's reason. A VERDICT (no candidate, nothing
+  held, a target the planner cannot reach) stays recoverable. Without `faults`, every failure is alike (M3.7).
+- `repeat: {until: nothing_to_pick}`: the repeat's failure becomes its normal end (logged "nothing pickable: a
+  fresh detection found no candidate (the bin may still hold parts no grasp can reach)", SUCCESS) only when the LATEST failure was a fresh `NO_CANDIDATES` of a detect step of its body (or of a task
+  it calls) and no fault was raised; any other failure is "recovery exhausted" (FAILURE). Every detect writes
+  its reason to `trainit__detect`, cleared before each detect and as the first step of every control body, so
+  a later failure never leaves a stale "empty". It needs `faults: stop` and a detect step in the body.
+- `repeat: {until: nothing_to_pick, presence: <grasp provider>}` (TSA 8.7.0, vNext M4.5b): an empty CANDIDATE set
+  is not an empty bin. After the fresh empty detection, a PRESENCE capture of the provider's objects
+  (`/perception/<name>/objects`, TP 0.7.0: one per eligible region whatever its grasp verdict; TMR's `DetectObject`,
+  triggered, keep 1, the detect step's timeout): nothing present = BIN_EMPTY (SUCCESS); objects present =
+  PICKABLE_EXHAUSTED (FAILURE, not a fault: the cell needs an operator); a fault of the capture = TERMINAL_FAULT.
+  `presence` needs `until` and a trainit_perception grasp provider (`surface_grasp` / `scripted_grasp`).
+- **Run outcomes** (TSA 8.7.0): every `faults: stop` program with an `until` repeat logs exactly ONE line
+  `[BT] OUTCOME: <code>` and holds it in `trainit__outcome`: BIN_EMPTY (SUCCESS), PICKABLE_EXHAUSTED (FAILURE),
+  RECOVERY_EXHAUSTED (FAILURE: the bounded recovery ran out), TERMINAL_FAULT (FAILURE: any fault), or -- without
+  `presence`, the 8.6.x end kept for compatibility -- NOTHING_PICKABLE (SUCCESS). The outcome is checked against how
+  the run ends (never BIN_EMPTY with FAILURE); a run that ends otherwise (a verdict outside the repeat, a finite
+  repeat completing) logs none. Programs without `until` are byte-identical.
+- `grasp: {index: all}`: a `Fallback` over the literal candidate indices `0 .. keep-1` of the detect step that
+  made the set (its `keep` must be known: a set that is a task's input is refused). A step `id` is carried by
+  each candidate's attempt, so the execution events state every attempt and its candidate.
+- `grasp: {on_failure: retreat}`: when the idiom fails AFTER its PreGrasp was reached, the tool is opened (no
+  held guard; the release confirmation the contract requires), a payload is detached, and the arm goes back to
+  the PreGrasp (LIN, `approach_profile`, entry `<task>__s<step>_retreat`); then the grasp still fails, so the
+  next candidate or try runs. A PreGrasp never reached skips the retreat. A retreat that fails is a FAULT
+  (`RETREAT_FAILED` when no node gave its own reason). It needs `faults: stop`.
+- `release: {on_failure: retreat}` (TSA 8.6.1): the same for the release. When the idiom fails AFTER its
+  RELEASE POSE was reached (TSA 8.6.2: the marker is set after the approach LIN, no longer after the
+  PreRelease) with a VERDICT -- the held guard's `OBJECT_LOST` (the part was dropped in transport), a
+  retract the planner refuses -- the tool is opened (no held guard; the release
+  confirmation the contract requires), the payload of that site is detached, and the arm goes back to the
+  PreRelease (LIN, `approach_profile`, entry `<task>__s<step>_retreat`); then the release still FAILS, so an
+  enclosing `retry` runs the cycle again (a fresh detection). A failure BEFORE the release pose was reached --
+  the transport to the place or the approach LIN from the PreRelease refused, the part still held -- is a FAULT, `PLACE_UNREACHABLE_WHILE_HOLDING`:
+  the tool is not opened and the cycle never runs again with a part in the gripper (any failure while
+  holding ends the run, as in the `bin_picking` template). A FAULT -- a failed release verification, a
+  motion fault -- stays a fault (with its own reason, no retreat); a retreat that fails is a FAULT
+  (`RETREAT_FAILED`). It needs `faults: stop`. A release without `on_failure` keeps the 8.6.0 behaviour.
+- `grasp: {payload: {dims: [x, y, z], offset: [x, y, z]}}`: the held box (m, each side > 0; `offset`, the
+  box centre in the site's TCP frame, default `[0, 0, 0]`) is attached (`AttachObject id="held_<site>"` on the
+  site's TCP link) after the verified grasp, and detached after every open of that site (a release, a
+  retreat, a `tool: open`), after its release verification. MoveIt then plans with it. Since TSA 8.6.2 the
+  attached box may touch the TCP link and `scene.touch_links` (`AttachObject touch_links`, TMR 2.8.1), and
+  under `faults: stop` the run STARTS by proving the tool empty -- `VerifyGrasp released` at each payload site
+  whose device observes a release on every deployed backend; a failure that says the tool holds or is still
+  engaged (a verdict, `RELEASE_NOT_CONFIRMED`, `NO_RELEASE_COMMAND`) is the FAULT `HOLDING_AT_START` (a part
+  left in the gripper by an earlier run never enters a new cycle), a state fault (e.g. `STATE_UNKNOWN`: the
+  tool cannot be proven empty) stops the run with its own reason -- then detaches each payload (an
+  attached object an earlier run left in the planning scene is cleared; a detach of nothing is SUCCESS).
+- The example is `test/data/m45/capsule_bin_picking.yaml`.
+
 ## Running a generated bundle
 
 A bundle is plain ROS 2 packages: it runs on TMR, MoveIt and the robot's controllers, and none of
@@ -929,6 +1032,13 @@ simulator's clock: on `mock` and `real`, which publish no `/clock`, give it `use
 (the one-command bring-up above sets it from the mode). `groot_monitor:=false` turns off the
 Groot2 live monitor, which needs libzmq and a free port. The public sample's README walks through
 every step, with the log lines to expect.
+
+`trainit_bt.launch.py` launched on its own **ends with its tree**: when `trainit_run_bt` exits, so
+does the launch -- the perception nodes it starts beside the runner (a detector, a grasp provider, an
+external segmenter) included (TSA 8.6.1: an `OnProcessExit` on the runner shuts the launch down;
+`end_with_tree:=false` keeps them up). The one-command app `bringup.launch.py` passes
+`end_with_tree:=false`: the cell, and its perception, stays up after the tree ends, with or without
+perception.
 
 > **`mode:=real` is DEVELOPMENT / NON-PRODUCTION-READY.** It starts move_group (on a base
 > config, also the scene manager) and **no ros2_control**: the arm moves only if the project's

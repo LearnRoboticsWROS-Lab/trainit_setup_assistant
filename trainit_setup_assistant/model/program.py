@@ -22,7 +22,8 @@ top to bottom:
           tool    one end-effector operation: an actuator to a named target, or a grasp verification
           task    CALL another task of the program (vNext M3.7): it runs, then the step after the
                   call; the calls form no cycle
-          repeat  run a BODY of steps ``cycles`` times (-1: until a step fails or the program stops)
+          repeat  run a BODY of steps ``cycles`` times (-1: until a step fails or the program stops);
+                  ``until: nothing_to_pick`` (vNext M4.5) makes "nothing left to pick" its normal end
           retry   run a BODY of steps again when one of its steps fails, ``attempts`` tries at most
           fallback  try ALTERNATIVE bodies in order until one succeeds
                   (the three control steps are ORCHESTRATION: they never change what a step does)
@@ -30,6 +31,7 @@ top to bottom:
       PROFILE     a named set of limits (speed, acceleration, TCP velocity, tolerance, planning budget)
       PROVIDER    which motion provider (a row of TMR's registry) runs a kind of motion; omitted =
                   the registry's default, resolved and written into the bundle by TSA
+      FAULTS      ``faults: stop`` (vNext M4.5): a FAULT ends the run -- never retried, never recovered
 
 These are the STRUCTURAL models, checked when the project loads. Every one is strict: an unknown key
 is refused, naming the keys the model accepts, and the keys a reader might put in the wrong place
@@ -47,7 +49,7 @@ from __future__ import annotations
 import math
 import re
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from pydantic import BaseModel, root_validator, validator
 
@@ -674,9 +676,6 @@ class DetectSource(StrEnum):
 
 
 DETECT_HINTS = {
-    'trigger': ('a detect step for a grasp takes the producer\'s next FRESH result; an on-demand '
-                'capture is a process event (kind: capture) -- a triggered grasp detection is planned '
-                'for a later TSA version'),
     'standoff_m': 'the standoff of a grasp belongs to the grasp step',
     'eef': 'the end effector of a grasp belongs to the grasp step',
     'site': 'the grasp site belongs to the grasp step',
@@ -727,7 +726,10 @@ class DetectStep(_Strict):
                             axes) for a detection without one
     ``out``: the set's name (default ``candidates``; a grasp step takes the latest set of its task
     unless it names one); ``keep`` (1): how many candidates, in the producer's order (its rank);
-    ``class_id`` (detections only), ``timeout_ms`` (default: the perception section's)."""
+    ``class_id`` (detections only), ``timeout_ms`` (default: the perception section's).
+    ``trigger: true`` (vNext M4): a CAPTURE -- the producer is sampled on demand through its
+    ``/perception/<detector>/detect`` service and only a result stamped after the capture began is taken;
+    without it the step takes the producer's next fresh result."""
 
     detector: str
     source: DetectSource
@@ -736,6 +738,7 @@ class DetectStep(_Strict):
     class_id: Optional[str] = None
     timeout_ms: Optional[int] = None
     approach: Optional[List[float]] = None
+    trigger: Optional[bool] = None
 
     _required = _needs({'detector': 'the producer: a detector of the perception section',
                         'source': "'candidates' (a grasp producer's) or 'detections' (a detector's, "
@@ -747,6 +750,13 @@ class DetectStep(_Strict):
     _class_id = _checked('class_id', lambda v, w: _class_token(v, w), 'detect.class_id')
     _timeout = _checked('timeout_ms', lambda v, w: _count_or_none(v, w, 1), 'detect.timeout_ms')
     _approach = _checked('approach', _unit_vector, 'detect.approach')
+
+    @validator('trigger', pre=True)
+    def _trigger(cls, v):  # noqa: N805
+        if v is None or isinstance(v, bool):
+            return v
+        raise ValueError(f'R-M3-02: detect.trigger {v!r} is true or false (a capture: the producer sampled on '
+                         'demand)')
 
     @validator('source', pre=True)
     def _source(cls, v):  # noqa: N805
@@ -792,6 +802,10 @@ class RetractSpec(_Strict):
 
 
 ORIENTATION_ALIGN_APPROACH = 'align_approach'
+# vNext M4 (ADR-0026 amendment M4): the producer's OWN full grasp orientation, used when its +Z is the approach
+ORIENTATION_CANDIDATE = 'candidate'
+_PAYLOAD_HINT = ("a held object enters the planning scene with the grasp's "
+                 "'payload: {dims: [x, y, z], offset: [x, y, z]}'")
 _MANIPULATION_HINTS = {
     'pregrasp': ('the PreGrasp is derived, never taught: standoff_m along the approach before the '
                  'target (grasp_pose - standoff * approach)'),
@@ -803,7 +817,51 @@ _MANIPULATION_HINTS = {
     'verify': ('a grasp verifies exactly as the end-effector contract requires '
                '(robot.gripper.contract.verification)'),
     'orientation_reference': "the reference of align_approach is 'orientation_from: <waypoint>'",
+    'attach': _PAYLOAD_HINT,
+    'object': _PAYLOAD_HINT,
+    'recovery': "what a failed grasp or release does before it fails is 'on_failure: retreat'",
+    'on_fail': "what a failed grasp or release does before it fails is 'on_failure: retreat'",
 }
+# vNext M4.5 (ADR-0024 amendment M4.5): every candidate of the set, best first
+INDEX_ALL = 'all'
+# vNext M4.5: what a failed grasp (TSA 8.6.1: or release) does before it fails -- open the tool, back along the
+# approach
+ON_FAILURE_RETREAT = 'retreat'
+ON_FAILURE_CHOICES = (ON_FAILURE_RETREAT,)
+
+
+def _grasp_index(value: Any, what: str):
+    if value == INDEX_ALL:
+        return value
+    if isinstance(value, str):
+        raise ValueError(f"R-M3-02: {what} {value!r}: a candidate index (0 = the best) or 'all' (every candidate "
+                         'the detect step keeps, best first, each tried until one succeeds)')
+    return _count_or_none(value, what, 0)
+
+
+class GraspPayload(_Strict):
+    """The HELD OBJECT a grasp attaches to the planning scene once the grasp is verified held (vNext M4.5,
+    ADR-0024 amendment M4.5): a box of ``dims`` [x, y, z] (m, each > 0) centred at ``offset`` [x, y, z] (m) in
+    the grasp site's TCP frame (default [0, 0, 0]). MoveIt then plans with it (attachment, collision,
+    reachability); the release that follows detaches it."""
+
+    dims: List[float]
+    offset: Optional[List[float]] = None
+
+    _required = _needs({'dims': 'the held box [x, y, z] in metres, each > 0'}, 'a grasp payload')
+    _keys = _strict_keys({'size': "a payload's box is 'dims: [x, y, z]' (m)",
+                          'position': "a payload's centre in the TCP frame is 'offset: [x, y, z]' (m)",
+                          'link': "a payload is attached to the grasp site's TCP link (it is not chosen)",
+                          'id': 'a payload has no id of its own: TSA names it after the grasp site'},
+                         'a grasp payload')
+    _offset = _checked('offset', lambda v, w: _numbers(v, w, 3), 'grasp.payload.offset [x, y, z]')
+
+    @validator('dims', pre=True)
+    def _dims(cls, v):  # noqa: N805
+        v = _numbers(v, 'grasp.payload.dims [x, y, z]', 3)
+        if v is None or any(d <= 0 for d in v):
+            raise ValueError(f'R-M3-07: grasp.payload.dims {v!r}: every side of the held box must be > 0 (m)')
+        return v
 
 
 class GraspStep(_Strict):
@@ -814,29 +872,42 @@ class GraspStep(_Strict):
     From a candidate set: ``candidates`` (a detect step's ``out`` earlier in the task; default: the
     task's latest detect step) and ``index`` (0, the best); the TCP orientation is ``align_approach`` -- the waypoint ``orientation_from``'s
     orientation tilted as little as possible so the tool's +Z travels along the candidate's approach
-    (owner decision M3.6-1); ``standoff_m`` replaces the candidate's own.
+    (owner decision M3.6-1) -- or ``candidate`` (vNext M4): the producer's own full orientation, refused at run
+    time unless its tool +Z is the approach; ``standoff_m`` replaces the candidate's own.
+    ``max_tilt_deg`` (vNext M4): the FAIL-CLOSED orientation envelope -- a candidate whose approach is tilted
+    more than this from ``orientation_from``'s tool +Z is refused at run time, never clamped.
     At a taught target: ``at`` (a TCP waypoint); its approach is its tool +Z, so the PreGrasp is
     ``standoff_m`` back along it (``target_local``).
-    ``eef`` / ``site``: the device and its grasp site (default: the only ones); ``retract``."""
+    ``eef`` / ``site``: the device and its grasp site (default: the only ones); ``retract``.
+
+    vNext M4.5 (ADR-0024 amendment M4.5), each opt-in: ``index: all`` -- every candidate the detect step
+    keeps, best first, until one succeeds (TSA unrolls the literal indices); ``on_failure: retreat`` -- when
+    the idiom fails after the PreGrasp was reached, open the tool and go back to the PreGrasp (LIN,
+    ``approach_profile``), then fail (needs ``application.faults: stop``: a failed retreat is a fault);
+    ``payload: {dims, offset}`` -- the held box attached to the planning scene after the verified grasp
+    and detached by the release."""
 
     candidates: Optional[str] = None
-    index: int = 0
+    index: Union[int, str] = 0
     orientation: Optional[str] = None
     orientation_from: Optional[str] = None
     at: Optional[str] = None
     eef: Optional[str] = None
     site: Optional[str] = None
     standoff_m: Optional[float] = None
+    max_tilt_deg: Optional[float] = None
     profile: str
     approach_profile: str
     retract: RetractSpec
+    on_failure: Optional[str] = None
+    payload: Optional[GraspPayload] = None
 
     _required = _needs({'profile': 'the motion profile of the PreGrasp transfer (PTP)',
                         'approach_profile': 'the motion profile of the Approach and the Retract (LIN)',
                         'retract': "{along_approach: <m>} or {dz: <m>}"}, 'a grasp step')
     _keys = _strict_keys(_MANIPULATION_HINTS, 'a grasp step')
     _candidates = _checked('candidates', lambda v, w: v if v is None else _name(v, w), 'grasp.candidates')
-    _index = _checked('index', lambda v, w: _count_or_none(v, w, 0), 'grasp.index')
+    _index = _checked('index', _grasp_index, 'grasp.index')
     _from = _checked('orientation_from', lambda v, w: v if v is None else _waypoint_name(v, w),
                      'grasp.orientation_from')
     _at = _checked('at', lambda v, w: v if v is None else _waypoint_name(v, w), 'grasp.at')
@@ -848,12 +919,27 @@ class GraspStep(_Strict):
 
     @validator('orientation', pre=True)
     def _orientation(cls, v):  # noqa: N805
-        if v is None or v == ORIENTATION_ALIGN_APPROACH:
+        if v is None or v in (ORIENTATION_ALIGN_APPROACH, ORIENTATION_CANDIDATE):
             return v
         raise ValueError(f"R-M3-02: grasp.orientation {v!r}: a candidate's TCP orientation is "
-                         "'align_approach' in this version (the reference waypoint orientation_from, "
-                         'tilted onto the approach); a producer-owned full orientation is planned for a '
-                         'later TSA version')
+                         "'align_approach' (the reference waypoint orientation_from, tilted onto the approach) "
+                         "or 'candidate' (the producer's own full grasp orientation)")
+
+    @validator('on_failure', pre=True)
+    def _on_failure(cls, v):  # noqa: N805
+        if v is None or v in ON_FAILURE_CHOICES:
+            return v
+        raise ValueError(f"R-M3-02: grasp.on_failure {v!r}: a failed grasp either just fails (omit it) or "
+                         "'retreat' first -- the tool released and the arm back at the PreGrasp along the approach")
+
+    @validator('max_tilt_deg', pre=True)
+    def _max_tilt(cls, v):  # noqa: N805
+        if v is None:
+            return v
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 < v < 180:
+            raise ValueError(f'R-M3-02: grasp.max_tilt_deg {v!r} is an angle in (0, 180) degrees: the largest tilt '
+                             "of a candidate's approach from orientation_from's tool +Z")
+        return float(v)
 
     @root_validator(skip_on_failure=True)
     def _form(cls, values):  # noqa: N805
@@ -862,31 +948,47 @@ class GraspStep(_Strict):
                              "default the task's latest detect) or at a taught target ('at: <waypoint>'), "
                              'never both')
         if values.get('at') is not None:
-            given = [k for k in ('orientation', 'orientation_from') if values.get(k) is not None]
+            given = [k for k in ('orientation', 'orientation_from', 'max_tilt_deg') if values.get(k) is not None]
+            if values.get('index') == INDEX_ALL:
+                raise ValueError("R-M3-02: 'index: all' tries every candidate of a candidate set: a grasp at a "
+                                 'taught target has one target (remove index)')
             if given or values.get('index'):
                 raise ValueError('R-M3-02: a grasp at a taught target takes its orientation and approach '
                                  f'from the target itself: no {", ".join(given) or "index"}')
             if values.get('standoff_m') is None:
                 raise ValueError("R-M3-02: a grasp at a taught target needs 'standoff_m' (the PreGrasp "
                                  "distance back along the target's tool +Z)")
-        elif values.get('orientation_from') is None:
+        elif values.get('orientation_from') is None and values.get('orientation') != ORIENTATION_CANDIDATE:
             raise ValueError("R-M3-02: a grasp from candidates needs 'orientation_from: <waypoint>': "
                              'align_approach tilts that taught orientation onto the candidate\'s approach '
                              '(the producer owns the approach, never the rotation about it)')
+        elif values.get('max_tilt_deg') is not None and values.get('orientation_from') is None:
+            raise ValueError("R-M3-02: grasp.max_tilt_deg needs 'orientation_from: <waypoint>': the envelope "
+                             'bounds the tilt from that taught reference')
         return values
 
     def describe(self) -> str:
         if self.at is not None:
             return f"grasp at '{self.at}'"
-        return f"grasp candidate {self.index} of " + (f"'{self.candidates}'" if self.candidates
-                                                      else 'the latest detect')
+        which = 'every candidate' if self.index == INDEX_ALL else f'candidate {self.index}'
+        return f"grasp {which} of " + (f"'{self.candidates}'" if self.candidates else 'the latest detect')
 
 
 class ReleaseStep(_Strict):
     """The fixed RELEASE idiom at a taught target ``at``: PreRelease (ptp, ``profile``, ``standoff_m``
     back along the target's tool +Z) -> Approach (lin, ``approach_profile``) -> [VerifyGrasp held,
     when the contract confirms grasps and its state is continuous] -> OpenGripper -> VerifyGrasp
-    released (when the contract requires release confirmation) -> Retract (lin)."""
+    released (when the contract requires release confirmation) -> Retract (lin).
+
+    TSA 8.6.1 (the M4.5 Isaac benchmark; ADR-0024 amendment M4.5), opt-in: ``on_failure: retreat`` -- when the
+    idiom fails after the release pose was reached with a VERDICT (the held guard's OBJECT_LOST: the part was
+    dropped in transport; a refused retract), the tool is left safe: opened (no held guard), the payload
+    detached, the arm back at the PreRelease (LIN, ``approach_profile``); then the release still fails, so an
+    enclosing retry runs the cycle again. A failure BEFORE the release pose was reached (the part still held: the
+    transport to the place, or the approach LIN from the PreRelease, refused -- TSA 8.6.2: the approach included) is
+    the FAULT ``PLACE_UNREACHABLE_WHILE_HOLDING``: the tool is not opened and the cycle never runs again with a part
+    in the gripper. A FAULT (a failed release verification, a motion fault)
+    stays a fault: no retreat. Needs ``application.faults: stop`` (a failed retreat is a fault), like the grasp's."""
 
     at: str
     eef: Optional[str] = None
@@ -895,6 +997,7 @@ class ReleaseStep(_Strict):
     profile: str
     approach_profile: str
     retract: RetractSpec
+    on_failure: Optional[str] = None
 
     _required = _needs({'at': 'the taught target the object is released at',
                         'standoff_m': "the PreRelease distance back along the target's tool +Z",
@@ -908,6 +1011,13 @@ class ReleaseStep(_Strict):
     _standoff = _checked('standoff_m', lambda v, w: _positive_or_none(v, w), 'release.standoff_m')
     _profile = _checked('profile', _name, 'release.profile')
     _approach_profile = _checked('approach_profile', _name, 'release.approach_profile')
+
+    @validator('on_failure', pre=True)
+    def _on_failure(cls, v):  # noqa: N805
+        if v is None or v in ON_FAILURE_CHOICES:
+            return v
+        raise ValueError(f"R-M3-02: release.on_failure {v!r}: a failed release either just fails (omit it) or "
+                         "'retreat' first -- the tool opened and the arm back at the PreRelease along the approach")
 
     def describe(self) -> str:
         return f"release at '{self.at}'"
@@ -1061,9 +1171,12 @@ REPEAT_HINTS = {
     'count': "a repeat runs its body 'cycles: <n>' times (-1: until a step fails or the program stops)",
     'num_cycles': "a repeat runs its body 'cycles: <n>' times (-1: until a step fails or the program stops)",
     'steps': "the steps a repeat runs are its 'body: [<steps>]'",
-    'until': ('a repeat has no condition: it runs its body a number of times, and stops early when a '
-              'step of the body fails'),
+    'while': ("a repeat has no condition of its own: it runs its body 'cycles' times; 'until: nothing_to_pick' "
+              'makes a fresh empty detection its normal end'),
 }
+# vNext M4.5 (ADR-0024 amendment M4.5): the one end a repeat may declare -- a fresh detection found nothing
+UNTIL_NOTHING_TO_PICK = 'nothing_to_pick'
+UNTIL_CHOICES = (UNTIL_NOTHING_TO_PICK,)
 RETRY_HINTS = {
     'retries': "a retry tries its body at most 'attempts: <n>' times, the first try included",
     'times': "a retry tries its body at most 'attempts: <n>' times, the first try included",
@@ -1081,13 +1194,37 @@ FALLBACK_HINTS = {
 class RepeatStep(_Strict):
     """Run ``body`` (a list of steps) ``cycles`` times, one after the other. A step of the body that
     fails ends the repeat with that failure (the cycles left do not run). ``cycles: -1`` repeats until
-    a step fails or the program is stopped (a production cycle)."""
+    a step fails or the program is stopped (a production cycle).
+
+    ``until: nothing_to_pick`` (vNext M4.5, ADR-0024 amendment M4.5): the repeat's failure is its NORMAL
+    end (SUCCESS, logged "nothing pickable", TSA 8.6.2: an empty candidate set, not an empty bin) when the last failure was a fresh NO_CANDIDATES of a detect step
+    of the body (or of a task it calls) and no fault was raised; any other failure stays FAILURE ("recovery
+    exhausted"). It needs ``application.faults: stop``.
+
+    ``presence: <grasp provider>`` (TSA 8.7.0, vNext M4.5b, ADR-0024 amendment M4.5b): with ``until``, the fresh
+    empty detection is followed by a PRESENCE capture of that provider's objects (``/perception/<name>/objects``):
+    nothing present = the outcome BIN_EMPTY (SUCCESS), objects present = PICKABLE_EXHAUSTED (FAILURE, not a fault);
+    without it the end is NOTHING_PICKABLE (SUCCESS, the 8.6.x behaviour). It needs ``until``."""
 
     cycles: int
+    until: Optional[str] = None
+    presence: Optional[str] = None
     body: List['TaskStep']
 
     _keys = _strict_keys(REPEAT_HINTS, 'a repeat')
     _body_ok = _checked('body', _body, 'repeat.body')
+
+    @validator('until', pre=True)
+    def _until(cls, v):  # noqa: N805
+        if v is None or v in UNTIL_CHOICES:
+            return v
+        raise ValueError(f'R-M3-02: repeat.until {v!r}: a repeat has no condition: it runs its body a number of '
+                         "times, and its one declared normal end is 'until: nothing_to_pick' (a fresh detection "
+                         'found no candidate)')
+
+    @validator('presence', pre=True)
+    def _presence(cls, v):  # noqa: N805
+        return v if v is None else _name(v, 'repeat.presence')
 
     @validator('cycles', pre=True)
     def _cycles(cls, v):  # noqa: N805
@@ -1488,7 +1625,12 @@ PROGRAM_HINTS = {
     'segments': ('a task program has no folded segments: a move step says how it reaches its '
                  'waypoint, a path its segments'),
     'sequence': "a task program's order is the steps of its tasks (main_task runs first)",
+    'fault': "a task program's fault policy is 'faults: stop'",
+    'on_fault': "a task program's fault policy is 'faults: stop'",
 }
+# vNext M4.5 (ADR-0024 amendment M4.5): a FAULT ends the run (the gate); absent = every failure alike (M3.7)
+FAULTS_STOP = 'stop'
+FAULT_POLICIES = (FAULTS_STOP,)
 for _key in ('tool_actions', 'detections', 'policies', 'bin_picking', 'loop_cycles', 'loop_start',
              'loop_end', 'bt_tree_id', 'process_controller', 'enforce_validation'):
     PROGRAM_HINTS[_key] = APPLICATION_HINT.format(key=_key)
@@ -1504,9 +1646,18 @@ class TaskProgram(_Strict):
     tasks: List[Task]
     main_task: str
     runtime: Optional[RuntimeSettings] = None
+    faults: Optional[str] = None
 
     _keys = _strict_keys(PROGRAM_HINTS, 'a task program (application)')
     _main = _checked('main_task', _name, 'main_task')
+
+    @validator('faults', pre=True)
+    def _faults(cls, v):  # noqa: N805
+        if v is None or v in FAULT_POLICIES:
+            return v
+        raise ValueError(f"R-M3-02: application.faults {v!r}: the fault policy is 'stop' (a fault -- a motion, "
+                         'perception or end-effector failure that is not a verdict -- ends the run, never retried '
+                         'or recovered); omit it for the M3.7 behaviour (every failure alike)')
 
     @validator('motion_profiles')
     def _profile_names(cls, v):  # noqa: N805
@@ -1631,4 +1782,5 @@ __all__ = ['AnchorWhen', 'CAPTURE_KEY', 'CHANNEL_KINDS', 'DetectSource', 'Detect
            'PathEvent', 'PathGenerator', 'PathSegment', 'ProcessEventSpec', 'ProcessStep', 'RelativeFrame',
            'RelativeTarget', 'RuntimeSettings', 'STEP_KINDS', 'Task', 'TaskProgram', 'TaskStep',
            'TaskWaypoint', 'CONTROL_KINDS', 'FallbackStep', 'RepeatStep', 'RetryStep', 'TaskData',
-           'TaskDataType', 'walk_steps', 'STEP_ID_KEY', 'step_mapping_kind']
+           'TaskDataType', 'walk_steps', 'STEP_ID_KEY', 'step_mapping_kind', 'FAULTS_STOP', 'GraspPayload',
+           'INDEX_ALL', 'ON_FAILURE_RETREAT', 'UNTIL_NOTHING_TO_PICK']

@@ -652,3 +652,15 @@ def test_a_measured_face_reaches_a_generated_bundle(tmp_path):
     assert 'grasp_face' not in params                 # the default face writes no token
     assert ('<exec_depend version_gte="0.3.0">trainit_perception</exec_depend>'
             in (out / 'cell_app' / 'package.xml').read_text())
+
+
+def test_the_perception_page_shows_the_target_frame_of_the_camera_chain(qapp):
+    """TSA 8.8.0 (M4.5d, the owner's brief §23): Step 5 shows the planning frame every detection is transformed into
+    (by TF2, at run time) -- never a matrix to type -- and offers the live check."""
+    from trainit_setup_assistant.gui.controller import AssistantController
+    from trainit_setup_assistant.gui.wizard import PerceptionPage
+    ctrl = AssistantController(_project(None))
+    page = PerceptionPage(ctrl)
+    page.initializePage()
+    assert page.c_target.text() == ctrl.robot_summary()['base_frame']
+    assert page.c_tf.text() == ''

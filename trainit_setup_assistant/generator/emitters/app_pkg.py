@@ -7,6 +7,7 @@ project is generated metadata.
 
 from __future__ import annotations
 
+from pathlib import Path
 from ...applications import build_bt_params_context, get_application
 from ...model.enums import AppType, Backend, GripperKind
 from ...model.faces import param_floors, version_key
@@ -125,6 +126,25 @@ class AppEmitter(Emitter):
         # themselves and only appear in perception.yaml for the record.
         per = project.perception
         detector_nodes = [d.name for d in per.detectors if d.emits_node] if per else []
+        # vNext M4: a grasp provider runs trainit_perception's surface_grasp_node on the same perception.yaml
+        # (vNext M4.5: the node is the provider's own, named in TP's vocabulary -- surface_grasp_node,
+        # scripted_grasp_node)
+        from ...model.perception import grasp_provider_schema
+        grasp_provider_nodes = ([{'name': d.name, 'node': grasp_provider_schema(d.method.value)['node']}
+                                 for d in per.detectors if d.is_grasp_provider] if per else [])
+        for d in (per.detectors if per else []):
+            # the colour mask's own default keeps ONE region; an instance source has its own (20) -- no warning
+            if d.is_grasp_provider and (d.segmentation or {}).get('method') == 'color_mask' \
+                    and 'max_objects' not in ((d.segmentation or {}).get('params') or {}):
+                ctx.manifest.warn(f'perception: grasp provider "{d.name}": its segmentation sets no max_objects, so '
+                                  'the segmenter keeps ONE region (its default) -- set it to the regions a frame holds')
+        # vNext M4.5: the scripted provider's scenario is read by its node at start-up (TSA never parses it); a file
+        # that is not on THIS machine is said, never refused -- the bundle may be deployed where it is
+        for d in (per.detectors if per else []):
+            scenario = d.params.get('scenario_file') if d.method.value == 'scripted_grasp' else None
+            if isinstance(scenario, str) and scenario.startswith('/') and not Path(scenario).is_file():
+                ctx.manifest.warn(f'perception: scripted grasp provider "{d.name}": its scenario_file {scenario} is '
+                                  'not on this machine -- scripted_grasp_node refuses to start without it')
         # The second kind of method (D-015): a node of the project's own, launched beside
         # the pure-python ones. Empty for every project without an external_node block, so
         # a deterministic bundle stays byte-identical. The orchestrator has already
@@ -165,6 +185,24 @@ class AppEmitter(Emitter):
             detector_param_keys |= set(detector_params(project, d))
         floors = param_floors()
         candidates = [floors[k] for k in detector_param_keys if k in floors]
+        # vNext M4: a grasp provider pins the release that ships it (its own parameters are its record's);
+        # vNext M4.5: and the release of every dated section it writes -- a segmentation source
+        # (instance_topic) and the workspace eligibility (TP's own `since` for each, 0.7.0)
+        for d in (per.detectors if per else []):
+            if d.is_grasp_provider:
+                schema = grasp_provider_schema(d.method.value)
+                candidates.append(schema['since'])
+                sources = schema.get('segmentation_parameters') or {}
+                method = (d.segmentation or {}).get('method')
+                if method in sources:
+                    candidates.append(sources[method]['since'])
+                if d.eligibility is not None and schema.get('eligibility'):
+                    candidates.append(schema['eligibility']['since'])
+        # TSA 8.7.0 (vNext M4.5b): a presence capture reads the provider's objects, published since TP 0.7.0
+        if project.application.is_task_program():
+            from ...applications.task_program import PRESENCE_TP_SINCE, presence_providers
+            if presence_providers(project.application.program):
+                candidates.append(PRESENCE_TP_SINCE)
         perception_min_version = (max(candidates, key=version_key) if candidates else None)
         # bootstrap flow (no base config): the camera extras live in the scene-loader
         # emitter only — say so instead of silently dropping them.
@@ -192,6 +230,7 @@ class AppEmitter(Emitter):
                       # in the robot slot; the detector nodes stay GLOBAL (ADR-0016).
                       cell_namespace=cell_ns,
                       detectors=detector_nodes,
+                      grasp_providers=grasp_provider_nodes,
                       external_detectors=external_detectors)
 
         # --- TrainIt D0.8: the data recorder's configuration, one file per recordable mode, and the
@@ -228,7 +267,11 @@ class AppEmitter(Emitter):
                           default_planner_mode=(plan.planner_mode if plan else
                                                 app.global_planner_mode.value),
                           start_tolerance=plan.start_tolerance if plan else None,
-                          data_modes_py=data_modes_py, data_namespace=cell_ns)
+                          data_modes_py=data_modes_py, data_namespace=cell_ns,
+                          # TSA 8.6.1: trainit_bt.launch.py starts perception nodes, so it ends with the
+                          # tree by itself (end_with_tree) -- included here, the cell stays up, as it does
+                          # for an application without perception (whose bring-up is byte-identical)
+                          perception_nodes=bool(detector_nodes or grasp_provider_nodes or external_detectors))
         else:
             # From-scratch bootstrap: no base config bringup exists — the app bringup
             # assembles move_group + controllers itself (and a mock gripper server).
@@ -336,13 +379,15 @@ class AppEmitter(Emitter):
                       description_package=project.bundle.description_package,
                       bridge_packages=[p for p in dep.bridge_packages()
                                        if not (hardware and p == HARDWARE_LAYER)],
-                      has_perception=bool(detector_nodes),
+                      has_perception=bool(detector_nodes or grasp_provider_nodes),
                       # DOCUMENTED, never declared (ADR-0003): an external detector's
                       # package is usually customer IP that is not in this workspace and
                       # has no rosdep key, so an <exec_depend> on it would make
                       # `rosdep install --from-paths src` fail for everyone. Empty list
                       # => the manifest is byte-identical.
                       external_packages=external_packages,
+                      external_segmenters=[d.name for d in (per.detectors if per else [])
+                                           if d.produces_instances and d.launches_external_node],
                       # the from-scratch bring-up (above) runs the servo_node from this
                       # package's launch, so it must declare moveit_servo (ADR-0015)
                       servo_dep=(app.uses_servo()

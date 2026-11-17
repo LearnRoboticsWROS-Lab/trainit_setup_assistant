@@ -224,8 +224,9 @@ def test_a_tool_step_is_one_end_effector_node():
 # --- M: the strict models ------------------------------------------------------------------------------
 
 @pytest.mark.parametrize('step, needle', [
-    ({'detect': {'detector': 'grasp_provider', 'source': 'candidates', 'out': 'p', 'trigger': True}},
-     "'trigger' -- a detect step for a grasp takes the producer's next FRESH result"),
+    # vNext M4: a detect step may capture (trigger: true, test_m4_surface_grasp); the flag is a boolean
+    ({'detect': {'detector': 'grasp_provider', 'source': 'candidates', 'out': 'p', 'trigger': 'yes'}},
+     "detect.trigger 'yes' is true or false"),
     ({'detect': {'detector': 'grasp_provider', 'source': 'images', 'out': 'p'}}, "detect.source 'images'"),
     ({'detect': {'detector': 'part_cam', 'source': 'detections', 'out': 'p'}}, "needs 'approach: [x, y, z]'"),
     ({'detect': {'detector': 'part_cam', 'source': 'detections', 'out': 'p', 'approach': [0, 0, -2]}},
@@ -237,7 +238,8 @@ def test_a_tool_step_is_one_end_effector_node():
     ({'detect': {'detector': 'grasp_provider', 'source': 'candidates', 'out': 'p', 'keep': 0}}, 'detect.keep'),
     ({'grasp': {'candidates': 'p', 'profile': 't', 'approach_profile': 'a', 'retract': {'dz': 0.1}}},
      "needs 'orientation_from: <waypoint>'"),
-    ({'grasp': {'candidates': 'p', 'orientation': 'candidate', 'orientation_from': 'nominal', 'profile': 't',
+    # vNext M4 added orientation: candidate (test_m4_surface_grasp); any other value is still refused
+    ({'grasp': {'candidates': 'p', 'orientation': 'free', 'orientation_from': 'nominal', 'profile': 't',
                 'approach_profile': 'a', 'retract': {'dz': 0.1}}}, "a candidate's TCP orientation is 'align_approach'"),
     ({'grasp': {'at': 'place', 'profile': 't', 'approach_profile': 'a', 'retract': {'dz': 0.1}}},
      "needs 'standoff_m'"),

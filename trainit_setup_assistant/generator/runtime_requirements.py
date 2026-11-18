@@ -204,6 +204,8 @@ def _launch_facts(name: str, tree: ast.AST, facts: Set[str], executables: Set[st
             raise RuntimeError(f'{name}: a trainit_motion_runtime Node whose executable or '
                                f'namespace the TMR floor cannot read (vNext M2.4)')
         executables.add(executable)
+        if executable == 'trainit_task_server':
+            facts.add('task_server')             # TSA 8.9.0 (ADR-0032): the robot task server
         namespace = kw.get('namespace')
         in_slot = namespace is not None and not (isinstance(namespace, ast.Constant)
                                                  and namespace.value in ('', None))

@@ -109,7 +109,24 @@ STEP_HINTS = {
 TASK_HINTS = {
     'calls': "a task calls another task with a step: 'task: <name>'",
     'main': "the task that runs first is the program's 'main_task'",
+    'plc': "a task a PLC may request is EXPORTED: 'export: {number: <1..65535>, timeout_s: <seconds>}'",
+    'exported': "a task a PLC may request is EXPORTED: 'export: {number: <1..65535>, timeout_s: <seconds>}'",
 }
+# TSA 8.9.0 (P0.a, ADR-0032 Decision 3): what an exported task's entry takes -- nothing of the protocol (sessions,
+# sequence numbers, heartbeats, topics, node ids, codes are TrainIt's, never the application's: Decision 14)
+TASK_EXPORT_HINTS = {
+    'task_number': "the PLC task number is 'number'",
+    'plc_number': "the PLC task number is 'number'",
+    'timeout': "the job's timeout is 'timeout_s' (seconds, mandatory)",
+    'timeout_ms': "the job's timeout is 'timeout_s' (seconds, mandatory)",
+    'recipe': 'the Robot Task Interface v1 carries no recipe and no parameters (ADR-0032 Decision 13)',
+    'parameters': 'the Robot Task Interface v1 carries no recipe and no parameters (ADR-0032 Decision 13)',
+    'topic': "the Robot Task Interface's topics are TrainIt's, never configured by the application",
+    'node_id': "an OPC UA node id is the PLC adapter's binding (P0.c), never the application's",
+}
+# The bounds of an exported task's timeout: > 0, at most a day, a millisecond resolution (the export table id hashes
+# the milliseconds, ADR-0032 Decision 3).
+EXPORT_TIMEOUT_MAX_S = 86400.0
 MOVE_HINTS = {
     'planner': ("a task program names a provider ('provider: <id>', a row of TMR's registry); "
                 'application.providers sets the default per kind of motion'),
@@ -1378,6 +1395,43 @@ def walk_steps(steps: List[TaskStep], label: str = ''):
 TASK_DESCRIPTION = re.compile(r'^[^\n\r]{1,200}$')
 
 
+class TaskExport(_Strict):
+    """TSA 8.9.0 (P0.a, ADR-0032 Decision 3): the task is a robot CAPABILITY the cell's PLC may request through the
+    Robot Task Interface. ``number``: its PLC task number (1..65535, unique in the project; renumbering a published
+    export breaks the PLC program that uses it). ``timeout_s``: the job's timeout in seconds (mandatory, no default,
+    0 < timeout_s <= 86400, a millisecond resolution); the robot task server measures it on the steady clock.
+    Everything else of the protocol is TrainIt's (ADR-0032 Decision 14)."""
+
+    number: int
+    timeout_s: float
+
+    _required = _needs({'number': 'the PLC task number, 1..65535',
+                        'timeout_s': "the job's timeout in seconds (mandatory: no default exists)"}, 'a task export')
+    _keys = _strict_keys(TASK_EXPORT_HINTS, 'a task export')
+
+    @validator('number', pre=True)
+    def _number(cls, v):  # noqa: N805
+        if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 65535:
+            raise ValueError(f'R-P0-01: a PLC task number is an integer 1..65535, got {v!r}')
+        return v
+
+    @validator('timeout_s', pre=True)
+    def _timeout(cls, v):  # noqa: N805
+        # the range is compared FIRST (exact for any int, False for NaN): a huge integer never reaches a float
+        # conversion (an OverflowError would escape the validation)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v <= EXPORT_TIMEOUT_MAX_S:
+            raise ValueError(f'R-P0-02: a task timeout is a number of seconds, 0 < timeout_s <= '
+                             f'{EXPORT_TIMEOUT_MAX_S:g}, got {v!r}')
+        ms = v * 1000.0
+        if abs(ms - round(ms)) > 1e-6 or round(ms) < 1:
+            raise ValueError(f'R-P0-02: a task timeout has a millisecond resolution and is at least 0.001 s, '
+                             f'got {v!r}')
+        return float(v)
+
+    def timeout_ms(self) -> int:
+        return int(round(self.timeout_s * 1000.0))
+
+
 class Task(_Strict):
     """A named, ordered list of steps (one BehaviorTree, ``task_<name>``), with an optional one-line
     ``description`` and the data it takes (``inputs``) and gives (``outputs``)."""
@@ -1386,6 +1440,7 @@ class Task(_Strict):
     description: Optional[str] = None
     inputs: List[TaskData] = []
     outputs: List[TaskData] = []
+    export: Optional[TaskExport] = None   # TSA 8.9.0 (ADR-0032): a PLC may request it
     steps: List[TaskStep]
 
     _keys = _strict_keys(TASK_HINTS, 'a task')
@@ -1412,6 +1467,17 @@ class Task(_Strict):
                 if d.name in seen:
                     raise ValueError(f"R-M3-02: task '{values.get('name')}' declares {what[:-1]} '{d.name}' twice")
                 seen.add(d.name)
+        return values
+
+    @root_validator(skip_on_failure=True)
+    def _export_takes_no_data(cls, values):  # noqa: N805
+        # ADR-0032 Decision 13: the Robot Task Interface v1 carries no data, so a task that takes inputs cannot be
+        # started by a PLC (as the main task cannot: the runner provides no data)
+        if values.get('export') is not None and values.get('inputs'):
+            names = ', '.join(d.name for d in values['inputs'])
+            raise ValueError(f"R-P0-04: task '{values.get('name')}' takes inputs ({names}): a PLC cannot request it, "
+                             'the Robot Task Interface v1 carries no data (ADR-0032 Decision 13). Remove its '
+                             "'export' or its inputs")
         return values
 
     @root_validator(skip_on_failure=True)
@@ -1684,7 +1750,20 @@ class TaskProgram(_Strict):
         if values.get('main_task') not in tasks:
             raise ValueError(f"R-M3-15: main_task '{values.get('main_task')}' is not a task of this "
                              f"program (tasks: {', '.join(tasks)})")
+        # TSA 8.9.0 (ADR-0032 Decision 3): a PLC task number names ONE exported task
+        numbers: Dict[int, str] = {}
+        for t in values.get('tasks') or []:
+            if t.export is None:
+                continue
+            if t.export.number in numbers:
+                raise ValueError(f"R-P0-03: tasks '{numbers[t.export.number]}' and '{t.name}' are both exported "
+                                 f'as PLC task number {t.export.number}: a number names one task')
+            numbers[t.export.number] = t.name
         return values
+
+    def exported(self) -> List[Task]:
+        """TSA 8.9.0: the exported tasks, by increasing PLC task number."""
+        return sorted((t for t in self.tasks if t.export is not None), key=lambda t: t.export.number)
 
 
 # The application keys of a task program, in the order a project file writes them.
@@ -1782,5 +1861,5 @@ __all__ = ['AnchorWhen', 'CAPTURE_KEY', 'CHANNEL_KINDS', 'DetectSource', 'Detect
            'PathEvent', 'PathGenerator', 'PathSegment', 'ProcessEventSpec', 'ProcessStep', 'RelativeFrame',
            'RelativeTarget', 'RuntimeSettings', 'STEP_KINDS', 'Task', 'TaskProgram', 'TaskStep',
            'TaskWaypoint', 'CONTROL_KINDS', 'FallbackStep', 'RepeatStep', 'RetryStep', 'TaskData',
-           'TaskDataType', 'walk_steps', 'STEP_ID_KEY', 'step_mapping_kind', 'FAULTS_STOP', 'GraspPayload',
+           'TaskDataType', 'TaskExport', 'EXPORT_TIMEOUT_MAX_S', 'walk_steps', 'STEP_ID_KEY', 'step_mapping_kind', 'FAULTS_STOP', 'GraspPayload',
            'INDEX_ALL', 'ON_FAILURE_RETREAT', 'UNTIL_NOTHING_TO_PICK']

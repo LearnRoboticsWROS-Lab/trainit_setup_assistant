@@ -1,0 +1,158 @@
+# TrainIt public sample cell, as ROBOT TASKS FOR A PLC (TSA 8.9.0, ADR-0032): the same UR5e with its suction cup
+# (robot, end-effector contract and scene as task_program.yaml), whose tasks a cell PLC -- the ONE machine master --
+# requests by number through the Robot Task Interface, on mode:=mock.
+#
+# - Generate it like the other samples, FROM THIS DIRECTORY (its paths are relative to it):
+#     ros2 run trainit_setup_assistant trainit_generate robot_tasks.yaml -o <workspace>/src/ur5e_tasks
+# - A task with `export` is EXPOSED to the PLC: a number and a timeout, nothing else (the Composer's "PLC" group edits
+#   both). The bundle then also carries the robot task server's launch (trainit_task_server.launch.py) and
+#   config/tasks.yaml with the table's id; TMR's fake PLC (trainit_fake_plc) plays the PLC for commissioning.
+# - `faults: stop` and a gripping step make the program TRACK whether a part is held: a cancelled job whose tool is
+#   known to be free ends CANCELLED and the robot is ready again; with a part held (or unknown) it ends FAILED and
+#   the robot needs a RESET -- fail closed. None of this is a safety function.
+schema_version: 4
+project_name: ur5e_robot_tasks_sample
+
+bundle:
+  description_package: ur5e_tasks_description
+  moveit_config_package: ur5e_tasks_trainit_config
+  app_package: ur5e_tasks_app
+
+meta:                          # written into the three generated package.xml files: put yours
+  maintainer_name: TrainIt sample user
+  maintainer_email: user@example.com
+  license: Apache-2.0
+  version: 0.1.0
+
+robot:
+  robot_name: ur5e_suction
+  description:
+    urdf_dir: urdf             # relative to this directory
+    top_xacro: ur5e_suction.urdf.xacro
+  base_frame: base_link
+  tip_link: tcp
+  planning_group:
+    name: ur_manipulator
+    base_link: base_link
+    tip_link: tcp              # the cup lip: every TCP waypoint below is a pose of this link
+    joints: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint,
+             wrist_3_joint]
+  gripper:
+    kind: suction
+    eef_parent_link: tcp       # the grasp site's TCP: the short form derives it from this link
+    contract:
+      actuator: {command_interface: set_bool}
+      verification: {require_grasp_confirmation: false, require_release_confirmation: false}
+      adapters: {mock: trainit_mock}
+  named_states:
+    - name: home               # tool down, TCP at about (0.49, 0.13, 0.39) m
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                     wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+    - name: above_pick         # TCP at (0.45, 0.25, 0.205), tool down: 15 cm above the pick
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.2452, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -1.3256}
+    - name: above_place        # TCP at (0.45, -0.25, 0.205), tool down: 15 cm above the place
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: -0.769, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -2.3398}
+  joint_limits:
+    per_joint:                 # velocity under the URDF's pi rad/s (Pilz refuses more than the
+                               # URDF); acceleration: ur_moveit_config's 5.0
+      shoulder_pan_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      shoulder_lift_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      elbow_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_1_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_2_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_3_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+  ompl:
+    projection_evaluator: joints(shoulder_pan_joint,shoulder_lift_joint)
+  initial_positions: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                      wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+  # The self-collision matrix: the 11 pairs of ur_moveit_config's srdf/ur_macro.srdf.xacro
+  # (Apache-2.0), transcribed, plus the tool's one: the cup body touches the flange face.
+  disable_collisions:
+    - {link1: base_link, link2: base_link_inertia, reason: Adjacent}
+    - {link1: base_link_inertia, link2: shoulder_link, reason: Adjacent}
+    - {link1: tool0, link2: wrist_1_link, reason: Never}
+    - {link1: tool0, link2: wrist_2_link, reason: Never}
+    - {link1: tool0, link2: wrist_3_link, reason: Adjacent}
+    - {link1: forearm_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: forearm_link, link2: wrist_1_link, reason: Adjacent}
+    - {link1: shoulder_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_2_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_3_link, reason: Never}
+    - {link1: wrist_2_link, link2: wrist_3_link, reason: Adjacent}
+    - {link1: suction_body, link2: wrist_3_link, reason: Adjacent}
+
+scene:
+  objects:                     # the table top is 5 mm under the robot base (its mesh starts at 0)
+    - {id: table, shape: box, dims: [1.2, 1.2, 0.05], frame: base_link,
+       position: [0.3, 0.0, -0.03]}
+
+deployment:
+  modes: [mock]
+  default_mode: mock
+
+application:
+  type: task_program
+  faults: stop                 # a fault ends the job; with the gripping steps below, the held state is tracked
+
+  motion_profiles:             # speed/acceleration in % of the joint limits
+    transit: {speed: 50, acceleration: 50}
+
+  waypoints:                   # the three named states of the cell (robot.named_states)
+    - {name: home, type: joint, named: home}
+    - {name: above_pick, type: joint, named: above_pick}
+    - {name: above_place, type: joint, named: above_place}
+
+  tasks:
+    - name: home
+      description: The recovery task -- open the tool, go home
+      export: {number: 1, timeout_s: 15}
+      steps:
+        - id: open_tool
+          tool: {open: {}}
+        - id: go_home
+          move: {to: home, type: ptp, profile: transit}
+    - name: pick_part
+      description: Pick a part above the pick place -- it ENDS HOLDING it
+      export: {number: 2, timeout_s: 20}
+      steps:
+        - id: to_pick
+          move: {to: above_pick, type: ptp, profile: transit}
+        - id: grip
+          tool: {close: {}}
+    - name: place_part
+      description: Put the held part down above the place place, then go home
+      export: {number: 3, timeout_s: 30}
+      steps:
+        - id: to_place
+          move: {to: above_place, type: ptp, profile: transit}
+        - id: settle
+          dwell: {ms: 3000}
+        - id: release
+          tool: {open: {}}
+        - id: to_home
+          move: {to: home, type: ptp, profile: transit}
+    - name: inspect
+      description: Look over the pick place for a while (not exposed to the PLC)
+      steps:
+        - id: to_pick
+          move: {to: above_pick, type: ptp, profile: transit}
+        - id: look
+          dwell: {ms: 8000}
+        - id: to_home
+          move: {to: home, type: ptp, profile: transit}
+    - name: cycle
+      description: One pick-inspect-place cycle (the bundle's one-shot run, trainit_bt)
+      steps:
+        - task: home
+        - task: pick_part
+        - task: inspect
+        - task: place_part
+  main_task: cycle
+
+  runtime:
+    allowed_start_tolerance: 0.05   # rad: MoveIt refuses to start a trajectory farther than this

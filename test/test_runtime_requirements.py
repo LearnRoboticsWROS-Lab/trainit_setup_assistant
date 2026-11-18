@@ -130,6 +130,7 @@ PINNED_FLOORS = {
     'attach_touch_links': ('2.8.1', '532c0d3'),
     'candidate_fault': ('2.8.1', '532c0d3'),
     'held_motion_fault': ('2.9.0', 'f3e374e'),        # TSA 8.8.0 (M4.5d, ADR-0024 amendment M4.5d)
+    'task_server': ('2.10.0', '788e91f'),             # TSA 8.9.0 (P0.a, ADR-0032): the robot task server (TMR v2.10.0)
 }
 
 
@@ -1515,7 +1516,7 @@ def test_1_a_snapshot_capability_is_not_a_dependency(bundles):
     names = {dep for rel, text in files.items() if rel.endswith('package.xml')
              for _t, dep, _a in _deps(text)}
     assert not names & {'trainit_perception', 'trainit_policy_runtime', 'moveit_servo'}
-    assert snap['derived_with']['trainit_motion_runtime'] == '2.9.0'      # refreshed for TMR 2.9.0 (TSA 8.8.0)
+    assert snap['derived_with']['trainit_motion_runtime'] == '2.10.0'     # refreshed for TMR 2.10.0 (TSA 8.9.0, P0.a)
     assert {v for rel, text in files.items() if rel.endswith('package.xml')
             for v, _c in _tmr_lines(text)} == {'1.4.0'}
 

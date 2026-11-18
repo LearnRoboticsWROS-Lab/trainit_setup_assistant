@@ -43,7 +43,7 @@ from .perception import (CANDIDATE_RULE_TERMS, DEFAULT_INPUT_TOPICS, METHOD_PROV
                          effective_candidate_rule, missing_candidate_terms,
                          preferred_candidate_rule)
 from .program import (DenseSource, Dwell, MoveStep, PathDef, PathGenerator, PathSegment,
-                      RelativeFrame, RelativeTarget, RuntimeSettings, Task, TaskProgram, TaskStep,
+                      RelativeFrame, RelativeTarget, RuntimeSettings, Task, TaskExport, TaskProgram, TaskStep,
                       TaskWaypoint)
 from .project import (BundleSpec, CanonicalProject, ProjectMeta, SCHEMA_VERSION,
                       SCHEMA_VERSION_DATA_COLLECTION, SCHEMA_VERSION_EEF_CONTRACT,
@@ -194,6 +194,7 @@ __all__ = [
     # applications.task_program
     'SCHEMA_VERSION_TASK_PROGRAM',
     'TaskProgram',
+    'TaskExport',   # TSA 8.9.0 (P0.a, ADR-0032): a task a PLC may request
     'TaskWaypoint',
     'RelativeTarget',
     'RelativeFrame',

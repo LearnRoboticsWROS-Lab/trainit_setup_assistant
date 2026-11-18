@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Sequence
 
 ROS_SETUP = '/opt/ros/humble/setup.bash'
 OPEN_AND_PLAY = Path(__file__).resolve().parents[1] / 'resources' / 'isaac_cell_kit' / 'scripts' / 'open_and_play.py'
-KINDS = ('build', 'environment', 'isaac', 'bringup', 'run')
+KINDS = ('build', 'environment', 'isaac', 'bringup', 'run', 'server')   # server: TSA 8.9.0 (ADR-0032)
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,7 @@ class Command:
     """One process TSA may start. ``script`` is run as ``bash -c script``; its last command is
     ``exec``'d, so a stop signal reaches it (``ros2 launch`` then shuts its nodes down)."""
 
-    kind: str                    # build | environment | isaac | bringup | run
+    kind: str                    # build | environment | isaac | bringup | run | server
     title: str
     script: str
     long_running: bool
@@ -126,6 +126,27 @@ def run(ws_root: str, app_package: str, mode: str) -> Command:
                    _sourced(ws_root, f'ros2 launch {shlex.quote(app_package)} trainit_bt.launch.py '
                                      f'use_sim_time:={sim_time} groot_monitor:=false'),
                    long_running=True)
+
+
+def task_server(ws_root: str, app_package: str, mode: str) -> Command:
+    """TSA 8.9.0 (P0.a, ADR-0032): the robot task server of a bundle with EXPORTED tasks
+    (``trainit_task_server.launch.py``). TSA LAUNCHES and OBSERVES it (ADR-0027); it never sends it a command: the
+    PLC -- or the fake PLC, a test tool the user starts apart (``fake_plc_command``) -- is the ONE requester."""
+    sim_time = 'false' if mode == 'mock' else 'true'
+    return Command('server', 'Serve the exported tasks (robot task server)',
+                   _sourced(ws_root, f'ros2 launch {shlex.quote(app_package)} trainit_task_server.launch.py '
+                                     f'use_sim_time:={sim_time}'),
+                   long_running=True)
+
+
+def fake_plc_command(ws_root: str, app_package: str, namespace: Optional[str] = None) -> str:
+    """TSA 8.9.0 (P0.a): the command line of the FAKE PLC (TMR's reference requester) for this bundle, for the user to
+    COPY into a terminal -- TSA never starts the requester (ADR-0032 Decision 11)."""
+    tasks = f'{ws_root}/install/{app_package}/share/{app_package}/config/tasks.yaml'
+    ns = f' -r __ns:={shlex.quote(namespace)}' if namespace and namespace != '/' else ''
+    setup = os.path.join(ws_root, 'install', 'setup.bash')
+    return (f'source {ROS_SETUP} && source {shlex.quote(setup)} && ros2 run trainit_motion_runtime trainit_fake_plc '
+            f'--ros-args{ns} -p tasks_file:={shlex.quote(tasks)}')
 
 
 def workspace_root(output_dir) -> Optional[str]:

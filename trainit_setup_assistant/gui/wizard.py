@@ -51,6 +51,9 @@ from ..model.enums import (Backend, CandidateRule, EndEffectorActuation, Executi
 from ..model.task import effective_planner
 from .controller import TASK_PROGRAM_READ_ONLY, AssistantController
 
+# the robot task server's line that says it serves (TMR's robot_task_server.cpp, RTI v1)
+SERVING = 'RTI v1: server session'
+
 
 # --- the Canonical Task Program in the wizard (vNext M3.3) -----------------------------------------
 # YAML-first: the wizard SHOWS a task program and VALIDATES it; the template editors leave it as
@@ -393,7 +396,44 @@ def build_and_run_lines(project, out_dir: str, ws: str) -> List[str]:
     if base:
         lines.append(f'  # or both:       ros2 launch {b.app_package} bringup.launch.py '
                      f'mode:={mode}')
+    lines += plc_task_lines(project, ws, sim_time)
     return lines
+
+
+def exported_tasks(project) -> list:
+    """TSA 8.9.0 (P0.a): the project's tasks exposed to the PLC (none for a project that is not a task program)."""
+    application = getattr(project, 'application', None)
+    if application is None or not application.is_task_program():
+        return []
+    return application.program.exported()
+
+
+def fake_plc_line(project, ws: str) -> str:
+    """The fake PLC's command for this bundle, after `source install/setup.bash` (TMR's reference requester: a
+    commissioning / test tool, never a machine master; TSA never starts it -- ADR-0032 Decision 11)."""
+    from ..generator.namespace import cell_namespace
+    app = project.bundle.app_package
+    ns = cell_namespace(project)
+    remap = f' -r __ns:={ns}' if ns and ns != '/' else ''
+    return (f'ros2 run trainit_motion_runtime trainit_fake_plc --ros-args{remap} '
+            f'-p tasks_file:={ws}/install/{app}/share/{app}/config/tasks.yaml')
+
+
+def plc_task_lines(project, ws: str, sim_time: str) -> List[str]:
+    """TSA 8.9.0 (P0.a acceptance finding 1): a bundle with tasks exposed to the PLC is also SERVED -- the robot
+    task server instead of the one-shot application, and the fake PLC to test it without a PLC. Nothing for a
+    project without an export (its lines are those of 8.8.0)."""
+    exported = exported_tasks(project)
+    if not exported:
+        return []
+    tasks = ', '.join(f'#{t.export.number} {t.name}' for t in exported)
+    return [
+        f'  # PLC tasks ({tasks}) -- serve them to the PLC instead of the application:',
+        f'  #                ros2 launch {project.bundle.app_package} trainit_task_server.launch.py '
+        f'use_sim_time:={sim_time}',
+        '  # fake PLC (a test tool, never a machine master), in another terminal:',
+        f'  #                {fake_plc_line(project, ws)}',
+    ]
 
 
 class GeneratePage(QWizardPage):
@@ -443,6 +483,8 @@ class GeneratePage(QWizardPage):
             ('isaac', 'Start Isaac (bound stage)', self._isaac_command),
             ('bringup', 'Start the bundle (no tree)', self._bringup_command),
             ('run', 'Run the application', self._run_command),
+            # TSA 8.9.0 (P0.a, ADR-0032): a project with tasks exposed to the PLC: launch the robot task server
+            ('server', 'Serve the PLC tasks', self._server_command),
         ])
         form.addRow('Run', self.run_panel)
 
@@ -482,6 +524,30 @@ class GeneratePage(QWizardPage):
     def _run_command(self):
         from ..composer import launch_plan
         return launch_plan.run(self._ws_root(), self.ctrl.project.bundle.app_package, self.run_mode.currentText())
+
+    def _server_command(self):
+        """TSA 8.9.0 (P0.a, ADR-0032): the robot task server of the generated bundle; the fake PLC's command line is
+        written into the log to COPY (TSA never starts the requester)."""
+        import os
+        from ..composer import launch_plan
+        from ..generator.namespace import cell_namespace
+        project = self.ctrl.project
+        exported = exported_tasks(project)
+        if not exported:
+            raise ValueError('no task is exposed to the PLC: expose one in the Composer (Tasks -> PLC) and generate')
+        ws, app = self._ws_root(), project.bundle.app_package
+        generated = os.path.join(str(self.out_dir_generated or ''), app, 'launch', 'trainit_task_server.launch.py')
+        if not self.out_dir_generated or not os.path.isfile(generated):
+            raise ValueError('the generated bundle has no robot task server yet: generate it again (and build it)')
+        command = launch_plan.task_server(ws, app, self.run_mode.currentText())
+        tasks = ', '.join(f'#{t.export.number} {t.name}' for t in exported)
+        # P0.a acceptance finding 2: written when the server SAYS it serves -- after its start-up lines, which
+        # buried it when it was written before the launch
+        self.run_panel.after_ready['server'] = (SERVING, [
+            f'# serving the exported tasks: {tasks}. The PLC is the requester; to test without one, start the FAKE '
+            f'PLC in a terminal (TSA never starts it) with this command:',
+            launch_plan.fake_plc_command(ws, app, cell_namespace(project))])
+        return command
 
     def initializePage(self) -> None:
         # Bundle prefix = the PROJECT's name (the user's Step 1 input) -> <name>_description /

@@ -21,7 +21,7 @@ Action = Tuple[str, str, Callable[[], Command]]       # (kind, label, the comman
 
 # what the status lines call each command
 NAMES = {'build': 'Build', 'isaac': 'Isaac Sim', 'environment': 'Planning environment (RViz)',
-         'bringup': 'Bundle bring-up', 'run': 'Application'}
+         'bringup': 'Bundle bring-up', 'run': 'Application', 'server': 'Robot task server'}
 NOT_STARTED = 'not started'
 
 
@@ -51,6 +51,10 @@ class RunPanel(QWidget):
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(5000)
+        # kind -> (marker, lines): written ONCE per start, right after the command's output shows `marker` (TSA 8.9.0:
+        # the fake PLC's command when the robot task server says it serves)
+        self.after_ready = {}
+        self._waiting_ready = set()
         v.addWidget(self.log, 1)
         self.verdict: Optional[str] = None
         self.outcome: Optional[str] = None          # "<CODE> -- <operator text>", from the run's OUTCOME line
@@ -81,6 +85,8 @@ class RunPanel(QWidget):
             self.verdict = None
             self.outcome = None
         self.log.appendPlainText(f'$ {command.display()}')
+        if command.kind in self.after_ready:
+            self._waiting_ready.add(command.kind)
         self.state.setText(f'{command.title}: running')
         self.status[command.kind] = 'running'
         self._show_status()
@@ -90,6 +96,14 @@ class RunPanel(QWidget):
         if kind not in self.actions:
             return
         self.log.appendPlainText(f'[{kind}] {text}')
+        if kind in self._waiting_ready and self.after_ready[kind][0] in text:
+            self._waiting_ready.discard(kind)
+            for extra in self.after_ready[kind][1]:
+                self.log.appendPlainText(extra)
+        if kind == 'server' and 'RTI: ' in text:
+            # TSA 8.9.0 (ADR-0032): the robot task server's own lines -- its state, a job's result -- observed, never
+            # commanded (the PLC / the fake PLC is the requester)
+            self.state.setText(f'Robot task server — {html.escape(text.split("RTI: ", 1)[1].strip())}')
         if kind == 'run' and 'OUTCOME: ' in text:
             self.outcome = text.split('OUTCOME: ', 1)[1].strip()
             self._show_verdict()

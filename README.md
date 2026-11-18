@@ -674,6 +674,10 @@ Composer** -- the SAME canonical program as the YAML below, never a second model
 - Editor warnings beside the validator's refusals: `R-I0-05` (a PTP to a TCP pose before Cartesian motion:
   reach it through a joint waypoint) and `R-I0-06` (a grasp without a `payload`, and no object of the cell
   scene is a grasp target: nothing attaches to the tool in the planning scene).
+- **PLC** (TSA 8.9, in Tasks): *Expose to PLC*, the *PLC task number* (the first free one is offered) and the
+  *timeout*; Apply validates with the model's own messages and changes nothing when refused. Step 8's run panel
+  then offers *Serve the PLC tasks* (the robot task server of the generated bundle) and prints the fake PLC's
+  command to copy into a terminal: TSA launches and observes the server, it never commands it.
 - Every edit is validated by the canonical model; the diagnostics locate each problem (double click to
   go to it) and suggest a misspelt name.
 - Step 4 builds and starts the planning environment (and Isaac on the bound stage); Step 8 builds,
@@ -859,12 +863,22 @@ loop, retry and alternative, with no condition, variable or expression of their 
   way it succeeds; a set a called task writes without declaring it is not held after the call; the
   calls form no cycle (`a -> b -> a` is refused, naming the chain). The main task takes no input.
 - `config/tasks.yaml` is the manifest: each task's tree (`task_<name>`), description, inputs and
-  outputs. Nothing reads it to run the program (`MainTree` runs `main_task`); it is the seam for a later
-  task server. A task is ONE BehaviorTree, called with `SubTree`; the control steps are
+  outputs. Nothing reads it to run the program (`MainTree` runs `main_task`); the robot task server reads its
+  exported tasks (below). A task is ONE BehaviorTree, called with `SubTree`; the control steps are
   BehaviorTree.CPP's `Repeat`, `RetryUntilSuccessful` and `Fallback`. No new runtime: the floors are the
   steps' own. The example is `test/data/m3_7/composition.yaml`; the six M3 decompositions (machine
   tending, inspection, a process path, pick and place, bin picking, bottle nesting) are
   `test/data/m3_7/decompositions/`.
+- **Exposed to a PLC** (TSA 8.9, ADR-0032): a task with `export: {number: <1..65535>, timeout_s: <s>}` is one the
+  cell's PLC -- the ONE machine master -- may request by that number through the Robot Task Interface. A number
+  and a timeout (whole milliseconds, no default), nothing else: no protocol field is ever written in a project.
+  Refused: two tasks with one number (`R-P0-03`, naming both), a number or a timeout out of range (`R-P0-01`,
+  `R-P0-02`), a task with `inputs` (`R-P0-04`). The bundle then also carries a `job_<task>` tree per exported task
+  (the task's own tree, which is unchanged), `config/tasks.yaml`'s `export` entries and `export_table_id`, and
+  `launch/trainit_task_server.launch.py`; a project without an export generates exactly what TSA 8.8.0 did. A
+  program that exports tasks should track whether a part is held (`faults: stop` and a gripping step): without it
+  every PLC cancel ends FAILED `CANCELLED_HOLD_UNKNOWN` and the plan says so. The public sample
+  `examples/ur5e_suction/robot_tasks.yaml` is one.
 - The application types `gluing`, `follow_path`, `waypoint_replay` and `cnc` -- names that never
   generated a bundle -- are refused at load: each is a Canonical Task Program.
 - **Step ids** (TSA 8.3, D18, ADR-0030): any step may carry an optional `id` -- a name you choose, unique
@@ -1054,6 +1068,22 @@ the tree's `AddCollisionObject` boxes, in `<robot>_app/bt_trees/`), and — only
 for an application with a `servo` move — the MoveIt Servo settings in
 `<robot>_trainit_config/config/servo.yaml` (the cell bring-up starts the `servo_node` with
 it). See the generated bundle's own `README.md` (a bundle built on a base config has one).
+
+**Serving tasks to a PLC** (a bundle with exported tasks, TSA 8.9 / TMR 2.10, ADR-0032). Instead of the one-shot
+`trainit_bt.launch.py`, terminal 2 starts the robot task server, which runs ONE job per PLC request (the exported
+task's `job_<task>` tree) and keeps MoveIt and the end effector up between jobs:
+
+```bash
+# terminal 2 -- the robot task server (mock and real: use_sim_time:=false)
+ros2 launch <robot>_app trainit_task_server.launch.py use_sim_time:=false
+# terminal 3 -- the FAKE PLC (a commissioning / test tool, never a machine master): reset, start <task>, cancel, status
+ros2 run trainit_motion_runtime trainit_fake_plc --ros-args -p tasks_file:=<ws>/install/<robot>_app/share/<robot>_app/config/tasks.yaml
+```
+
+The server starts as "Robot needs reset" (FAULTED / `SERVER_STARTED`: after a restart it knows nothing of the
+robot's state) until the PLC's RESET; it reports Ready / Busy / the result of each job / Fault in plain codes. A
+cancel, a lost PLC heartbeat, a lost runtime or a timeout stops the job and fails closed. None of it is a safety
+function (ADR-0033). The one-shot launch is unchanged.
 
 With a **robot namespace** set, the same two commands need the namespace nowhere: the
 generated launches carry it, and the bring-up prints it on the first line. Only RViz is
@@ -1253,6 +1283,10 @@ so a bare `trainit_generate` is not found.
 > within its task); an identified step is generated inside `<Sequence name="trainit_step:<id>:<kind>">`, the
 > carrier TMR's execution-event observer reads. Projects without step ids: bundles unchanged but the manifest's
 > provenance.
+> `8.9.0` (P0.a, ADR-0032): a task may be **exposed to a PLC** (`export: {number, timeout_s}`; the Composer's PLC
+> group); its bundle adds the `job_<task>` trees, the exported tasks and `export_table_id` in `config/tasks.yaml`,
+> and `trainit_task_server.launch.py` -- served by TMR >= 2.10.0's `trainit_task_server` (the floor its app's
+> `package.xml` declares). A project without an export generates the files of 8.8.0, byte for byte.
 
 ## Licence
 

@@ -8,6 +8,7 @@ whitespace, and a canonical YAML dumper with a fixed float format.
 from __future__ import annotations
 
 import hashlib
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,17 @@ def sha256_bytes(data: bytes) -> str:
 
 def sha256_text(text: str) -> str:
     return sha256_bytes(text.encode('utf-8'))
+
+
+def export_table_text(entries) -> str:
+    """TSA 8.9.0 (P0.a, ADR-0032 Decision 3): the canonical text of the exported-task table -- one line
+    ``<number>:<name>:<timeout_ms>`` per exported task, by increasing number (TMR rti_contract exportTableText)."""
+    return ''.join(f'{n}:{name}:{ms}\n' for n, name, ms in sorted(entries))
+
+
+def export_table_id(entries) -> int:
+    """Its CRC-32 (IEEE 802.3, zlib's): the identity a PLC-side requester checks before it commands."""
+    return zlib.crc32(export_table_text(entries).encode('utf-8')) & 0xFFFFFFFF
 
 
 def build_jinja_env() -> Environment:

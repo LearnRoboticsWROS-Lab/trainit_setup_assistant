@@ -232,6 +232,25 @@ class AppEmitter(Emitter):
                       detectors=detector_nodes,
                       grasp_providers=grasp_provider_nodes,
                       external_detectors=external_detectors)
+        # TSA 8.9.0 (P0.a, ADR-0032): a project with EXPORTED tasks also gets the robot task server's launch -- the
+        # same template, served: trainit_task_server instead of trainit_run_bt, the tasks file, never ending by itself
+        # (its perception nodes stay up). A project without exports gets no such file (byte-identical bundle).
+        if plan is not None and project.application.program.exported():
+            ctx.render_to(f'{pkg}/launch/trainit_task_server.launch.py',
+                          'app/trainit_bt.launch.py.j2',
+                          robot_name=robot.robot_name,
+                          moveit_config_package=project.bundle.moveit_config_package,
+                          app_package=pkg,
+                          tree_filename=tree_name,
+                          default_planner_mode=plan.planner_mode,
+                          gazebo_supported=(Backend.GAZEBO in dep.modes),
+                          program=True,
+                          program_paths=bool(plan.paths),
+                          cell_namespace=cell_ns,
+                          detectors=detector_nodes,
+                          grasp_providers=grasp_provider_nodes,
+                          external_detectors=external_detectors,
+                          served=True)
 
         # --- TrainIt D0.8: the data recorder's configuration, one file per recordable mode, and the
         # recorder in the bring-up (robot slot). Nothing when the project records no live data, so a

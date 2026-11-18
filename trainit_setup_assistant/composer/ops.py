@@ -425,6 +425,21 @@ class Composer:
                 t.pop('description', None)
         self.edit(mutate)
 
+    def set_task_export(self, name: str, number: Optional[int], timeout_s: Optional[float] = None) -> None:
+        """TSA 8.9.0 (P0.a, ADR-0032 Decision 3): expose a task to the cell's PLC -- its PLC task ``number`` and the
+        job's ``timeout_s`` -- or, with ``number`` None, make it internal to the application again. The model validates
+        it (R-P0-01..04); nothing of the protocol is the user's to set (Decision 14)."""
+        if number is None and not any(t.name == name and t.export is not None for t in self.program.tasks):
+            _task(self.document(), name)                  # an unknown task is still refused
+            return                                        # already internal: no edit, no undo entry
+        def mutate(doc):
+            t = _task(doc, name)
+            if number is None:
+                t.pop('export', None)
+            else:
+                t['export'] = {'number': number, 'timeout_s': timeout_s}
+        self.edit(mutate)
+
     def rename_task(self, old: str, new: str) -> None:
         """Rename a task, its calls and ``main_task``."""
         def mutate(doc):

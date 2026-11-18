@@ -1,0 +1,119 @@
+# P0.a (ADR-0032): the ROBOT TASK CONTRACT fixture -- a neutral Canonical Task Program with EXPORTED tasks, on the
+# test arm of TMR's M2.5 harness (urdf/p0a_arm.urdf.xacro), a mock suction cup (SetBool, no confirmation) and
+# `faults: stop`. It grips (pick_part), so the program tracks the held state (trainit__holding, ADR-0024 M4.5d), and
+# place_part and home open the tool first, so their held state is KNOWN and false before anything moves;
+# carry never touches the tool (the seeded held state reaches its motions: P0.a K12 / K13 on a real tree).
+#
+#   place_part  PLC task #12, 30 s: open the tool, PTP to `ready`, dwell 2 s (a non-blocking step), PTP `home`
+#   home        PLC task #7,  5 s:  open the tool, PTP `home`
+#   pick_part   PLC task #3, 10 s:  PTP `ready`, close the tool -- it ENDS HOLDING (the held state the next job gets)
+#   carry       PLC task #4, 10 s:  PTP `ready`, PTP `home` -- no tool step: it keeps the held state it was seeded with
+#   inspect     internal (not exported): PTP `home`
+#
+# TSA generates its bundle (in a temporary directory, by test_p0a_task_export.py); the tree, tasks.yaml, bt_params
+# and motion profiles are kept as BYTE COPIES in served/ here and in TMR test/data/p0a/served/ (sha256-pinned on
+# both sides): TMR's test_p0a_task_server runs them in trainit_task_server and trainit_run_bt.
+# Generate it FROM THIS DIRECTORY (its urdf path is relative to it).
+schema_version: 4
+project_name: p0a_served
+
+bundle:
+  description_package: p0a_description
+  moveit_config_package: p0a_trainit_config
+  app_package: p0a_app
+
+meta:
+  maintainer_name: TrainIt sample user
+  maintainer_email: user@example.com
+  license: Apache-2.0
+  version: 0.1.0
+
+robot:
+  robot_name: p0a_arm
+  description:
+    urdf_dir: urdf
+    top_xacro: p0a_arm.urdf.xacro
+  base_frame: base_link
+  tip_link: tcp
+  planning_group:
+    name: arm
+    base_link: base_link
+    tip_link: tcp
+    joints: [j1, j2, j3]
+  gripper:
+    kind: suction
+    eef_parent_link: tcp
+    contract:
+      actuator: {command_interface: set_bool}
+      verification: {require_grasp_confirmation: false, require_release_confirmation: false}
+      adapters: {mock: trainit_mock}
+  named_states:
+    - name: home
+      group: arm
+      joint_values: {j1: 0.0, j2: 0.0, j3: 0.0}
+    - name: ready
+      group: arm
+      joint_values: {j1: 0.3, j2: -0.4, j3: 0.6}
+  joint_limits:
+    per_joint:
+      j1: {max_velocity: 1.0, max_acceleration: 2.0}
+      j2: {max_velocity: 1.0, max_acceleration: 2.0}
+      j3: {max_velocity: 1.0, max_acceleration: 2.0}
+  initial_positions: {j1: 0.0, j2: 0.0, j3: 0.0}
+
+deployment:
+  modes: [mock]
+  default_mode: mock
+
+application:
+  type: task_program
+  faults: stop
+
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+
+  waypoints:
+    - {name: home, type: joint, named: home}
+    - {name: ready, type: joint, named: ready}
+
+  tasks:
+    - name: place_part
+      description: Place a part (the P0.a fixture's long job)
+      export: {number: 12, timeout_s: 30}
+      steps:
+        - id: open_tool
+          tool: {open: {}}
+        - id: to_ready
+          move: {to: ready, type: ptp, profile: transit}
+        - id: settle
+          dwell: {ms: 2000}
+        - id: to_home
+          move: {to: home, type: ptp, profile: transit}
+    - name: home
+      description: Go home with the tool open (the recovery task)
+      export: {number: 7, timeout_s: 5}
+      steps:
+        - id: open_tool
+          tool: {open: {}}
+        - id: go_home
+          move: {to: home, type: ptp, profile: transit}
+    - name: pick_part
+      description: Pick a part (ends holding it)
+      export: {number: 3, timeout_s: 10}
+      steps:
+        - id: to_ready
+          move: {to: ready, type: ptp, profile: transit}
+        - id: close_tool
+          tool: {close: {}}
+    - name: carry
+      description: Carry whatever is held (no tool step)
+      export: {number: 4, timeout_s: 10}
+      steps:
+        - id: to_ready
+          move: {to: ready, type: ptp, profile: transit}
+        - id: to_home
+          move: {to: home, type: ptp, profile: transit}
+    - name: inspect
+      steps:
+        - move: {to: home, type: ptp, profile: transit}
+  main_task: place_part

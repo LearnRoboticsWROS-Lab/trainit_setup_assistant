@@ -413,6 +413,9 @@ TMR_FLOORS = {
     # unknown port when it builds the tree
     'held_motion_fault': ('2.9.0', 'f3e374e', "MoveWaypoint / FollowPath holding (a held part's failed "
                                                          "motion is a fault)"),
+    # TSA 8.9.0 (P0.a, ADR-0032): a bundle with EXPORTED tasks launches the robot task server (one run per job, the
+    # Robot Task Interface; trainit_interfaces >= 0.4.0 through TMR); an older TMR has no such executable
+    'task_server': ('2.10.0', '788e91f', 'trainit_task_server (the robot task server, ADR-0032)'),
 }
 # The TMR_FLOORS rows only a CANONICAL package can be given -- one whose bt_params carry the
 # end-effector contract's eef block (ADR-0022, its amendment M2.7; ADR-0021 amendment G0): a
@@ -427,7 +430,8 @@ TASK_PROGRAM_CAPABILITIES = ('FollowPath', 'waypoint_canonical_keys', 'move_goal
                              'ProcessEvent', 'detect_trigger', 'follow_path_range', 'path_events',
                              'DetectCandidates', 'SetWaypointFromCandidate', 'pose_configuration',
                              'candidate_capture', 'candidate_orientation', 'grasp_envelope',
-                             'scene_fault', 'attach_touch_links', 'candidate_fault', 'held_motion_fault')
+                             'scene_fault', 'attach_touch_links', 'candidate_fault', 'held_motion_fault',
+                             'task_server')
 
 
 # --- the end-effector ADAPTER rows (ADR-0022 D6) ------------------------------------------------

@@ -133,6 +133,10 @@ def _task_programs():
     for path in sorted((HERE / 'data').rglob('*.yaml')) + sorted((HERE.parent / 'examples').rglob('*.yaml')):
         if path.parent == DATA:
             continue
+        if path.parent.name == 'p0a':                   # P0.a's fixture uses faults: stop on purpose (later)
+            continue
+        if path.name == 'robot_tasks.yaml':             # P0.a's public sample too: it tracks the held state
+            continue
         try:
             data = yaml.safe_load(path.read_text())
         except yaml.YAMLError:

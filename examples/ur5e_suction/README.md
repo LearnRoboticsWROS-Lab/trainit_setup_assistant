@@ -224,6 +224,27 @@ ros2 service call /eef/main/actuators/vacuum/set_engaged std_srvs/srv/SetBool "{
 To remove everything steps 1 and 2 made: `rm -rf ~/trainit_sample_ws`. The apt packages stay
 installed.
 
+## Robot tasks a PLC requests (`robot_tasks.yaml`)
+
+`robot_tasks.yaml` is the same cell as **robot tasks a cell PLC requests by number** (TSA 8.9.0, the Robot Task
+Interface): `home` (#1), `pick_part` (#2, it ends holding the part) and `place_part` (#3) are exposed to the PLC with a
+timeout each; `inspect` is not (the Composer's "PLC" group exposes a task: a number and a timeout, nothing else). Its
+bundle also carries the robot task server's launch, and TMR's fake PLC plays the PLC:
+
+```bash
+ros2 run trainit_setup_assistant trainit_generate robot_tasks.yaml -o ~/trainit_sample_ws/src/ur5e_tasks
+# build as in step 2, then: terminal 1, the cell; terminal 2, the server; terminal 3, the fake PLC
+ros2 launch ur5e_tasks_app bringup.launch.py mode:=mock
+ros2 launch ur5e_tasks_app trainit_task_server.launch.py use_sim_time:=false
+ros2 run trainit_motion_runtime trainit_fake_plc --ros-args \
+  -p tasks_file:=$HOME/trainit_sample_ws/install/ur5e_tasks_app/share/ur5e_tasks_app/config/tasks.yaml
+```
+
+The server starts as "Robot needs reset"; type `reset`, then `start home`, `start pick_part`, `cancel`, `status`,
+`help`. A job cancelled while the tool is known to be free ends CANCELLED and the robot is ready again; with a part
+held it ends FAILED (CANCELLED_WHILE_HOLDING) and needs a `reset` -- fail closed. None of this is a safety function.
+`test/test_p0a_robot_tasks_launch.py` (opt-in like the second check below, ROS domain 81) runs this whole scenario.
+
 ## The automated checks
 
 ```bash

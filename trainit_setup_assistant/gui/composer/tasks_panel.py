@@ -17,9 +17,10 @@ import copy
 from typing import Callable, List, Optional, Tuple
 
 from python_qt_binding.QtCore import Qt
-from python_qt_binding.QtWidgets import (QAbstractItemView, QComboBox, QFormLayout, QGroupBox, QHBoxLayout,
-                                         QLabel, QLineEdit, QListWidget, QPlainTextEdit, QPushButton, QSpinBox,
-                                         QStackedWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from python_qt_binding.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
+                                         QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPlainTextEdit,
+                                         QPushButton, QSpinBox, QStackedWidget, QTreeWidget, QTreeWidgetItem,
+                                         QVBoxLayout, QWidget)
 
 from ...composer.describe import label_text, route, step_text
 from ...composer.ops import CONTROL_KINDS, ComposerError, step_bodies, step_kind
@@ -59,6 +60,30 @@ class TasksPanel(QWidget):
             b = QPushButton(text)
             b.clicked.connect(slot)
             left.addWidget(b)
+        # TSA 8.9.0 (P0.a, ADR-0032): expose the task to the cell's PLC -- the engineer sets INTENT (a PLC task
+        # number, a timeout); sessions, sequence numbers, heartbeats, topics and codes are TrainIt's (Decision 14)
+        self.plc_box = QGroupBox('PLC')
+        self.plc_box.setToolTip('A task exposed to the PLC is a robot capability the cell\'s PLC may request by its '
+                                'PLC task number (the Robot Task Interface, ADR-0032). TrainIt owns the protocol.')
+        pf = QFormLayout(self.plc_box)
+        self.plc_expose = QCheckBox('Expose to PLC')
+        self.plc_number = QSpinBox()
+        self.plc_number.setRange(1, 65535)
+        self.plc_number.setToolTip('The task\'s number for the PLC: stable once a PLC program uses it')
+        self.plc_timeout = QDoubleSpinBox()
+        self.plc_timeout.setRange(0.001, 86400.0)
+        self.plc_timeout.setDecimals(3)
+        self.plc_timeout.setSuffix(' s')
+        self.plc_timeout.setValue(30.0)
+        self.plc_timeout.setToolTip('The job\'s timeout: exceeded, the robot stops and reports TASK_TIMEOUT')
+        self._export_for: Optional[str] = '\0'           # the task the PLC group shows (reload on change)
+        self.plc_apply = QPushButton('Apply')
+        self.plc_apply.clicked.connect(self.apply_export)
+        pf.addRow(self.plc_expose)
+        pf.addRow('PLC task number', self.plc_number)
+        pf.addRow('Timeout', self.plc_timeout)
+        pf.addRow(self.plc_apply)
+        left.addWidget(self.plc_box)
         h.addLayout(left, 1)
         # ---- tree + route ----
         mid = QVBoxLayout()
@@ -216,8 +241,12 @@ class TasksPanel(QWidget):
         main = doc.get('main_task')
         self.task_list.blockSignals(True)
         self.task_list.clear()
+        exported = {t['name']: (t.get('export') or {}).get('number') for t in doc.get('tasks', []) if t.get('export')}
         for n in names:
-            self.task_list.addItem(f'{n}  ★ main' if n == main else n)
+            text = f'{n}  ★ main' if n == main else n
+            if n in exported:
+                text += f'  ⇄ PLC #{exported[n]}'     # TSA 8.9.0: exposed to the PLC
+            self.task_list.addItem(text)
             self.task_list.item(self.task_list.count() - 1).setData(Qt.UserRole, n)
         self.task_list.blockSignals(False)
         if self.task not in names:
@@ -235,10 +264,44 @@ class TasksPanel(QWidget):
             self._edit_label = None
             self.refresh()
 
+    def _load_export(self, task: Optional[dict], force: bool = False) -> None:
+        """TSA 8.9.0: the PLC group shows the selected task's export (or the first free number and 30 s to start
+        from). Reloaded only when the selected task changes or after an Apply: an edit elsewhere (a step) never
+        discards what the user typed here."""
+        name = (task or {}).get('name')
+        if not force and name == self._export_for:
+            return
+        self._export_for = name
+        export = (task or {}).get('export')
+        self.plc_box.setEnabled(task is not None)
+        self.plc_expose.setChecked(export is not None)
+        if export:
+            self.plc_number.setValue(int(export.get('number') or 1))
+            self.plc_timeout.setValue(float(export.get('timeout_s') or 30.0))
+            return
+        used = {int((t.get('export') or {}).get('number') or 0) for t in self._doc().get('tasks', [])}
+        self.plc_number.setValue(next((n for n in range(1, 65536) if n not in used), 1))
+        self.plc_timeout.setValue(30.0)
+
+    def apply_export(self) -> bool:
+        """TSA 8.9.0 (ADR-0032): expose the selected task to the PLC (its number and timeout) or make it internal."""
+        if not self.task:
+            return False
+        name = self.task
+        if self.plc_expose.isChecked():
+            number, timeout = self.plc_number.value(), round(self.plc_timeout.value(), 3)
+            ok = self._do(lambda: self.composer.set_task_export(name, number, timeout))
+        else:
+            ok = self._do(lambda: self.composer.set_task_export(name, None))
+        if ok:
+            self._load_export(self._task_doc(), force=True)   # what the model kept; a refused Apply keeps the input
+        return ok
+
     def _fill_tree(self) -> None:
         self.tree.blockSignals(True)
         self.tree.clear()
         task = self._task_doc()
+        self._load_export(task)
         if task is None:
             self.title.setText('')
             self.route_view.setPlainText('')

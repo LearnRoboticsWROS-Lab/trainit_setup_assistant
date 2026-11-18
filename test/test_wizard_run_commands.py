@@ -64,3 +64,24 @@ def test_the_printed_commands_are_the_bundle_s(case, monkeypatch, tmp_path):
         f'  # application:   ros2 launch {APP} trainit_bt.launch.py {tree}',
     ] + ([f'  # or both:       ros2 launch {APP} bringup.launch.py mode:={default}']
          if base else [])
+
+
+def test_a_bundle_with_plc_tasks_also_prints_how_to_serve_them(monkeypatch, tmp_path):
+    """TSA 8.9.0 (P0.a owner acceptance, finding 1): for a project with tasks exposed to the PLC the printed commands
+    end with the robot task server's launch and the fake PLC's command; a project without an export prints exactly
+    the lines above (the CASES)."""
+    pytest.importorskip('xacro', reason='the public sample needs ur_description and xacro')
+    from trainit_setup_assistant.gui.wizard import build_and_run_lines
+    from trainit_setup_assistant.model import load_project
+    monkeypatch.chdir(EXAMPLE)
+    project = load_project('robot_tasks.yaml')
+    ws = tmp_path / 'ws'
+    lines = build_and_run_lines(project, str(ws / 'src' / 'ur5e_tasks'), str(ws))
+    app = 'ur5e_tasks_app'
+    assert lines[-4:] == [
+        '  # PLC tasks (#1 home, #2 pick_part, #3 place_part) -- serve them to the PLC instead of the application:',
+        f'  #                ros2 launch {app} trainit_task_server.launch.py use_sim_time:=false',
+        '  # fake PLC (a test tool, never a machine master), in another terminal:',
+        f'  #                ros2 run trainit_motion_runtime trainit_fake_plc --ros-args '
+        f'-p tasks_file:={ws}/install/{app}/share/{app}/config/tasks.yaml']
+    assert not any('trainit_task_server' in line for line in lines[:-4])

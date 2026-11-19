@@ -25,6 +25,7 @@ from typing import Dict, List
 
 from ..applications.task_program import (TMR_BASE_PROFILE, ProgramPlan, iter_plans, move_text, percent,
                                          provider_text, scaling_text, task_tree_id)
+from ..model.program import EventKind, WaitFor
 from .determinism import export_table_id, fmtlist, fmtnum
 
 _QUOTED = ('named', 'frame', 'tcp', 'profile')
@@ -261,7 +262,9 @@ def program_readme(project, plan: ProgramPlan) -> str:
             out.append('')
     captures = [(task, key, what) for task in program.tasks for sp in iter_plans(plan.tasks[task.name])
                 for key, what in sp.captures]
-    channels = sorted({ev.channel for ev in _events(plan) if ev.channel})
+    # a machine request is not a process channel (TSA 8.10.0): the Machine services section says what it is
+    channels = sorted({ev.channel for ev in _events(plan) if ev.channel and ev.kind is not EventKind.REQUEST})
+    out += machine_services_section(program, plan)
     if captures or channels:
         out += ['## Process and perception', '']
         if channels:
@@ -345,6 +348,51 @@ def program_readme(project, plan: ProgramPlan) -> str:
     return '\n'.join(out)
 
 
+def machine_services_section(program, plan: ProgramPlan) -> List[str]:
+    """TSA 8.10.0 (P0.b): the README's "Machine services" section -- only for a program that declares or uses machine
+    services (a program without them writes the README of 8.9.0, byte for byte). The services by their LOGICAL ids,
+    what a request and a wait mean, who serves them (the CELL, started apart) and how a machine failure reads; never a
+    topic, a sequence number, a PLC address or an I/O (owner decision 3)."""
+    used = program.used_services()
+    if not program.machine_services and not used:
+        return []
+    described = {s.id: s.description for s in program.machine_services}
+    services = list(described) + [s for s in used if s not in described]
+    requested: Dict[str, List[str]] = {}
+    waited: Dict[str, List[str]] = {}
+    for task in program.tasks:
+        for sp in iter_plans(plan.tasks[task.name]):
+            if sp.kind == 'process' and sp.event is not None and sp.event.kind is EventKind.REQUEST:
+                requested.setdefault(sp.event.channel, []).append(f'`{task.name}` step {sp.label}')
+            elif sp.kind == 'wait':
+                waited.setdefault(sp.machine.channel, []).append(
+                    f'`{task.name}` step {sp.label} ({sp.machine.for_.value}, {sp.machine.timeout_ms} ms)')
+    out = ['## Machine services', '',
+           'The program asks the cell\'s machines for work by LOGICAL service ids. A `request` step asks a service '
+           'for ONE new cycle; a `wait` step waits for it, with its own timeout: `for: done` waits for the DONE of '
+           'THIS task\'s request (never an earlier cycle\'s, another job\'s or another requester\'s), `for: ready` for '
+           'the machine to be ready (after a request of the same run, that request done too). The robot runtime '
+           '(`trainit_motion_runtime` >= 2.11.0) reaches each service through TrainIt\'s machine channel; the CELL '
+           'serves it -- its machine simulation (`trainit_cell_io`, from the cell\'s own `cell_io.yaml`) or its PLC '
+           '-- and is started apart: this bundle never starts it, and the program never resets a machine.', '',
+           'A request or a wait that fails ends the run with the machine\'s reason, in plain words: MACHINE '
+           '`<service>` FAULT (STATION_FAULT 306; STATION_BUSY 313 when the machine was still busy), MACHINE '
+           '`<service>` TIMEOUT (STATION_TIMEOUT 305, with the last state seen), MACHINE `<service>` UNAVAILABLE '
+           '(STATION_UNAVAILABLE 310: no status, stale, restarted, two sources). While a wait runs, the run says '
+           'WAITING FOR MACHINE `<service>` or MACHINE `<service>` BUSY.', '',
+           '| Service | Description | Requested by | Waited for by |', '|---|---|---|---|']
+    for s in services:
+        out.append(f'| `{s}` | {_table_cell(described.get(s) or "--")} | '
+                   f'{"; ".join(requested.get(s, [])) or "--"} | {"; ".join(waited.get(s, [])) or "--"} |')
+    return out + ['']
+
+
+def _table_cell(text: str) -> str:
+    """Free text (a machine service's description: one line, '|' allowed) as ONE Markdown table cell: its '|'
+    escaped, so the text never splits the row into more cells."""
+    return text.replace('|', '\\|')
+
+
 def _task_header(task, plan: ProgramPlan) -> List[str]:
     """A task's description and data (vNext M3.7), when it has them, above its steps."""
     out = []
@@ -418,6 +466,12 @@ def _step_rows(task, steps, plan: ProgramPlan) -> List[str]:
         elif sp.summary is not None:   # vNext M3.6: detect, grasp, release, tool
             target, how, limits = sp.summary
             out.append(f'| {i} | {sp.kind} | {target} | {how} | {limits} |')
+        elif sp.kind == 'wait':        # TSA 8.10.0 (P0.b): the wait for a machine service
+            w = sp.machine
+            what = ("its DONE of this task's request" if w.for_ is WaitFor.DONE else
+                    'ready (after a request of this task: that request done too)')
+            out.append(f'| {i} | wait | `{w.channel}` | wait for machine service `{w.channel}`: {what}; at most '
+                       f'{w.timeout_ms} ms, else the run ends STATION_TIMEOUT | -- |')
         else:
             out.append(f'| {i} | dwell | -- | hold {sp.dwell_ms} ms | -- |')
         for body in sp.bodies:

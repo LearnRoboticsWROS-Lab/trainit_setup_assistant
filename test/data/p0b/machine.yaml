@@ -1,0 +1,118 @@
+# P0.b (P0B_DESIGN §3): the MACHINE SERVICES fixture -- a neutral Canonical Task Program that asks two cell machines
+# for work, on the test arm of TMR's M2.5 harness (the P0.a fixture's urdf, ../p0a/urdf), a mock suction cup and
+# `faults: stop`. Two logical machine services, `turner` (a turn station) and `indexer` (a line indexer); every
+# machine interaction is a `request` and a `wait` (done or ready), with an id and a timeout:
+#
+#   turn         PLC task #2, 15 s: request turner, wait for its DONE (8 s)  -- also the main task (request first)
+#   turn_part    PLC task #5, 40 s: pick, place on the station, request turner, move clear, wait DONE (8 s),
+#                                   request indexer, wait DONE (8 s), wait turner READY (2 s)
+#   ready_check  PLC task #6, 5 s:  wait for turner READY (2 s), no request
+#
+# test_p0b_machine_services.py generates it in a temporary directory and mutates copies of it for the refusals.
+# Generate it FROM THIS DIRECTORY (its urdf path is relative to it).
+schema_version: 4
+project_name: p0b_machine
+
+bundle:
+  description_package: p0b_description
+  moveit_config_package: p0b_trainit_config
+  app_package: p0b_app
+
+meta:
+  maintainer_name: TrainIt sample user
+  maintainer_email: user@example.com
+  license: Apache-2.0
+  version: 0.1.0
+
+robot:
+  robot_name: p0a_arm
+  description:
+    urdf_dir: ../p0a/urdf
+    top_xacro: p0a_arm.urdf.xacro
+  base_frame: base_link
+  tip_link: tcp
+  planning_group:
+    name: arm
+    base_link: base_link
+    tip_link: tcp
+    joints: [j1, j2, j3]
+  gripper:
+    kind: suction
+    eef_parent_link: tcp
+    contract:
+      actuator: {command_interface: set_bool}
+      verification: {require_grasp_confirmation: false, require_release_confirmation: false}
+      adapters: {mock: trainit_mock}
+  named_states:
+    - name: home
+      group: arm
+      joint_values: {j1: 0.0, j2: 0.0, j3: 0.0}
+    - name: ready
+      group: arm
+      joint_values: {j1: 0.3, j2: -0.4, j3: 0.6}
+  joint_limits:
+    per_joint:
+      j1: {max_velocity: 1.0, max_acceleration: 2.0}
+      j2: {max_velocity: 1.0, max_acceleration: 2.0}
+      j3: {max_velocity: 1.0, max_acceleration: 2.0}
+  initial_positions: {j1: 0.0, j2: 0.0, j3: 0.0}
+
+deployment:
+  modes: [mock]
+  default_mode: mock
+
+application:
+  type: task_program
+  faults: stop
+
+  machine_services:
+    - {id: turner, description: turn the part over}
+    - {id: indexer, description: index the line by one stroke}
+
+  motion_profiles:
+    transit: {speed: 50, acceleration: 50}
+
+  waypoints:
+    - {name: home, type: joint, named: home}
+    - {name: ready, type: joint, named: ready}
+
+  tasks:
+    - name: turn
+      description: One turner cycle -- ask for it, wait for its DONE
+      export: {number: 2, timeout_s: 15}
+      steps:
+        - id: ask_turn
+          process: {kind: request, channel: turner}
+        - id: turned
+          wait: {channel: turner, for: done, timeout_ms: 8000}
+    - name: turn_part
+      description: Pick, place on the station, have it turned, index the line, wait to load again
+      export: {number: 5, timeout_s: 40}
+      steps:
+        - id: to_pick
+          move: {to: ready, type: ptp, profile: transit}
+        - id: grip
+          tool: {close: {}}
+        - id: to_station
+          move: {to: home, type: ptp, profile: transit}
+        - id: release
+          tool: {open: {}}
+        - id: ask_turn
+          process: {kind: request, channel: turner}
+        - id: clear
+          move: {to: ready, type: ptp, profile: transit}
+        - id: turned
+          wait: {channel: turner, for: done, timeout_ms: 8000}
+        - id: ask_index
+          process: {kind: request, channel: indexer}
+        - id: indexed
+          wait: {channel: indexer, for: done, timeout_ms: 8000}
+        - id: may_load
+          wait: {channel: turner, for: ready, timeout_ms: 2000}
+    - name: ready_check
+      description: Wait until the turner is ready (no request)
+      export: {number: 6, timeout_s: 5}
+      steps:
+        - id: may_load
+          wait: {channel: turner, for: ready, timeout_ms: 2000}
+  main_task: turn

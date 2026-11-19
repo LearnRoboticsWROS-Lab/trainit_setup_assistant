@@ -131,6 +131,9 @@ PINNED_FLOORS = {
     'candidate_fault': ('2.8.1', '532c0d3'),
     'held_motion_fault': ('2.9.0', 'f3e374e'),        # TSA 8.8.0 (M4.5d, ADR-0024 amendment M4.5d)
     'task_server': ('2.10.0', '788e91f'),             # TSA 8.9.0 (P0.a, ADR-0032): the robot task server (TMR v2.10.0)
+    # TSA 8.10.0 (P0.b): the machine nodes, TMR 2.11.0
+    'machine_request': ('2.11.0', 'c984889'),      # the published v2.11.0 commit (PUB-P0b)
+    'machine_wait': ('2.11.0', 'c984889'),
 }
 
 
@@ -234,6 +237,9 @@ DATED_PORTS = {
                                  'retract_along_approach', 'retract_dz', 'orientation', 'orientation_from',
                                  'eef', 'site',
                                  'fault'},             # TSA 8.6.2: candidate_fault, 2.8.1
+    # TSA 8.10.0 (P0.b): the machine nodes (machine_request / machine_wait, 2.11.0); fault: the gate (faults: stop)
+    'RequestMachine': {'channel', 'fault'},
+    'WaitForMachine': {'channel', 'for', 'timeout_ms', 'fault'},
 }
 DATED_BT_PARAMS = {'planner_mode', 'process_path_backend', 'group', 'base_frame', 'tip_link',
                    'gripper_action', 'process_controller', 'bt_tree_id', 'enforce_validation',
@@ -349,6 +355,8 @@ SCENE_FAULT = "AttachObject / DetachObject's fault output"                 # TSA
 TOUCH_LINKS = 'AttachObject touch_links'
 CANDIDATE_FAULT = "SetWaypointFromCandidate's fault output"
 HELD_MOTION = "MoveWaypoint / FollowPath holding (a held part's failed motion is a fault)"   # TSA 8.8.0 (M4.5d)
+MACHINE_REQUEST = 'RequestMachine (a request on a machine service; trainit_interfaces >= 0.5.0 through TMR)'  # P0.b
+MACHINE_WAIT = 'WaitForMachine (a wait for a machine service: done or ready)'                             # P0.b
 
 
 def _for(version: str, *reasons: str) -> str:
@@ -656,6 +664,22 @@ def _task_program_composition(_card=None):
     return p
 
 
+def _task_program_machine(_card=None):
+    """TSA 8.10.0 (P0.b): the public cell's program asking machine services -- a request, the wait for its DONE and a
+    ready wait -- under faults: stop (both machine nodes then carry the gate's fault): every P0.b surface a bundle can
+    carry."""
+    from trainit_setup_assistant.model.program import MachineService, ProcessStep, TaskStep, WaitStep
+    p = _task_program()
+    program = p.application.program
+    program.machine_services = [MachineService(id='turner'), MachineService(id='indexer')]
+    program.faults = 'stop'
+    program.tasks[0].steps += [
+        TaskStep(id='ask_turn', process=ProcessStep(kind='request', channel='turner')),
+        TaskStep(id='turned', wait=WaitStep.parse_obj({'channel': 'turner', 'for': 'done', 'timeout_ms': 8000})),
+        TaskStep(id='may_load', wait=WaitStep.parse_obj({'channel': 'indexer', 'for': 'ready', 'timeout_ms': 2000}))]
+    return p
+
+
 @contextlib.contextmanager
 def _cwd(path):
     old = os.getcwd()
@@ -869,6 +893,8 @@ CASES = {   # name -> (needs the golden, builder(card))
     'T_task_program_manipulation': (False, _task_program_manipulation),
     # vNext M4.5: the composition additions (Script, _failureIf, _skipIf, AlwaysFailure, the gate's remaps)
     'T_task_program_composition': (False, _task_program_composition),
+    # TSA 8.10.0 (P0.b): machine services -- RequestMachine, WaitForMachine (done and ready), under the gate
+    'T_task_program_machine': (False, _task_program_machine),
 }
 # F (no policy) is every case without a policy step; G (no perception) every case without a TP
 # detector node: A, C, D, E, P (but the golden-based ones), S, Z, N, J, U.
@@ -953,6 +979,10 @@ EXPECTED = {
     # motions read the held state -- TMR 2.9.0
     'T_task_program_composition': ({APP: ('2.9.0', _for('2.9.0', HELD_MOTION)),
                                     CFG: BASE}, '0.7.0', False),   # TSA 8.7.0: the presence capture's provider
+    # TSA 8.10.0 (P0.b): the machine nodes need TMR 2.11.0 (trainit_interfaces >= 0.5.0 through it); the gate's
+    # MoveWaypoint fault (2.1.0) is below the floor and not named
+    'T_task_program_machine': ({APP: ('2.11.0', _for('2.11.0', MACHINE_REQUEST, MACHINE_WAIT)), CFG: BASE},
+                               None, False),
 }
 # the package whose launch starts the end-effector adapters, per canonical case (ADR-0022 [D])
 HARDWARE = {'Q_canonical_suction': (CFG, 'isaac_eef_adapter, mock_eef_adapter'),
@@ -966,7 +996,8 @@ HARDWARE = {'Q_canonical_suction': (CFG, 'isaac_eef_adapter, mock_eef_adapter'),
             'T_task_program_move_tolerance': (APP, 'mock_eef_adapter'),
             'T_task_program_process': (APP, 'mock_eef_adapter'),
             'T_task_program_manipulation': (APP, 'mock_eef_adapter'),
-            'T_task_program_composition': (APP, 'mock_eef_adapter')}
+            'T_task_program_composition': (APP, 'mock_eef_adapter'),
+            'T_task_program_machine': (APP, 'mock_eef_adapter')}
 
 
 # the generated text a package reference can live in: the closed world of dependencies (vNext
@@ -1516,7 +1547,7 @@ def test_1_a_snapshot_capability_is_not_a_dependency(bundles):
     names = {dep for rel, text in files.items() if rel.endswith('package.xml')
              for _t, dep, _a in _deps(text)}
     assert not names & {'trainit_perception', 'trainit_policy_runtime', 'moveit_servo'}
-    assert snap['derived_with']['trainit_motion_runtime'] == '2.10.0'     # refreshed for TMR 2.10.0 (TSA 8.9.0, P0.a)
+    assert snap['derived_with']['trainit_motion_runtime'] == '2.11.0'     # refreshed for TMR 2.11.0 (TSA 8.10.0, P0.b)
     assert {v for rel, text in files.items() if rel.endswith('package.xml')
             for v, _c in _tmr_lines(text)} == {'1.4.0'}
 

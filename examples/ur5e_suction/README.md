@@ -245,6 +245,41 @@ The server starts as "Robot needs reset"; type `reset`, then `start home`, `star
 held it ends FAILED (CANCELLED_WHILE_HOLDING) and needs a `reset` -- fail closed. None of this is a safety function.
 `test/test_p0a_robot_tasks_launch.py` (opt-in like the second check below, ROS domain 81) runs this whole scenario.
 
+## Robot tasks that work with cell machines (`machine_tasks.yaml`)
+
+`machine_tasks.yaml` is the same cell beside two machines of the cell (TSA 8.10.0): a turn station (`turner`: it
+clamps the part, turns it over, unclamps and turns back) and a line indexer (`indexer`: one stroke forward). The
+program names them by their LOGICAL ids only (`machine_services`), ASKS a machine for one cycle with a `request` step
+and WAITS for it with a `wait` step -- `for: done` (the DONE of its own request) or `for: ready` -- and a timeout: no
+fixed hold guessing how long a machine takes, no unacknowledged signal. `turn_part` (#5) picks a part, places it on
+the station, asks `turner` for a turn, moves clear while the station works, waits for its DONE, asks `indexer` for a
+stroke, waits for its DONE, then waits until `turner` is ready again; `turn` (#2), `index` (#3), `turn_then_ready`
+(#4) and `ready_check` (#6) are the small tasks of the same handshake, and `home` (#1) the recovery task. The
+Composer's Machine services section and its Machine request / Wait for machine steps edit all of it.
+
+The CELL serves the machine services, started apart -- the robot bundle never starts it: here its machine simulation,
+`trainit_cell_io`, on its public neutral station (a mock plant). Build `trainit_cell_io` in your TrainIt workspace,
+then:
+
+```bash
+ros2 run trainit_setup_assistant trainit_generate machine_tasks.yaml -o ~/trainit_sample_ws/src/ur5e_machine
+# build as in step 2, then: terminal 1, the cell; terminal 2, the machines; terminal 3, the server; 4, the fake PLC
+ros2 launch ur5e_machine_app bringup.launch.py mode:=mock
+ros2 launch trainit_cell_io cell_io.launch.py \
+  config:=$(ros2 pkg prefix trainit_cell_io)/share/trainit_cell_io/examples/neutral_station/cell_io_mock.yaml
+ros2 launch ur5e_machine_app trainit_task_server.launch.py use_sim_time:=false
+ros2 run trainit_motion_runtime trainit_fake_plc --ros-args \
+  -p tasks_file:=$HOME/trainit_sample_ws/install/ur5e_machine_app/share/ur5e_machine_app/config/tasks.yaml
+```
+
+Type `reset`, then `start turn_part`: while a job waits for a machine, the fake PLC and the server say so in plain
+words -- WAITING FOR MACHINE, MACHINE turner BUSY, MACHINE turner DONE -- and a machine that fails ends the job with
+its reason (MACHINE turner FAULT, TIMEOUT or UNAVAILABLE). The robot never resets a machine: the cell does (the
+machine simulation's own reset), then `reset` the robot. The same application runs against the station in Isaac Sim
+(the cell's Isaac-plant file instead of the mock one, and `use_sim_time:=true` for the server): nothing of the
+project or the bundle changes. `trainit_generate` prints `machine waits: 12 semantic (request + wait); 0 external; 0
+dwell`: no blind wait. None of this is a safety function.
+
 ## The automated checks
 
 ```bash

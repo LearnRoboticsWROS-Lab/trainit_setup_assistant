@@ -31,7 +31,20 @@ def _with_code(lines: Sequence[str], code: str) -> List[str]:
 
 
 def process_channels(project: CanonicalProject) -> List[str]:
-    """The LOGICAL process channels a task program uses, in first-use order (derived, read-only)."""
+    """The LOGICAL process channels a task program uses, in first-use order (derived, read-only). A machine request
+    (TSA 8.10.0) names a machine SERVICE, never a process channel (P0.b decision D2): the services are the Overview's
+    own row."""
+    return _channels(project, requests=False)
+
+
+def event_channels(project: CanonicalProject) -> List[str]:
+    """What a data-collection trigger of kind EVENT may name as its ``process_channel``, in first-use order: the
+    process channels and (TSA 8.10.0) the machine services the program REQUESTS -- a request is a PROCESS_EVENT on
+    its service's id, and trainit_data >= 0.10.2 fires an ``edge: any`` trigger on it (P0.b decision D6)."""
+    return _channels(project, requests=True)
+
+
+def _channels(project: CanonicalProject, requests: bool) -> List[str]:
     app = project.application
     if not app.is_task_program():
         return []
@@ -40,7 +53,9 @@ def process_channels(project: CanonicalProject) -> List[str]:
     out: List[str] = []
 
     def add(node):
-        ch = node.get('channel') if isinstance(node, dict) else None
+        if not isinstance(node, dict) or (node.get('kind') == 'request' and not requests):
+            return
+        ch = node.get('channel')
         if ch and ch not in out:
             out.append(ch)
     for path in doc.get('paths') or []:
@@ -135,6 +150,16 @@ def project_overview(project: CanonicalProject, status: SceneStatus, errors: Seq
         channels = process_channels(project)
         rows.append(OverviewRow('PROCESS CHANNELS', ', '.join(channels) or 'none',
                                 INFO, 'logical ids, derived from the process steps and path events'))
+        # TSA 8.10.0 (P0.b): the machine services the program declares, and how it waits for machines (the
+        # blind-wait report: a report, never a warning)
+        from .machine_waits import machine_waits
+        rows.append(OverviewRow('MACHINE SERVICES', ', '.join(prog.service_ids()) or 'none', INFO,
+                                'logical ids (application.machine_services): the cell serves them -- its machine '
+                                'simulation or its PLC, started apart'))
+        rows.append(OverviewRow('MACHINE WAITS', machine_waits(prog).text(), INFO,
+                                'semantic = request + wait steps (the machine says when it is done); external = '
+                                'unacknowledged external signals; dwell = fixed holds (steps and path events), over '
+                                'the whole program'))
     else:
         rows.append(OverviewRow('APPLICATION', f'template application {app.type.value}', INFO))
     if errors:
@@ -175,4 +200,4 @@ def _sensors(project: CanonicalProject) -> OverviewRow:
     return OverviewRow('SENSORS', f'{cam_text} · detectors {detectors}', OK)
 
 
-__all__ = ['ERROR', 'INFO', 'OK', 'OverviewRow', 'WARN', 'process_channels', 'project_overview']
+__all__ = ['ERROR', 'INFO', 'OK', 'OverviewRow', 'WARN', 'event_channels', 'process_channels', 'project_overview']

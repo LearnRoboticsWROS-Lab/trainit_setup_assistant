@@ -3,17 +3,23 @@
 A ``task_program`` application describes a robot program the way an automation engineer reads one,
 top to bottom:
 
-    APPLICATION   providers (optional), motion_profiles, waypoints, paths, tasks, main_task, runtime
+    APPLICATION   machine_services (optional), providers (optional), motion_profiles, waypoints, paths,
+                  tasks, main_task, runtime
+      MACHINE SERVICE  a LOGICAL machine service the program uses, by id (TSA 8.10.0, P0.b): what a cell's
+                  machine serves -- never a topic, a sequence number, a PLC address, an OPC UA node or an I/O
       TASK        a named, ordered list of STEPS, with the data it takes and gives (``inputs``,
                   ``outputs``: candidate sets and captures, by name; vNext M3.7)
-        STEP      move | path | process | dwell | detect | grasp | release | tool | task
+        STEP      move | path | process | dwell | wait | detect | grasp | release | tool | task
                   | repeat | retry | fallback
           move    ONE motion (ptp | lin | circ | free) to a WAYPOINT, with a PROFILE and limits
           path    ONE motion through >= 2 waypoints (lin | circ segments, stop or blend), and the
                   PROCESS EVENTS anchored at its states (vNext M3.5)
           process ONE process event where the task is: process_on | process_off | set_value |
-                  external on a logical CHANNEL, or a capture by a DETECTOR (vNext M3.5)
+                  external on a logical CHANNEL, or a capture by a DETECTOR (vNext M3.5); or a
+                  machine REQUEST on a declared machine service (TSA 8.10.0)
           dwell   a hold, in milliseconds
+          wait    wait for a machine service: its DONE of this task's request, or ready; a mandatory
+                  timeout in milliseconds (TSA 8.10.0, P0.b)
           detect  sample a grasp producer into a CANDIDATE SET (vNext M3.6, ADR-0026): a producer's
                   grasp candidates, or a detector's detections projected onto the same contract
           grasp   the fixed GRASP idiom on a candidate or a taught target: PreGrasp, Approach, close,
@@ -51,7 +57,7 @@ import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from pydantic import BaseModel, root_validator, validator
+from pydantic import BaseModel, Field, root_validator, validator
 
 from .enums import MotionType, StrEnum, WaypointType
 from .motion import (MotionConstraints, MotionProfile, PathContinuity, ProviderChoices,
@@ -161,13 +167,28 @@ def _fields_of(cls) -> List[str]:
     return list(getattr(cls, 'model_fields', None) or cls.__fields__)
 
 
+def _file_keys(cls) -> List[str]:
+    """The keys a model accepts in a FILE, in field order: each field's name, or its alias when it has one (TSA
+    8.10.0: a wait's ``for``, a Python keyword, is the field ``for_``). Pydantic 1.x sets every field's alias (its
+    name when none is given), 2.x only a given one: ``alias or name`` is the file key on both."""
+    fields = getattr(cls, 'model_fields', None) or cls.__fields__
+    return [getattr(f, 'alias', None) or name for name, f in fields.items()]
+
+
+def _aliased_names(cls) -> List[str]:
+    """The NAMES of the fields that have an alias (``for_``). A 'before' validator sees them on an assignment (pydantic
+    1.x validates ``{**fields, name: value}``); a file that writes one is refused by ``extra = 'forbid'``."""
+    fields = getattr(cls, 'model_fields', None) or cls.__fields__
+    return [name for name, f in fields.items() if (getattr(f, 'alias', None) or name) != name]
+
+
 def _refuse_unknown(cls, values, hints: Dict[str, str], what: str):
     """Refuse an unknown key by name, with the hint for it when one exists, else the accepted keys.
     Runs before pydantic's own ``extra = 'forbid'`` (the backstop), so the message is ours."""
     if not isinstance(values, dict):
         return values
-    accepted = _fields_of(cls)
-    unknown = [k for k in values if k not in accepted]
+    accepted = _file_keys(cls)
+    unknown = [k for k in values if k not in accepted and k not in _aliased_names(cls)]
     from .motion import RESERVED_CONSTRAINT_FIELDS
     shown = [f for f in accepted if f not in RESERVED_CONSTRAINT_FIELDS]
     if not unknown:
@@ -386,8 +407,14 @@ class EventKind(StrEnum):
     DWELL = 'dwell'                  # a hold, in milliseconds
     EXTERNAL = 'external'            # a logical external action, e.g. channel washer_start: one signal
                                      # on its channel, no acknowledgement in this version
+    # TSA 8.10.0 (P0.b, P0B_DESIGN §3): a NEW request on a MACHINE SERVICE the program declares
+    # (application.machine_services) -- the machine consumes it once, by identity, and reports its cycle; a `wait`
+    # step waits for its DONE. A task step only, with an id (never a path event); its channel is the service's id
+    REQUEST = 'request'
 
 
+# the kinds that drive a PROCESS channel (the process controller): a machine request is not one -- the runtime's
+# machine channels serve it, whatever the process controller is (TSA 8.10.0, P0.b decision D2)
 CHANNEL_KINDS = (EventKind.PROCESS_ON, EventKind.PROCESS_OFF, EventKind.SET_VALUE, EventKind.EXTERNAL)
 # what each kind takes besides `kind` (and `sync`): (required, optional)
 EVENT_FIELDS = {
@@ -397,6 +424,7 @@ EVENT_FIELDS = {
     EventKind.SET_VALUE: (('channel', 'value'), ()),
     EventKind.CAPTURE: (('detector',), ('out', 'class_id', 'timeout_ms')),
     EventKind.DWELL: (('ms',), ()),
+    EventKind.REQUEST: (('channel',), ()),          # TSA 8.10.0: the machine service, nothing else
 }
 _PAYLOAD = ('channel', 'value', 'detector', 'out', 'class_id', 'timeout_ms', 'ms')
 # a capture's blackboard key: dot-separated names (captures.0, inspection.top)
@@ -411,7 +439,7 @@ EVENT_HINTS = {
     'output': _ADDRESS.format(key='output'),
     'signal': _ADDRESS.format(key='signal'),
     'type': "the kind of a process event is 'kind: process_on | process_off | set_value | capture | "
-            "dwell | external'",
+            "dwell | external | request'",
     'trigger': 'a capture always triggers its detector and waits for a FRESH result',
     'keep': 'a capture keeps the first published result (candidate lists come with the detect step, '
             'planned for a later TSA version)',
@@ -476,6 +504,8 @@ class ProcessEventSpec(_Strict):
                                           captures.<n>, n counting the task's captures from 0),
                                           ``class_id``, ``timeout_ms``
     dwell                                 ``ms``
+    request                               ``channel``: a machine service of application.machine_services
+                                          (TSA 8.10.0, P0.b; a task step only, with an id)
 
     Every event is blocking: ``sync`` may only say ``blocking``."""
 
@@ -542,6 +572,8 @@ class ProcessEventSpec(_Strict):
             return f'dwell {self.ms} ms'
         if k is EventKind.SET_VALUE:
             return f'set_value {self.value:g} on channel `{self.channel}`'
+        if k is EventKind.REQUEST:                       # TSA 8.10.0 (P0.b)
+            return f'request on machine service `{self.channel}`'
         return f'{k.value} on channel `{self.channel}`'
 
 
@@ -615,11 +647,20 @@ class EventAnchor(_Strict):
 
 
 class PathEvent(ProcessEventSpec):
-    """A process event of a path, anchored ``at`` one of its states or segment boundaries."""
+    """A process event of a path, anchored ``at`` one of its states or segment boundaries. Never a machine request
+    (TSA 8.10.0): a request is a task step with an id, waited for by a wait step."""
 
     at: EventAnchor
 
     _keys = _strict_keys(EVENT_HINTS, 'a path event')
+
+    @validator('kind')
+    def _not_a_request(cls, v):  # noqa: N805
+        if v is EventKind.REQUEST:
+            raise ValueError("R-M3-02: a machine request is a task step ('{id: <id>, process: {kind: request, channel: "
+                             "<machine service>}}'), never a path event: a request needs a step id, and a wait step "
+                             'after it waits for its DONE -- put the request between path steps')
+        return v
 
 
 STEP_EVENT_HINTS = dict(EVENT_HINTS, at="a process step happens where the task is; 'at' anchors an "
@@ -704,18 +745,19 @@ DETECT_HINTS = {
 }
 
 
-def _needs(required: Dict[str, str], what: str):
+def _needs(required: Dict[str, str], what: str, code: str = 'R-M3-02'):
     """A missing REQUIRED key named with what it is for (instead of pydantic's 'Field required').
     Defined before a model's ``_strict_keys``, so it runs after it (pydantic 2 runs 'before' root
-    validators in reverse definition order): an unknown key is reported first."""
+    validators in reverse definition order): an unknown key is reported first. The keys are FILE keys
+    (an aliased field by its alias); ``code`` is the refusal's code (TSA 8.10.0: a wait's are R-P0B-02)."""
     def run(cls, values):  # noqa: N805
         # an unknown key is reported first: on pydantic 1.x this validator runs BEFORE _strict_keys
-        if isinstance(values, dict) and any(k not in _fields_of(cls) for k in values):
+        if isinstance(values, dict) and any(k not in _file_keys(cls) for k in values):
             return values
         if isinstance(values, dict):
             missing = [k for k in required if values.get(k) is None]
             if missing:
-                raise ValueError(f'R-M3-02: {what} needs ' + '; '.join(f"'{k}' ({required[k]})" for k in missing))
+                raise ValueError(f'{code}: {what} needs ' + '; '.join(f"'{k}' ({required[k]})" for k in missing))
         return values
     run.__name__ = '_needs'
     return root_validator(pre=True, allow_reuse=True)(run)
@@ -1292,7 +1334,111 @@ class FallbackStep(_Strict):
         return v
 
 
-STEP_KINDS = ('move', 'path', 'process', 'dwell', 'detect', 'grasp', 'release', 'tool', 'task', 'repeat',
+# --- machine services (TSA 8.10.0, P0.b, P0B_DESIGN §3.1) ----------------------------------------
+#
+# The ROBOT application's view of a cell machine, and nothing else (owner decision 3): a logical service id, a
+# REQUEST on it (a process step of kind request) and a WAIT for it (done or ready, a mandatory timeout). The wire
+# (identities, sessions, heartbeats), the topics, PLC addresses, OPC UA nodes and I/O are TrainIt's and the cell's,
+# never the application's.
+
+# the protocol words a reader might put on a machine service or a wait: one readable line each (X4)
+_PLUMBING = ("a machine service is a LOGICAL id: the robot runtime and the cell bind it -- {what} is TrainIt's or "
+             "the cell's, never the application's")
+MACHINE_PLUMBING_HINTS = {
+    'topic': _PLUMBING.format(what='its topic'),
+    'request_topic': _PLUMBING.format(what='its topic'),
+    'status_topic': _PLUMBING.format(what='its topic'),
+    'seq': _PLUMBING.format(what='a sequence number'),
+    'sequence': _PLUMBING.format(what='a sequence number'),
+    'session': _PLUMBING.format(what='a session'),
+    'heartbeat': _PLUMBING.format(what='a heartbeat'),
+    'address': _PLUMBING.format(what='a PLC address'),
+    'plc_address': _PLUMBING.format(what='a PLC address'),
+    'symbol': _PLUMBING.format(what='a controller symbol'),
+    'tag': _PLUMBING.format(what='a PLC tag'),
+    'node_id': _PLUMBING.format(what='an OPC UA node id'),
+    'opcua': _PLUMBING.format(what='an OPC UA node'),
+    'io': _PLUMBING.format(what='a physical I/O'),
+    'signal': _PLUMBING.format(what='a signal'),
+    'output': _PLUMBING.format(what='an output'),
+    'input': _PLUMBING.format(what='an input'),
+}
+WAIT_TIMEOUT_MAX_MS = 600000
+WAIT_HINTS = dict(
+    MACHINE_PLUMBING_HINTS,
+    timeout="a wait's timeout is 'timeout_ms' (milliseconds, 1..600000, mandatory)",
+    timeout_s="a wait's timeout is 'timeout_ms' (milliseconds, 1..600000, mandatory)",
+    ms=("a wait's timeout is 'timeout_ms'; a hold of the robot for a fixed time is a dwell step "
+        "('dwell: {ms: <ms>}')"),
+    service="a wait names its machine service with 'channel: <service>'",
+    machine="a wait names its machine service with 'channel: <service>'",
+    until="a wait is 'for: done' (the DONE of this task's request on the service) or 'for: ready'",
+    state="a wait is 'for: done' (the DONE of this task's request on the service) or 'for: ready'",
+    condition="a wait is 'for: done' (the DONE of this task's request on the service) or 'for: ready'",
+)
+
+
+def _service_id(value: Any, what: str):
+    """A machine service's LOGICAL id (TSA 8.10.0): a name, never a topic, an address or a signal."""
+    if value is None:
+        return value
+    if not isinstance(value, str) or not NAME.fullmatch(value) or value.lower() in _YAML_WORDS:
+        raise ValueError(f'R-M3-02: {what} {value!r} is not a machine service id: a service is named by a letter, then '
+                         'letters, digits or _ (turner, indexer) -- the id of a service of application.machine_services, '
+                         'never a topic, a PLC address or a signal')
+    return value
+
+
+class WaitFor(StrEnum):
+    """What a wait step waits for (TSA 8.10.0, P0B_DESIGN §3.4)."""
+
+    DONE = 'done'        # the machine's DONE of THIS task's request on the service (a request must come first)
+    READY = 'ready'      # the machine is ready (READY or DONE); after a request of the job: that request completed too
+
+
+class WaitStep(_Strict):
+    """TSA 8.10.0 (P0.b): wait for a machine service -- ``channel`` (a service of application.machine_services),
+    ``for`` (``done``: the machine's DONE of this task's request on it; ``ready``: the machine is ready) and
+    ``timeout_ms`` (milliseconds, 1..600000, MANDATORY: no default exists). A wait that fails -- the machine's fault,
+    its timeout, the machine unavailable, a request it refused -- ends the run with that machine reason.
+
+    The YAML key is ``for`` (a Python keyword): the field is ``for_``, read and written by its alias."""
+
+    channel: str
+    for_: WaitFor = Field(alias='for')
+    timeout_ms: int
+
+    _required = _needs({'channel': 'the machine service it waits for, an id of application.machine_services',
+                        'for': "what it waits for: 'done' (the DONE of this task's request on the service) or 'ready' "
+                               '(the machine is ready)',
+                        'timeout_ms': 'milliseconds, 1..600000 -- mandatory: no default exists'}, 'a wait',
+                       code='R-P0B-02')
+    _keys = _strict_keys(WAIT_HINTS, 'a wait')
+    _channel_ok = _checked('channel', _service_id, 'wait.channel')
+
+    @validator('for_', pre=True)
+    def _for(cls, v):  # noqa: N805
+        known = [w.value for w in WaitFor]
+        if v not in known:
+            raise ValueError(f"R-P0B-02: wait.for {v!r}: a wait is for 'done' (the DONE of this task's request on the "
+                             "service) or 'ready' (the machine is ready)")
+        return v
+
+    @validator('timeout_ms', pre=True)
+    def _timeout(cls, v):  # noqa: N805
+        # the range is compared on an exact integer only: a bool, a float or a string is refused, never truncated
+        if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= WAIT_TIMEOUT_MAX_MS:
+            raise ValueError(f'R-P0B-02: wait.timeout_ms is a whole number of milliseconds, 1..{WAIT_TIMEOUT_MAX_MS} '
+                             f'(mandatory: no default exists), got {v!r}')
+        return v
+
+    def describe(self) -> str:
+        """The wait as the README and the overview say it."""
+        what = ("its DONE of this task's request" if self.for_ is WaitFor.DONE else 'ready')
+        return f'wait for machine service `{self.channel}`: {what}, at most {self.timeout_ms} ms'
+
+
+STEP_KINDS = ('move', 'path', 'process', 'dwell', 'wait', 'detect', 'grasp', 'release', 'tool', 'task', 'repeat',
               'retry', 'fallback')
 CONTROL_KINDS = ('repeat', 'retry', 'fallback')
 
@@ -1319,19 +1465,21 @@ def step_mapping_kind(step: Any) -> Optional[str]:
 
 class TaskStep(_Strict):
     """One step of a task: exactly one of ``move``, ``path`` (a path's name), ``process``,
-    ``dwell``, ``detect``, ``grasp``, ``release``, ``tool``, ``task`` (a task's name: a call),
+    ``dwell``, ``wait``, ``detect``, ``grasp``, ``release``, ``tool``, ``task`` (a task's name: a call),
     ``repeat``, ``retry`` or ``fallback``.
 
     ``id`` (optional, D18 / ADR-0024 amendment, D0.5): the step's CANONICAL id, chosen by the user, unique
     within its task (control bodies included), stable across reordering. It names the application step in
     the runtime's execution events (ADR-0030); a step without one emits none, and a project without any
-    generates byte-identical trees."""
+    generates byte-identical trees. TSA 8.10.0 (P0.b): a machine request and a wait REQUIRE one (R-P0B-03:
+    only identified steps are measured, ADR-0030)."""
 
     id: Optional[str] = None
     move: Optional[MoveStep] = None
     path: Optional[str] = None
     process: Optional[ProcessStep] = None
     dwell: Optional[Dwell] = None
+    wait: Optional[WaitStep] = None          # TSA 8.10.0 (P0.b): wait for a machine service
     detect: Optional[DetectStep] = None
     grasp: Optional[GraspStep] = None
     release: Optional[ReleaseStep] = None
@@ -1354,8 +1502,28 @@ class TaskStep(_Strict):
                              + STEP_KINDS[-1] + (f' (got {", ".join(kinds)})' if kinds else ''))
         return values
 
+    @root_validator(skip_on_failure=True)
+    def _machine_step_has_an_id(cls, values):  # noqa: N805
+        # TSA 8.10.0 (P0.b, P0B_DESIGN §3.1): a machine request and a wait are measured steps -- each needs an id
+        process = values.get('process')
+        what = ('a wait step' if values.get('wait') is not None else
+                'a machine request' if process is not None and process.kind is EventKind.REQUEST else '')
+        if what and values.get('id') is None:
+            service = values['wait'].channel if values.get('wait') is not None else process.channel
+            raise ValueError(f"R-P0B-03: {what} on machine service '{service}' needs a step id ('id: <name>', unique "
+                             'in its task): the runtime reports each machine request and wait by its id')
+        return values
+
     def kind(self) -> str:
         return next(k for k in STEP_KINDS if getattr(self, k) is not None)
+
+    def machine_service(self) -> Optional[str]:
+        """TSA 8.10.0: the machine service this step names -- a request's or a wait's (None for any other step)."""
+        if self.wait is not None:
+            return self.wait.channel
+        if self.process is not None and self.process.kind is EventKind.REQUEST:
+            return self.process.channel
+        return None
 
     def bodies(self) -> List[List['TaskStep']]:
         """The bodies a control step wraps (one for repeat and retry, the alternatives of a fallback);
@@ -1700,11 +1868,51 @@ FAULT_POLICIES = (FAULTS_STOP,)
 for _key in ('tool_actions', 'detections', 'policies', 'bin_picking', 'loop_cycles', 'loop_start',
              'loop_end', 'bt_tree_id', 'process_controller', 'enforce_validation'):
     PROGRAM_HINTS[_key] = APPLICATION_HINT.format(key=_key)
+# TSA 8.10.0 (P0.b): where a program declares the machine services it uses -- and what is the CELL's, not its own
+_SERVICES = "a program declares the machine services it uses: 'machine_services: [{id: <service>, description: ...}]'"
+for _key in ('machines', 'machine', 'stations', 'station', 'services', 'machine_service'):
+    PROGRAM_HINTS[_key] = _SERVICES
+PROGRAM_HINTS['cell_io'] = ("the cell's machine simulation (cell_io.yaml: the devices, the station logic, the plant) "
+                            "is the CELL's file, never the robot program's: the program names the services only "
+                            "('machine_services')")
+PROGRAM_HINTS['control_mode'] = PROGRAM_HINTS['cell_io']
+MACHINE_SERVICE_HINTS = dict(
+    MACHINE_PLUMBING_HINTS,
+    name="a machine service is named by its 'id' (turner, indexer)",
+    channel="a machine service is named by its 'id' (turner, indexer)",
+    timeout_ms="a wait's timeout is on the wait step ('wait: {channel: <service>, for: done, timeout_ms: <ms>}')",
+    plant="the plant (a mock or Isaac Sim) is the cell's binding (cell_io.yaml), never the robot program's",
+    devices="the devices that serve a machine service are the cell's (cell_io.yaml), never the robot program's",
+)
+
+
+class MachineService(_Strict):
+    """TSA 8.10.0 (P0.b, P0B_DESIGN §3.1): a LOGICAL machine service the program uses -- what a cell's machine serves
+    (a station's cycle, a line index), named by ``id``, with an optional one-line ``description``. Nothing else: the
+    topics, the request's identity, the heartbeat, a PLC address, an OPC UA node or an I/O is TrainIt's and the
+    cell's (its machine simulation, cell_io.yaml, or its PLC), never the application's (owner decision 3)."""
+
+    id: str
+    description: Optional[str] = None
+
+    _required = _needs({'id': 'the logical id of the service, as the cell serves it (turner, indexer)'},
+                       'a machine service')
+    _keys = _strict_keys(MACHINE_SERVICE_HINTS, 'a machine service')
+    _id_ok = _checked('id', _service_id, 'machine service id')
+
+    @validator('description', pre=True)
+    def _description(cls, v):  # noqa: N805
+        if v is not None and (not isinstance(v, str) or not TASK_DESCRIPTION.fullmatch(v) or not v.strip()
+                              or not v.isprintable()):
+            raise ValueError(f'R-M3-02: a machine service description is one line of text (1..200 characters), '
+                             f'got {v!r}')
+        return v
 
 
 class TaskProgram(_Strict):
     """The Canonical Task Program of a ``task_program`` application (module docstring)."""
 
+    machine_services: List[MachineService] = []      # TSA 8.10.0 (P0.b): written only when declared
     providers: Optional[ProviderChoices] = None
     motion_profiles: Dict[str, MotionProfile] = {}
     waypoints: List[TaskWaypoint] = []
@@ -1759,11 +1967,33 @@ class TaskProgram(_Strict):
                 raise ValueError(f"R-P0-03: tasks '{numbers[t.export.number]}' and '{t.name}' are both exported "
                                  f'as PLC task number {t.export.number}: a number names one task')
             numbers[t.export.number] = t.name
+        # TSA 8.10.0 (P0.b): a machine service id names ONE service
+        services = set()
+        for s in values.get('machine_services') or []:
+            if s.id in services:
+                raise ValueError(f"R-P0B-07: machine service '{s.id}' is declared twice: a service id names one "
+                                 'service -- remove the second entry')
+            services.add(s.id)
         return values
 
     def exported(self) -> List[Task]:
         """TSA 8.9.0: the exported tasks, by increasing PLC task number."""
         return sorted((t for t in self.tasks if t.export is not None), key=lambda t: t.export.number)
+
+    def service_ids(self) -> List[str]:
+        """TSA 8.10.0: the declared machine services' ids, in declaration order."""
+        return [s.id for s in self.machine_services]
+
+    def used_services(self) -> List[str]:
+        """TSA 8.10.0: the machine services the steps of the program name (requests and waits), in first-use order --
+        declared or not."""
+        out: List[str] = []
+        for task in self.tasks:
+            for _label, step in walk_steps(task.steps):
+                service = step.machine_service()
+                if service is not None and service not in out:
+                    out.append(service)
+        return out
 
 
 # The application keys of a task program, in the order a project file writes them.
@@ -1806,6 +2036,14 @@ def _place(loc, data) -> str:
             name = item.get('name') if isinstance(item, dict) else None
             parts.append(f"{_NAMED_LISTS[key]} '{name}'" if name else
                          f'{_NAMED_LISTS[key]} #{loc[i + 1] + 1}')
+            node, i = item, i + 2
+            continue
+        if key == 'machine_services' and i + 1 < len(loc) and isinstance(loc[i + 1], int):
+            # TSA 8.10.0: a machine service is named by its id
+            item = child[loc[i + 1]] if isinstance(child, list) and loc[i + 1] < len(child) else None
+            sid = item.get('id') if isinstance(item, dict) else None
+            parts.append(f"machine service '{sid}'" if isinstance(sid, str) and sid else
+                         f'machine service #{loc[i + 1] + 1}')
             node, i = item, i + 2
             continue
         if key == 'steps' and i + 1 < len(loc) and isinstance(loc[i + 1], int):
@@ -1862,4 +2100,5 @@ __all__ = ['AnchorWhen', 'CAPTURE_KEY', 'CHANNEL_KINDS', 'DetectSource', 'Detect
            'RelativeTarget', 'RuntimeSettings', 'STEP_KINDS', 'Task', 'TaskProgram', 'TaskStep',
            'TaskWaypoint', 'CONTROL_KINDS', 'FallbackStep', 'RepeatStep', 'RetryStep', 'TaskData',
            'TaskDataType', 'TaskExport', 'EXPORT_TIMEOUT_MAX_S', 'walk_steps', 'STEP_ID_KEY', 'step_mapping_kind', 'FAULTS_STOP', 'GraspPayload',
-           'INDEX_ALL', 'ON_FAILURE_RETREAT', 'UNTIL_NOTHING_TO_PICK']
+           'INDEX_ALL', 'ON_FAILURE_RETREAT', 'UNTIL_NOTHING_TO_PICK',
+           'MachineService', 'WaitFor', 'WaitStep', 'WAIT_TIMEOUT_MAX_MS']   # TSA 8.10.0 (P0.b)

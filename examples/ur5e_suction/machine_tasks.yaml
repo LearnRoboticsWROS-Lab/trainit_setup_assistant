@@ -1,0 +1,185 @@
+# TrainIt public sample cell, as ROBOT TASKS THAT WORK WITH CELL MACHINES (TSA 8.10.0, P0.b): the same UR5e with its
+# suction cup (robot, end-effector contract and scene as robot_tasks.yaml), beside two machines of the cell -- a turn
+# station (`turner`: clamps the part, turns it over, unclamps, turns back) and a line indexer (`indexer`: one stroke
+# forward). The robot ASKS a machine for one cycle (a `request` step) and WAITS for it (a `wait` step: `for: done`,
+# the DONE of its own request; `for: ready`, the machine is ready) with a mandatory timeout -- never a fixed hold
+# guessing how long the machine takes, never an unacknowledged signal: no blind wait anywhere in this file.
+#
+# - Generate it like the other samples, FROM THIS DIRECTORY (its paths are relative to it):
+#     ros2 run trainit_setup_assistant trainit_generate machine_tasks.yaml -o <workspace>/src/ur5e_machine
+# - The program names the machine services by their LOGICAL ids only (`machine_services`): no topic, no sequence
+#   number, no PLC address, no I/O. The CELL serves them -- its machine simulation (trainit_cell_io, from the cell's
+#   own cell_io.yaml; its public neutral station serves `turner` and `indexer`) or its PLC -- started apart: the
+#   robot bundle never starts it, and the robot never resets a machine.
+# - The tasks are EXPOSED to the PLC (the robot task server; TMR's fake PLC plays the PLC for commissioning). The same
+#   application runs against the mock plant and the Isaac plant: only the cell's file and the runner's use_sim_time
+#   differ. `faults: stop` and a gripping step track the held state; the part is released BEFORE the machine is asked,
+#   so a job cancelled during a machine wait ends CANCELLED. None of this is a safety function.
+schema_version: 4
+project_name: ur5e_machine_tasks_sample
+
+bundle:
+  description_package: ur5e_machine_description
+  moveit_config_package: ur5e_machine_trainit_config
+  app_package: ur5e_machine_app
+
+meta:                          # written into the three generated package.xml files: put yours
+  maintainer_name: TrainIt sample user
+  maintainer_email: user@example.com
+  license: Apache-2.0
+  version: 0.1.0
+
+robot:
+  robot_name: ur5e_suction
+  description:
+    urdf_dir: urdf             # relative to this directory
+    top_xacro: ur5e_suction.urdf.xacro
+  base_frame: base_link
+  tip_link: tcp
+  planning_group:
+    name: ur_manipulator
+    base_link: base_link
+    tip_link: tcp              # the cup lip: every TCP waypoint below is a pose of this link
+    joints: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint, wrist_1_joint, wrist_2_joint,
+             wrist_3_joint]
+  gripper:
+    kind: suction
+    eef_parent_link: tcp       # the grasp site's TCP: the short form derives it from this link
+    contract:
+      actuator: {command_interface: set_bool}
+      verification: {require_grasp_confirmation: false, require_release_confirmation: false}
+      adapters: {mock: trainit_mock}
+  named_states:
+    - name: home               # tool down, TCP at about (0.49, 0.13, 0.39) m
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                     wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+    - name: above_pick         # TCP at (0.45, 0.25, 0.205), tool down: 15 cm above the pick
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: 0.2452, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -1.3256}
+    - name: above_place        # TCP at (0.45, -0.25, 0.205), tool down: 15 cm above the place
+      group: ur_manipulator
+      joint_values: {shoulder_pan_joint: -0.769, shoulder_lift_joint: -1.455, elbow_joint: 1.932,
+                     wrist_1_joint: -2.0478, wrist_2_joint: -1.5708, wrist_3_joint: -2.3398}
+  joint_limits:
+    per_joint:                 # velocity under the URDF's pi rad/s (Pilz refuses more than the
+                               # URDF); acceleration: ur_moveit_config's 5.0
+      shoulder_pan_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      shoulder_lift_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      elbow_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_1_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_2_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+      wrist_3_joint: {max_velocity: 3.14, max_acceleration: 5.0}
+  ompl:
+    projection_evaluator: joints(shoulder_pan_joint,shoulder_lift_joint)
+  initial_positions: {shoulder_pan_joint: 0.0, shoulder_lift_joint: -1.5708, elbow_joint: 1.5708,
+                      wrist_1_joint: -1.5708, wrist_2_joint: -1.5708, wrist_3_joint: 0.0}
+  # The self-collision matrix: the 11 pairs of ur_moveit_config's srdf/ur_macro.srdf.xacro
+  # (Apache-2.0), transcribed, plus the tool's one: the cup body touches the flange face.
+  disable_collisions:
+    - {link1: base_link, link2: base_link_inertia, reason: Adjacent}
+    - {link1: base_link_inertia, link2: shoulder_link, reason: Adjacent}
+    - {link1: tool0, link2: wrist_1_link, reason: Never}
+    - {link1: tool0, link2: wrist_2_link, reason: Never}
+    - {link1: tool0, link2: wrist_3_link, reason: Adjacent}
+    - {link1: forearm_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: forearm_link, link2: wrist_1_link, reason: Adjacent}
+    - {link1: shoulder_link, link2: upper_arm_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_2_link, reason: Adjacent}
+    - {link1: wrist_1_link, link2: wrist_3_link, reason: Never}
+    - {link1: wrist_2_link, link2: wrist_3_link, reason: Adjacent}
+    - {link1: suction_body, link2: wrist_3_link, reason: Adjacent}
+
+scene:
+  objects:                     # the table top is 5 mm under the robot base (its mesh starts at 0)
+    - {id: table, shape: box, dims: [1.2, 1.2, 0.05], frame: base_link,
+       position: [0.3, 0.0, -0.03]}
+
+deployment:
+  modes: [mock]
+  default_mode: mock
+
+application:
+  type: task_program
+  faults: stop                 # a fault ends the job; with the gripping steps below, the held state is tracked
+
+  machine_services:            # the cell's machines this program asks for work: logical ids only
+    - {id: turner, description: turn the part over}
+    - {id: indexer, description: index the line by one stroke}
+
+  motion_profiles:             # speed/acceleration in % of the joint limits
+    transit: {speed: 50, acceleration: 50}
+
+  waypoints:                   # the three named states of the cell (robot.named_states)
+    - {name: home, type: joint, named: home}
+    - {name: above_pick, type: joint, named: above_pick}
+    - {name: above_place, type: joint, named: above_place}   # the turn station's nest
+
+  tasks:
+    - name: home
+      description: The recovery task -- open the tool, go home
+      export: {number: 1, timeout_s: 15}
+      steps:
+        - id: open_tool
+          tool: {open: {}}
+        - id: go_home
+          move: {to: home, type: ptp, profile: transit}
+    - name: turn
+      description: One cycle of the turn station -- ask for it, wait for its DONE
+      export: {number: 2, timeout_s: 15}
+      steps:
+        - id: ask_turn
+          process: {kind: request, channel: turner}
+        - id: turned
+          wait: {channel: turner, for: done, timeout_ms: 8000}
+    - name: index
+      description: One stroke of the line indexer -- ask for it, wait for its DONE
+      export: {number: 3, timeout_s: 15}
+      steps:
+        - id: ask_index
+          process: {kind: request, channel: indexer}
+        - id: indexed
+          wait: {channel: indexer, for: done, timeout_ms: 8000}
+    - name: turn_then_ready
+      description: Ask the turn station for a cycle, then wait until it is ready again (its cycle done)
+      export: {number: 4, timeout_s: 15}
+      steps:
+        - id: ask_turn
+          process: {kind: request, channel: turner}
+        - id: turner_ready
+          wait: {channel: turner, for: ready, timeout_ms: 8000}
+    - name: turn_part
+      description: Pick a part, place it on the turn station, have it turned, index the line, then wait to load again
+      export: {number: 5, timeout_s: 40}
+      steps:
+        - id: to_pick
+          move: {to: above_pick, type: ptp, profile: transit}
+        - id: grip
+          tool: {close: {}}
+        - id: to_station
+          move: {to: above_place, type: ptp, profile: transit}
+        - id: release
+          tool: {open: {}}
+        - id: ask_turn
+          process: {kind: request, channel: turner}
+        - id: clear
+          move: {to: home, type: ptp, profile: transit}
+        - id: turned
+          wait: {channel: turner, for: done, timeout_ms: 8000}
+        - id: ask_index
+          process: {kind: request, channel: indexer}
+        - id: indexed
+          wait: {channel: indexer, for: done, timeout_ms: 8000}
+        - id: may_load
+          wait: {channel: turner, for: ready, timeout_ms: 2000}
+    - name: ready_check
+      description: Wait until the turn station is ready (no request)
+      export: {number: 6, timeout_s: 5}
+      steps:
+        - id: may_load
+          wait: {channel: turner, for: ready, timeout_ms: 2000}
+  main_task: turn              # the one-shot run (trainit_bt): its FIRST step is a machine request
+
+  runtime:
+    allowed_start_tolerance: 0.05   # rad: MoveIt refuses to start a trajectory farther than this

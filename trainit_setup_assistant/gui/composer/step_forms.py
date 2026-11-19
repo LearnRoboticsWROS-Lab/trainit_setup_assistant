@@ -7,6 +7,9 @@
   candidate set with a reference orientation. Also: eef / site, standoff, profile, approach profile,
   retract.
 - **Tool.** It actuates an actuator to a named target, or verifies held / released.
+- **Machine request / wait** (TSA 8.10.0, P0.b). A ``request`` (a process step) asks a DECLARED machine service for
+  one cycle; a wait waits for it -- done or ready, with a mandatory timeout in milliseconds. Only the service's
+  logical id is shown: never a topic, a sequence number, an address or an I/O (owner decision 3).
 
 Each form shows the fields of its kind. It writes back only those, plus any key it does not show,
 which is kept as written. The canonical model validates every Apply, and the validator judges
@@ -16,12 +19,19 @@ references.
 from __future__ import annotations
 
 import copy
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from python_qt_binding.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QLabel, QLineEdit,
                                          QSpinBox, QWidget)
 
-PROCESS_KINDS = ('process_on', 'process_off', 'set_value', 'capture', 'external')
+from ...model.program import WAIT_TIMEOUT_MAX_MS
+
+PROCESS_KINDS = ('process_on', 'process_off', 'set_value', 'capture', 'external',
+                 'request')                    # TSA 8.10.0 (P0.b): a request on a declared machine service
+# the process kinds that act on a PROCESS channel (the free-text channel row); a request names a machine service
+_CHANNEL_KINDS = ('process_on', 'process_off', 'set_value', 'external')
+# TSA 8.10.0 (P0.b): what a new wait starts with -- WRITTEN into the file, so the file has no default (§3.1)
+NEW_WAIT_TIMEOUT_MS = 10000
 
 
 def _combo(items, current='', editable=False) -> QComboBox:
@@ -53,10 +63,14 @@ def context(doc: dict, project) -> dict:
     write, and the end-effector contract's devices, actuators, targets and sites."""
     from ...composer.overview import process_channels
     from ...composer.ops import step_kind, walk
+    # TSA 8.10.0 (P0.b): the declared machine services -- a request's and a wait's pick-list; the process channels'
+    # pick-list leaves them out (a process event on a machine service would be a typo)
+    services = [s.get('id') for s in doc.get('machine_services') or [] if isinstance(s, dict) and s.get('id')]
     out = {'waypoints': [w['name'] for w in doc.get('waypoints') or []],
            'profiles': list(doc.get('motion_profiles') or {}),
            'detectors': [d.name for d in (project.perception.detectors if project.perception else [])],
-           'channels': process_channels(project), 'sets': [], 'eef': [], 'actuators': {}, 'sites': []}
+           'channels': [c for c in process_channels(project) if c not in services], 'services': services,
+           'sets': [], 'eef': [], 'actuators': {}, 'sites': []}
     for t in doc.get('tasks', []):
         for d in t.get('inputs') or []:
             if d.get('type') == 'candidates' and d['name'] not in out['sets']:
@@ -119,6 +133,10 @@ class ProcessForm(StepForm):
         self.channel = _combo([], editable=True)
         self.channel.setToolTip('A LOGICAL id of your process (dispenser, inspection_light): the deployment '
                                 'binds it to its signal; never a ROS topic or a PLC symbol')
+        # TSA 8.10.0 (P0.b): a request names a DECLARED machine service (never typed: a typo is not a new service)
+        self.service = _combo([])
+        self.service.setToolTip('A machine service this program declares (Machine services section): the cell '
+                                'serves it, and a "Wait for machine" step waits for this request')
         self.value = QDoubleSpinBox()
         self.value.setRange(-1e9, 1e9)
         self.value.setDecimals(4)
@@ -130,7 +148,8 @@ class ProcessForm(StepForm):
         self.timeout.setSuffix(' ms')
         self.timeout.setSpecialValueText('default')
         self.rows = {}
-        for key, label, w in (('channel', 'Channel', self.channel), ('value', 'Value', self.value),
+        for key, label, w in (('channel', 'Channel', self.channel), ('service', 'Machine service', self.service),
+                              ('value', 'Value', self.value),
                               ('detector', 'Camera detector', self.detector), ('out', 'Result key', self.out),
                               ('timeout_ms', 'Timeout', self.timeout)):
             lbl = QLabel(label)
@@ -139,7 +158,7 @@ class ProcessForm(StepForm):
         self._shape(self.pkind.currentText())
 
     def _shape(self, kind: str) -> None:
-        show = {'channel': kind in ('process_on', 'process_off', 'set_value', 'external'),
+        show = {'channel': kind in _CHANNEL_KINDS, 'service': kind == 'request',
                 'value': kind == 'set_value', 'detector': kind == 'capture', 'out': kind == 'capture',
                 'timeout_ms': kind == 'capture'}
         for key, (lbl, w) in self.rows.items():
@@ -148,7 +167,9 @@ class ProcessForm(StepForm):
 
     def fill(self, body, ctx):
         self.pkind.setCurrentText(body.get('kind', 'process_on'))
-        fill(self.channel, ctx['channels'], body.get('channel') or '')
+        request = body.get('kind') == 'request'
+        fill(self.channel, ctx['channels'], '' if request else (body.get('channel') or ''))
+        fill(self.service, ctx.get('services', []), (body.get('channel') or '') if request else '')
         self.value.setValue(float(body.get('value') or 0.0))
         fill(self.detector, ctx['detectors'], body.get('detector') or '')
         self.out.setText(body.get('out') or '')
@@ -162,8 +183,10 @@ class ProcessForm(StepForm):
             for key in ('channel', 'value', 'detector', 'out', 'class_id', 'timeout_ms', 'ms'):
                 body.pop(key, None)
         body['kind'] = kind
-        if kind in ('process_on', 'process_off', 'set_value', 'external'):
+        if kind in _CHANNEL_KINDS:
             body['channel'] = self.channel.currentText().strip()
+        if kind == 'request' and self.service.currentText().strip():
+            body['channel'] = self.service.currentText().strip()     # none declared: the model names what is missing
         if kind == 'set_value' and ('value' not in body or abs(self.value.value() - self._shown['value']) > 1e-12):
             body['value'] = self.value.value()           # an untouched value stays exactly as stored
         if kind == 'capture':
@@ -424,8 +447,62 @@ class ToolForm(StepForm):
         body[mode] = v
 
 
+class WaitForm(StepForm):
+    """TSA 8.10.0 (P0.b): "Wait for machine" -- a declared service, done or ready, and a timeout in milliseconds."""
+
+    kind = 'wait'
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        f = QFormLayout(self)
+        self.service = _combo([])
+        self.service.setToolTip('The machine service to wait for: one this program declares (Machine services '
+                                'section)')
+        f.addRow('Machine service', self.service)
+        self.wait_for = QComboBox()
+        self.wait_for.addItem("done — its DONE of this task's request", 'done')
+        self.wait_for.addItem('ready — the machine is ready', 'ready')
+        self.wait_for.setToolTip('done: the cycle THIS task requested ended (a "Machine request" step on the service '
+                                 'comes first); ready: the machine is ready for a new part or request')
+        f.addRow('Wait for', self.wait_for)
+        self.timeout = QSpinBox()
+        self.timeout.setRange(1, WAIT_TIMEOUT_MAX_MS)
+        self.timeout.setSuffix(' ms')
+        self.timeout.setToolTip('At most this long: then the run stops with the machine TIMEOUT (mandatory: there is '
+                                'no default)')
+        f.addRow('Timeout', self.timeout)
+
+    def fill(self, body, ctx):
+        fill(self.service, ctx.get('services', []), body.get('channel') or '')
+        i = self.wait_for.findData(body.get('for')) if body.get('for') in ('done', 'ready') else -1
+        self.wait_for.setCurrentIndex(i if i >= 0 else 0)
+        # never int() on the stored value (a hand edit may be any text): one the model accepts is shown as it is,
+        # anything else shows a new wait's value -- and stays in the file as written until the user sets one
+        self.timeout.setValue(_stored_timeout_ms(body.get('timeout_ms')) or NEW_WAIT_TIMEOUT_MS)
+        self._shown = {'for': self.wait_for.currentData(), 'timeout_ms': self.timeout.value()}
+
+    def write(self, body):
+        # what the user did not change stays exactly as stored (as the Process form keeps an untouched value): the
+        # boxes cannot show an out-of-range or invalid value (QSpinBox clamps), so writing them back would silently
+        # rewrite it -- the model judges the stored value instead, with its own words
+        if self.service.currentText().strip():
+            body['channel'] = self.service.currentText().strip()
+        if self.wait_for.currentData() != self._shown['for']:
+            body['for'] = self.wait_for.currentData()
+        if self.timeout.value() != self._shown['timeout_ms']:
+            body['timeout_ms'] = int(self.timeout.value())
+
+
+def _stored_timeout_ms(value) -> Optional[int]:
+    """A wait's stored ``timeout_ms`` when the model accepts it (a whole number of milliseconds, 1..600000), else
+    None: a string, a bool, a float or an out-of-range number is never coerced."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= WAIT_TIMEOUT_MAX_MS:
+        return None
+    return value
+
+
 FORMS = {'process': ProcessForm, 'detect': DetectForm, 'grasp': GraspForm, 'release': ReleaseForm,
-         'tool': ToolForm}
+         'tool': ToolForm, 'wait': WaitForm}
 
 
 def default_step(kind: str, ctx: dict, project) -> dict:
@@ -462,7 +539,14 @@ def default_step(kind: str, ctx: dict, project) -> dict:
         if named:                           # an actuator with named targets: drive it to one
             return {'tool': {'actuate': {'actuator': named[0][0], 'target': named[0][1]}}}
         return {'tool': {'verify': {'expect': 'held'}}}
+    if kind in ('request', 'wait'):          # TSA 8.10.0 (P0.b): the step id is the caller's (it knows the task)
+        services = ctx.get('services') or []
+        if not services:
+            raise ValueError('declare a machine service first (Machine services section)')
+        if kind == 'request':
+            return {'process': {'kind': 'request', 'channel': services[0]}}
+        return {'wait': {'channel': services[0], 'for': 'done', 'timeout_ms': NEW_WAIT_TIMEOUT_MS}}
     raise ValueError(kind)
 
 
-__all__ = ['FORMS', 'PROCESS_KINDS', 'context', 'default_step', 'fill']
+__all__ = ['FORMS', 'NEW_WAIT_TIMEOUT_MS', 'PROCESS_KINDS', 'WaitForm', 'context', 'default_step', 'fill']

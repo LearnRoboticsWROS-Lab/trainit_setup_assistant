@@ -37,6 +37,12 @@ class DiagnosticsPanel(QWidget):
         row.addWidget(self.go_button)
         row.addWidget(self.validate_button)
         v.addLayout(row)
+        # TSA 8.10.0 (P0.b): how the program waits for its machines -- the blind-wait report (a report, never a
+        # diagnostic: a dwell is valid)
+        self.machine_waits = QLabel('')
+        self.machine_waits.setTextFormat(Qt.PlainText)
+        self.machine_waits.setStyleSheet('color:#555555;')
+        v.addWidget(self.machine_waits)
         self.list = QListWidget()
         self.list.setWordWrap(True)
         self.list.setMaximumHeight(140)
@@ -48,7 +54,10 @@ class DiagnosticsPanel(QWidget):
         if self.ctrl.project is None or not self.ctrl.project.application.is_task_program():
             self.diagnostics = []
             self.summary.setText('')
+            self.machine_waits.setText('')
             return
+        from ...composer.machine_waits import machine_waits_line
+        self.machine_waits.setText(machine_waits_line(self.ctrl.project))
         errors, warnings = self.ctrl.validate_program()
         self.diagnostics = parse_all(errors, warnings)
         doc = self._composer().document()

@@ -42,9 +42,9 @@ from .perception import (CANDIDATE_RULE_TERMS, DEFAULT_INPUT_TOPICS, METHOD_PROV
                          candidate_rule_refusal, computable_rules, computable_terms,
                          effective_candidate_rule, missing_candidate_terms,
                          preferred_candidate_rule)
-from .program import (DenseSource, Dwell, MoveStep, PathDef, PathGenerator, PathSegment,
+from .program import (DenseSource, Dwell, MachineService, MoveStep, PathDef, PathGenerator, PathSegment,
                       RelativeFrame, RelativeTarget, RuntimeSettings, Task, TaskExport, TaskProgram, TaskStep,
-                      TaskWaypoint)
+                      TaskWaypoint, WaitFor, WaitStep)
 from .project import (BundleSpec, CanonicalProject, ProjectMeta, SCHEMA_VERSION,
                       SCHEMA_VERSION_DATA_COLLECTION, SCHEMA_VERSION_EEF_CONTRACT,
                       SCHEMA_VERSION_TASK_PROGRAM)
@@ -195,6 +195,7 @@ __all__ = [
     'SCHEMA_VERSION_TASK_PROGRAM',
     'TaskProgram',
     'TaskExport',   # TSA 8.9.0 (P0.a, ADR-0032): a task a PLC may request
+    'MachineService', 'WaitFor', 'WaitStep',   # TSA 8.10.0 (P0.b): a machine service, the wait for it
     'TaskWaypoint',
     'RelativeTarget',
     'RelativeFrame',

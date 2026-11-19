@@ -3,7 +3,9 @@
 Every canonical step kind has one line of text, without BehaviorTree words:
 - a repeat is "Repeat ×N" ("Repeat until stopped" for ``cycles: -1``), a retry is "Retry ×N";
 - a fallback is "Try alternatives";
-- a task call is "Run task".
+- a task call is "Run task";
+- a fixed hold is "Dwell N ms"; a machine request "Machine request <service>" and a wait "Wait for machine
+  <service>: done | ready · N ms" (TSA 8.10.0, P0.b: no protocol word).
 
 :func:`route` lists a task's motions as ``FROM → TO : HOW · profile · STOP``. Control bodies are shown
 where they start, never flattened into a hidden order.
@@ -15,13 +17,16 @@ from typing import List, Optional, Tuple
 
 from .ops import step_kind, walk
 
+# TSA 8.10.0 (P0.b, RB6): a fixed hold is "Dwell" -- "Wait" is the machine's ("Wait for machine")
 KIND_TITLES = {
-    'move': 'Move', 'path': 'Path', 'process': 'Process', 'dwell': 'Wait', 'detect': 'Detect',
-    'grasp': 'Grasp', 'release': 'Release', 'tool': 'Tool', 'task': 'Run task', 'repeat': 'Repeat',
-    'retry': 'Retry', 'fallback': 'Try alternatives',
+    'move': 'Move', 'path': 'Path', 'process': 'Process', 'dwell': 'Dwell', 'wait': 'Wait for machine',
+    'detect': 'Detect', 'grasp': 'Grasp', 'release': 'Release', 'tool': 'Tool', 'task': 'Run task',
+    'repeat': 'Repeat', 'retry': 'Retry', 'fallback': 'Try alternatives',
 }
 PROCESS_TITLES = {'process_on': 'Process ON', 'process_off': 'Process OFF', 'set_value': 'Set value',
-                  'capture': 'Capture', 'external': 'External process'}
+                  'capture': 'Capture', 'external': 'External process',
+                  'request': 'Machine request'}                         # TSA 8.10.0 (P0.b)
+WAIT_TITLES = {'done': 'done', 'ready': 'ready'}
 
 
 def step_text(step: dict) -> str:
@@ -40,7 +45,10 @@ def step_text(step: dict) -> str:
     if kind == 'task':
         return f'Run task {body}'
     if kind == 'dwell':
-        return f"Wait {body.get('ms')} ms"
+        return f"Dwell {body.get('ms')} ms"
+    if kind == 'wait':                                                  # TSA 8.10.0 (P0.b)
+        what = WAIT_TITLES.get(body.get('for'), body.get('for'))
+        return f"Wait for machine {body.get('channel')}: {what} · {body.get('timeout_ms')} ms"
     if kind == 'repeat':
         # M4.5d owner acceptance F3: cycles -1 is "no count", never shown as a count ("×-1")
         until = ' until nothing to pick' if body.get('until') else ''

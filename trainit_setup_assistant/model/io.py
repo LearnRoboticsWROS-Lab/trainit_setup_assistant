@@ -238,8 +238,16 @@ def program_as_written(program) -> dict:
     """A Canonical Task Program as its file states it: every key that was set (a default the user
     wrote stays written), none that was not -- the same on pydantic 1.x and 2.x. A step, a path or a
     segment writes its own keys (name, type, to, states, ...) before the limits it shares with a
-    motion profile, so a saved file reads like the one the user wrote."""
-    return _own_keys_first(program, json.loads(program.json(exclude_unset=True)))
+    motion profile, so a saved file reads like the one the user wrote. Keys are written as the FILE
+    names them (``by_alias``): TSA 8.10.0's wait writes ``for`` (its field is ``for_``); no other
+    program model has an alias, so every other key is unchanged."""
+    return _own_keys_first(program, json.loads(program.json(exclude_unset=True, by_alias=True)))
+
+
+def _file_key(model: BaseModel, name: str) -> str:
+    """The key a field is written under: its alias when it has one (pydantic 1.x sets every field's alias, its name
+    when none is given; 2.x only a given one)."""
+    return getattr(_fields(model)[name], 'alias', None) or name
 
 
 def _own_keys_first(model, data):
@@ -248,7 +256,8 @@ def _own_keys_first(model, data):
         names = list(_fields(model))
         shared = set(_fields(MotionConstraints())) if isinstance(model, MotionConstraints) else set()
         order = [n for n in names if n not in shared] + [n for n in names if n in shared]
-        return {n: _own_keys_first(getattr(model, n), data[n]) for n in order if n in data}
+        keys = {n: _file_key(model, n) for n in order}
+        return {keys[n]: _own_keys_first(getattr(model, n), data[keys[n]]) for n in order if keys[n] in data}
     if isinstance(model, list) and isinstance(data, list):
         return [_own_keys_first(m, d) for m, d in zip(model, data)]
     if isinstance(model, dict) and isinstance(data, dict):

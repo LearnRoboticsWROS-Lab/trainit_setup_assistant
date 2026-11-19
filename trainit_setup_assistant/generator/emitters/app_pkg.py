@@ -87,7 +87,9 @@ class AppEmitter(Emitter):
             from ..program_files import (motion_profiles_yaml, paths_yaml,
                                          task_parameters_lines, tasks_yaml)
             g = dict(bt_ctx['g'], planner_mode=plan.planner_mode,
-                     process_path_backend=plan.backend, process_controller=plan.process_controller)
+                     process_path_backend=plan.backend, process_controller=plan.process_controller,
+                     # TSA 8.10.0 (P0.b): the machine services the steps name ('' = none: the 8.9.0 file)
+                     machine_services=', '.join(app.program.used_services()))
             bt_params_text = ctx.render('app/bt_params_program.yaml.j2', g=g,
                                         task_parameters=task_parameters_lines(
                                             plan, bt_ctx['scene_params']))

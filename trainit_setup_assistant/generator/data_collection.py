@@ -237,8 +237,10 @@ def data_collection_problems(project: CanonicalProject) -> List[str]:
                                     f"'{trigger.step}' is a {steps[trigger.step]} step")
         if kind == 'EVENT' and trigger.process_channel is not None:
             if channels is None:
-                from ..composer.overview import process_channels
-                channels = process_channels(project)
+                # the process channels and (TSA 8.10.0) the machine services the program requests: a request is a
+                # PROCESS_EVENT on its service's id, which trainit_data >= 0.10.2 fires 'edge: any' on (P0.b D6)
+                from ..composer.overview import event_channels
+                channels = event_channels(project)
             if trigger.process_channel not in channels:
                 problems.append(f"{CODE_REFERENCE}: {where}: no process channel '{trigger.process_channel}' is "
                                 f"driven by the program (channels: {', '.join(channels) or 'none'})")

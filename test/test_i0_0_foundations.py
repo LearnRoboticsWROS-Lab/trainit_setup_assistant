@@ -500,6 +500,10 @@ PINNED_FIELDS = {
     'Dwell': {'ms'},
     'PathDef': {'continuity', 'events', 'frame', 'name', 'profile', 'provider', 'segments', 'source', 'states',
                 'tcp'},
+    # TSA 8.10.0 (P0.b): a wait names a MACHINE SERVICE (channel), never a waypoint; its YAML key 'for' is the field
+    # for_ (a Python keyword); a machine service is an id and a description
+    'WaitStep': {'channel', 'for_', 'timeout_ms'},
+    'MachineService': {'id', 'description'},
 }
 
 

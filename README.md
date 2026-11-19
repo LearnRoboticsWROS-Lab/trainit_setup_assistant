@@ -27,7 +27,7 @@ own robot.
 
 ## Install (TrainIt Community, from source)
 
-TrainIt Community is six public repositories released together: their `main` branches always
+TrainIt Community is seven public repositories released together: their `main` branches always
 belong together. [`trainit_community.repos`](trainit_community.repos) lists them for `vcs import`.
 Four steps take you from a bare Ubuntu 22.04 to a running sample cell, and a fifth to your own
 robot. Their commands are written to be pasted as they are, except `~/robot_ws`, which stands for
@@ -76,8 +76,8 @@ what TrainIt is verified on. From that repository, `sudo apt install ros-dev-too
 
 ### 2. Get TrainIt and build it
 
-TrainIt goes into a colcon workspace in one of two layouts, A or B below. In both, the six
-repositories go together: import all six from the manifest and build them together, never one
+TrainIt goes into a colcon workspace in one of two layouts, A or B below. In both, the seven
+repositories go together: import all seven from the manifest and build them together, never one
 on its own (TMR needs `trainit_interfaces`, and a bundle with an end-effector contract needs the
 hardware layer).
 
@@ -89,6 +89,7 @@ hardware layer).
 | `trainit_setup_assistant` | this package: the wizard and the headless generator | generating a bundle |
 | `trainit_perception` | the detectors | vision and bin-picking applications |
 | `trainit_data` | the Data Foundation: canonical recording, datasets, versions and export (`trainit_data` + `trainit_data_ros`) | recording camera data, synthetic data and datasets (the Data section) |
+| `trainit_cell_io` | the cell's machine simulation: the machine services a program's `request` / `wait` steps talk to, on a mock or an Isaac plant | running a program with machine services in simulation (Machine services, below) |
 
 Before either layout, bring the system up to date, `sudo apt update && sudo apt upgrade`: that is
 the state this install was verified in. Then expect two things. `rosdep install` runs apt through
@@ -163,7 +164,7 @@ if ! command -v ros2 >/dev/null; then
 else
   echo 'OK      ros2'
   for p in trainit_interfaces trainit_motion_runtime trainit_hardware_layer \
-           trainit_setup_assistant trainit_perception trainit_data trainit_data_ros; do
+           trainit_setup_assistant trainit_perception trainit_data trainit_data_ros trainit_cell_io; do
     if ros2 pkg prefix $p >/dev/null 2>&1; then echo "OK      $p"
     else echo "MISSING $p: source your workspace as step 2 says; if it is sourced, its build failed"; fi
   done
@@ -284,8 +285,8 @@ application is what you iterate on and ship.
 ## Prerequisites (in your `src/`)
 
 This is a cell the Adaptation Sprint built, laid out as Install's layout B: one workspace,
-`~/robot_ws` here, whose `src/` holds the hand-made twin and the six TrainIt repositories. In
-layout A the six `trainit_*` entries live in `~/trainit_ws/src` instead, and `~/robot_ws`, built
+`~/robot_ws` here, whose `src/` holds the hand-made twin and the seven TrainIt repositories. In
+layout A the seven `trainit_*` entries live in `~/trainit_ws/src` instead, and `~/robot_ws`, built
 with `~/trainit_ws` sourced, overlays it. The public sample needs none of the three hand-made
 entries, and a robot of your own needs at most a base config, which can be the MoveIt Setup
 Assistant's ([Install, step 5](#5-your-own-robot)).
@@ -300,10 +301,11 @@ Assistant's ([Install, step 5](#5-your-own-robot)).
 ├── trainit_hardware_layer/    # the end-effector adapters                — vcs import (Install)
 ├── trainit_perception/        # the detectors                            — vcs import (Install)
 ├── trainit_data/              # the Data Foundation (recording, datasets) — vcs import (Install)
+├── trainit_cell_io/           # the cell's machine simulation (machine services) — vcs import (Install)
 └── trainit_setup_assistant/   # this package                             — vcs import (Install)
 ```
 
-The six TrainIt repositories **ship together**: build their `main` branches together
+The seven TrainIt repositories **ship together**: build their `main` branches together
 (Install, above), never one on its own -- TMR needs `trainit_interfaces`, and a bundle with an
 end-effector contract needs the hardware layer. To rebuild the workspace after adding a package to
 its `src/` (in layout A, `source ~/trainit_ws/install/setup.bash` first):
@@ -678,6 +680,14 @@ Composer** -- the SAME canonical program as the YAML below, never a second model
   *timeout*; Apply validates with the model's own messages and changes nothing when refused. Step 8's run panel
   then offers *Serve the PLC tasks* (the robot task server of the generated bundle) and prints the fake PLC's
   command to copy into a terminal: TSA launches and observes the server, it never commands it.
+- **Machine services** (TSA 8.10, P0.b): the cell machines the program asks for work, by a logical id and a
+  description (add, describe, remove -- a used one is refused, naming its users). In Tasks, **Machine request**
+  (a process step of kind `request` on a declared service) and **Wait for machine** (the service, *done* or
+  *ready*, a timeout in ms) -- each created with an id, which they need; a fixed hold is now labelled **Dwell**.
+  Validate, Step 8's result, the Overview and the diagnostics show the blind-wait report (`machine waits: N
+  semantic (request + wait); M external; K dwell`). Step 8 prints the cell's machine-simulation command beside the
+  fake PLC's (TSA never starts it), and its run panel shows the machine states the runtime logs (WAITING FOR
+  MACHINE, MACHINE `<service>` BUSY / DONE / FAULT / TIMEOUT / UNAVAILABLE) in plain words.
 - Every edit is validated by the canonical model; the diagnostics locate each problem (double click to
   go to it) and suggest a misspelt name.
 - Step 4 builds and starts the planning environment (and Isaac on the bound stage); Step 8 builds,
@@ -769,7 +779,8 @@ never a step type of its own:
 An event's `kind` is `process_on`, `process_off`, `set_value` (`value`), `external` (a logical
 action, no acknowledgement) -- each on a `channel` that is a LOGICAL id (`dispenser`,
 `washer_start`), never a ROS topic, a hardware address or a controller symbol -- or `capture`
-(`detector`, optional `out`, `class_id`, `timeout_ms`) or, on a path, `dwell` (`ms`). A path event is
+(`detector`, optional `out`, `class_id`, `timeout_ms`) or, on a path, `dwell` (`ms`); or, as a task step
+only, `request` on a declared machine service (TSA 8.10: **Machine services** below). A path event is
 anchored at a state (`after_arrival`, the default, or `before_departure`) or at a segment's `start` /
 `end`; one inside a segment (a fraction, a distance, a time) or `sync: async` is refused before any
 file (R-M3-09). A capture triggers its detector on demand and keeps only a result taken after it
@@ -879,6 +890,45 @@ loop, retry and alternative, with no condition, variable or expression of their 
   program that exports tasks should track whether a part is held (`faults: stop` and a gripping step): without it
   every PLC cancel ends FAILED `CANCELLED_HOLD_UNKNOWN` and the plan says so. The public sample
   `examples/ur5e_suction/robot_tasks.yaml` is one.
+- **Machine services** (TSA 8.10, P0.b, P0B_DESIGN §3): the program asks the cell's machines for work by LOGICAL
+  service ids -- a `request` step asks a service for ONE new cycle, a `wait` step waits for it -- never by a
+  topic, a sequence number, a PLC address, an OPC UA node or an I/O (those are TrainIt's and the cell's):
+
+  ```yaml
+  application:
+    machine_services:                    # the logical ids this program uses (+ an optional description)
+      - {id: turner, description: turn the part over}
+    tasks:
+      - name: turn_part
+        export: {number: 5, timeout_s: 30}
+        steps:
+          - {id: ask_turn, process: {kind: request, channel: turner}}             # a NEW request on the service
+          - {id: clear, move: {to: home, type: ptp, profile: transit}}           # the robot works meanwhile
+          - {id: turned, wait: {channel: turner, for: done, timeout_ms: 8000}}    # ITS DONE, or the run stops
+          - {id: may_load, wait: {channel: turner, for: ready, timeout_ms: 2000}} # the machine ready again
+  ```
+
+  `for: done` waits for the DONE of this task's own request (never an earlier cycle's, another job's or another
+  requester's); `for: ready` for the machine to be ready (after a request of the same run, that request done too).
+  `timeout_ms` is mandatory (1..600000, no default). Refused before any file: a service no `machine_services` entry
+  declares (`R-P0B-01`, naming the declared ones), a wait without / with an invalid `for` or `timeout_ms`
+  (`R-P0B-02`), a request or a wait without a step `id` (`R-P0B-03`), a `wait for: done` no earlier request of its
+  sequence (or an enclosing one) dominates (`R-P0B-04`), a second request on a service before a `wait for: done` on
+  it (`R-P0B-05`, across a repeat's cycles and the tasks a step calls), a request or a wait inside a `retry` body or
+  a `fallback` alternative, or in a task called from one (`R-P0B-06`), a service declared twice (`R-P0B-07`), a
+  `request` as a path event. Warned: an exported task whose waits add up to its `timeout_s` or more (`W-P0B-01`: the
+  job's TASK_TIMEOUT would fire before the machine's STATION_TIMEOUT; the comparison is at real time -- in a
+  simulation a wait's `timeout_ms` runs on the simulation clock and lasts `timeout_ms` / the real-time factor of wall
+  time, while `timeout_s` is wall time: size `timeout_s` for the slowest real-time factor the cell runs at, e.g. Isaac
+  with its window open at ≈ 0.24, where an 8 s wait takes ≈ 33 s; ADR-0032 §9), a declared service nothing uses (`W-P0B-02`),
+  a request nothing after it waits for (`W-P0B-03`). A request is `RequestMachine`, a wait `WaitForMachine` in the
+  tree (TMR >= 2.11.0, the floor its `package.xml` declares; `trainit_interfaces` >= 0.5.0 through it); under
+  `faults: stop` both feed the fault gate, and a machine failure ends the run with its STATION code. The CELL serves
+  the services -- its machine simulation (`trainit_cell_io`, from the cell's own hand-written `cell_io.yaml`) or its
+  PLC -- started apart: the bundle never starts it. The blind-wait report (`trainit_generate`'s third line,
+  Validate, Step 8) counts the semantic waits against the blind ones (`external`, `dwell`). A program without
+  machine services generates exactly what TSA 8.9.0 did. The public sample
+  `examples/ur5e_suction/machine_tasks.yaml` is one (0 `external`, 0 `dwell`).
 - The application types `gluing`, `follow_path`, `waypoint_replay` and `cnc` -- names that never
   generated a bundle -- are refused at load: each is a Canonical Task Program.
 - **Step ids** (TSA 8.3, D18, ADR-0030): any step may carry an optional `id` -- a name you choose, unique
@@ -1287,6 +1337,17 @@ so a bare `trainit_generate` is not found.
 > group); its bundle adds the `job_<task>` trees, the exported tasks and `export_table_id` in `config/tasks.yaml`,
 > and `trainit_task_server.launch.py` -- served by TMR >= 2.10.0's `trainit_task_server` (the floor its app's
 > `package.xml` declares). A project without an export generates the files of 8.8.0, byte for byte.
+>
+> `8.10.0` (P0.b, the simulated machine handshake): a program may ask the cell's **machine services** for work --
+> `application.machine_services` (logical ids), a `request` step (a process step of kind `request`) and a `wait`
+> step (`for: done | ready`, a mandatory `timeout_ms`), each with an id; refusals `R-P0B-01..07`, warnings
+> `W-P0B-01..03`. Its tree runs TMR >= 2.11.0's `RequestMachine` / `WaitForMachine` (the floor its app's
+> `package.xml` declares). The Composer gains a Machine services section, the Machine request and Wait for machine
+> steps and the label **Dwell** for a fixed hold; the blind-wait report (`machine waits: N semantic (request +
+> wait); M external; K dwell`) in Validate, Step 8, the Overview, the diagnostics and `trainit_generate`; Step 8
+> prints the cell's machine-simulation command and its run panel shows the machine states in plain text (the
+> server's `RTI:` lines no longer show `-&gt;`). The public sample `examples/ur5e_suction/machine_tasks.yaml`. A
+> program without machine services generates the files of 8.9.0, byte for byte (the manifest's provenance aside).
 
 ## Licence
 

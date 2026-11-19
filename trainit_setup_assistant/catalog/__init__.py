@@ -326,7 +326,8 @@ TMR_BT_NODES = ('MoveWaypoint', 'ServoTrack', 'OpenGripper', 'CloseGripper', 'En
                 'SetAttachedCollisionCheck', 'ResetScene', 'SetReleasePolicy', 'DetectObject',
                 'SetWaypointFromDetection', 'SetWaypointRelative', 'RunPolicy', 'CheckRobotState',
                 'Log', 'VerifyGrasp', 'CommandActuator', 'FollowPath', 'ProcessEvent',
-                'DetectCandidates', 'SetWaypointFromCandidate')
+                'DetectCandidates', 'SetWaypointFromCandidate',
+                'RequestMachine', 'WaitForMachine')   # TSA 8.10.0 (P0.b): rows machine_request / machine_wait
 # BehaviorTree.CPP's own nodes TSA emits, and the tags of the tree file itself: no TMR floor
 BT_BUILTIN_NODES = ('root', 'BehaviorTree', 'Sequence', 'Fallback', 'Sleep', 'Script', 'Repeat',
                     'RetryUntilSuccessful', 'SubTree',
@@ -416,6 +417,12 @@ TMR_FLOORS = {
     # TSA 8.9.0 (P0.a, ADR-0032): a bundle with EXPORTED tasks launches the robot task server (one run per job, the
     # Robot Task Interface; trainit_interfaces >= 0.4.0 through TMR); an older TMR has no such executable
     'task_server': ('2.10.0', '788e91f', 'trainit_task_server (the robot task server, ADR-0032)'),
+    # TSA 8.10.0 (P0.b, P0B_DESIGN §3): a task program that requests and waits for MACHINE SERVICES runs TMR's
+    # RequestMachine / WaitForMachine (the machine channels; trainit_interfaces >= 0.5.0 through TMR); an older TMR
+    # refuses the unknown node when it builds the tree
+    'machine_request': ('2.11.0', 'c984889',
+                        'RequestMachine (a request on a machine service; trainit_interfaces >= 0.5.0 through TMR)'),
+    'machine_wait': ('2.11.0', 'c984889', 'WaitForMachine (a wait for a machine service: done or ready)'),
 }
 # The TMR_FLOORS rows only a CANONICAL package can be given -- one whose bt_params carry the
 # end-effector contract's eef block (ADR-0022, its amendment M2.7; ADR-0021 amendment G0): a
@@ -431,7 +438,7 @@ TASK_PROGRAM_CAPABILITIES = ('FollowPath', 'waypoint_canonical_keys', 'move_goal
                              'DetectCandidates', 'SetWaypointFromCandidate', 'pose_configuration',
                              'candidate_capture', 'candidate_orientation', 'grasp_envelope',
                              'scene_fault', 'attach_touch_links', 'candidate_fault', 'held_motion_fault',
-                             'task_server')
+                             'task_server', 'machine_request', 'machine_wait')
 
 
 # --- the end-effector ADAPTER rows (ADR-0022 D6) ------------------------------------------------

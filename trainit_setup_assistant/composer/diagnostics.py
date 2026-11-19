@@ -25,7 +25,8 @@ from typing import Iterable, List, Optional, Tuple
 
 # a canonical code: at the start of a validator line, or after the place in a load refusal
 # ("task 'scan' step 3 (move): R-M3-02: ...")
-_CODE = re.compile(r'(?:^|:\s)(?P<code>R-M3-\d+|R-I0-\d+|R-D0-\d+|R\d+[a-z]?)\b:')
+# TSA 8.10.0: also P0.a's R-P0-xx, P0.b's R-P0B-xx refusals and W-P0B-xx warnings
+_CODE = re.compile(r'(?:^|:\s)(?P<code>R-M3-\d+|R-I0-\d+|R-D0-\d+|R-P0B?-\d+|W-P0B-\d+|R\d+[a-z]?)\b:')
 # an end-effector contract refusal (ADR-0022): "end-effector contract (ADR-0022 R15): device "main" on ..."
 _EEF_CODE = re.compile(r'end-effector contract \(ADR-0022 (?P<code>R\d+)\)')
 _PLACES = (
@@ -34,6 +35,7 @@ _PLACES = (
     ('path', re.compile(r"path '(?P<name>[^']+)'(?: segment (?P<segment>\d+))?(?: event (?P<event>\d+))?")),
     ('waypoint', re.compile(r"waypoint '(?P<name>[^']+)'")),
     ('profile', re.compile(r"motion profile '(?P<name>[^']+)'")),
+    ('machine_service', re.compile(r"machine service '(?P<name>[^']+)'")),      # TSA 8.10.0 (P0.b)
     ('task', re.compile(r"task '(?P<name>[^']+)'")),
 )
 
@@ -43,7 +45,8 @@ class Location:
     """Where a diagnostic points.
 
     ``kind`` is one of ``step``, ``task_data``, ``path``, ``waypoint``, ``profile``, ``task``, ``data``
-    (TrainIt D0.8: the Data section) or ``project``. ``name`` is the task, path, waypoint or profile name. ``label`` is a step's canonical
+    (TrainIt D0.8: the Data section), ``machine_service`` (TSA 8.10.0: the Machine services section) or ``project``.
+    ``name`` is the task, path, waypoint, profile or machine service name. ``label`` is a step's canonical
     label, e.g. ``(3, 2, 1)``. ``segment`` and ``event`` are path indices. ``item`` is a task input /
     output name, and ``io`` is ``input`` or ``output``."""
 
@@ -69,6 +72,8 @@ class Location:
             return out
         if self.kind == 'profile':
             return f"motion profile '{self.name}'"
+        if self.kind == 'machine_service':
+            return f"machine service '{self.name}' (Machine services section)"
         if self.kind in ('waypoint', 'task'):
             return f"{self.kind} '{self.name}'"
         if self.kind == 'end_effector':
@@ -160,6 +165,7 @@ _UNKNOWN = (
     (re.compile(r"profile '(?P<n>[^']+)' is not a motion profile"), 'profiles'),
     (re.compile(r"no motion profile is named '(?P<n>[^']+)'"), 'profiles'),
     (re.compile(r"no detector is named '(?P<n>[^']+)'"), 'detectors'),
+    (re.compile(r"no machine service is named '(?P<n>[^']+)'"), 'machine_services'),     # TSA 8.10.0 (P0.b)
 )
 
 
@@ -174,6 +180,7 @@ def suggestion(diag: Diagnostic, doc: dict, project=None) -> Optional[str]:
         'profiles': list(doc.get('motion_profiles') or {}),
         'detectors': [d.name for d in (project.perception.detectors
                                        if project is not None and project.perception else [])],
+        'machine_services': [s.get('id') for s in doc.get('machine_services') or [] if isinstance(s, dict)],
     }
     for pattern, scope in _UNKNOWN:
         m = pattern.search(diag.text)

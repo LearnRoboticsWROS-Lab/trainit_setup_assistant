@@ -23,16 +23,20 @@ from python_qt_binding.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox
                                          QVBoxLayout, QWidget)
 
 from ...composer.describe import label_text, route, step_text
-from ...composer.ops import CONTROL_KINDS, ComposerError, step_bodies, step_kind
+from ...composer.ops import CONTROL_KINDS, ComposerError, machine_service_of, step_bodies, step_kind, walk
 from ...model.program import STEP_ID_KEY
 
 Label = Tuple[int, ...]
-ADDABLE = ('move', 'path', 'process', 'capture', 'dwell', 'detect', 'grasp', 'release', 'tool_close',
-           'tool_open', 'tool', 'task')
-ADD_TITLES = {'move': 'Move', 'path': 'Path', 'process': 'Process event', 'capture': 'Camera capture',
-              'dwell': 'Wait', 'detect': 'Detect', 'grasp': 'Grasp', 'release': 'Release',
+ADDABLE = ('move', 'path', 'process', 'request', 'wait', 'capture', 'dwell', 'detect', 'grasp', 'release',
+           'tool_close', 'tool_open', 'tool', 'task')
+# TSA 8.10.0 (P0.b, RB6): a fixed hold is "Dwell"; "Wait for machine" waits for a machine service
+ADD_TITLES = {'move': 'Move', 'path': 'Path', 'process': 'Process event', 'request': 'Machine request',
+              'wait': 'Wait for machine', 'capture': 'Camera capture',
+              'dwell': 'Dwell', 'detect': 'Detect', 'grasp': 'Grasp', 'release': 'Release',
               'tool_close': 'Close gripper', 'tool_open': 'Open gripper', 'tool': 'Tool (actuator / verify)',
               'task': 'Run task'}
+# TSA 8.10.0 (P0.b): a machine request / wait needs a step id (R-P0B-03): a new one gets <stem>_<service>[_n]
+MACHINE_ID_STEMS = {'request': 'ask', 'wait': 'wait'}
 
 
 class TasksPanel(QWidget):
@@ -197,7 +201,9 @@ class TasksPanel(QWidget):
         self.dwell_ms = QSpinBox()
         self.dwell_ms.setRange(0, 3600000)
         self.dwell_ms.setSuffix(' ms')
-        f.addRow('Wait', self.dwell_ms)
+        self.dwell_ms.setToolTip('A fixed hold of the robot. To wait for a machine, use "Wait for machine": the '
+                                 'machine says when it is done')
+        f.addRow('Dwell', self.dwell_ms)                 # TSA 8.10.0 (RB6): "Wait" is the machine's
         self._add_form('dwell', w)
         w = QWidget()
         f = QFormLayout(w)
@@ -382,6 +388,9 @@ class TasksPanel(QWidget):
         self._edit_label, self._edit_original = label, step
         self.inspector.setEnabled(True)
         self.step_id.setText(str(step.get(STEP_ID_KEY) or '') if isinstance(step, dict) else '')
+        # TSA 8.10.0 (P0.b): a machine request / wait cannot lose its id (R-P0B-03)
+        machine = machine_service_of(step) is not None
+        self.step_id.setPlaceholderText('required for a machine request / wait' if machine else 'none (optional)')
         self.inspector.setTitle(f'Step {label_text(label)} — {step_text(step)}')
         doc = self._doc()
         wps = [w['name'] for w in doc.get('waypoints') or []]
@@ -491,9 +500,19 @@ class TasksPanel(QWidget):
             return {'process': {'kind': 'process_on', 'channel': 'process'}}
         from .step_forms import context, default_step
         try:
-            return default_step(kind, context(doc, self.composer.project), self.composer.project)
+            step = default_step(kind, context(doc, self.composer.project), self.composer.project)
         except ValueError as exc:
             raise ComposerError(str(exc)) from None
+        if kind in MACHINE_ID_STEMS:
+            # TSA 8.10.0 (P0.b): a request / wait needs an id unique in its task (R-P0B-03): one is minted
+            task = self._task_doc() or {}
+            taken = {s.get(STEP_ID_KEY) for _label, s in walk(task.get('steps') or []) if isinstance(s, dict)}
+            stem = f'{MACHINE_ID_STEMS[kind]}_{machine_service_of(step)}'
+            new, n = stem, 2
+            while new in taken:
+                new, n = f'{stem}_{n}', n + 1
+            step = {STEP_ID_KEY: new, **step}
+        return step
 
     def add_step(self, kind: str, inside: bool = False) -> Optional[Label]:
         try:

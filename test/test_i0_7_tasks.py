@@ -56,7 +56,9 @@ def _panel(c, task=None):
     ({'fallback': {'bodies': [[], []]}}, 'Try alternatives (2)'),
     ({'process': {'kind': 'process_on', 'channel': 'cycle_light'}}, 'Process ON cycle_light'),
     ({'process': {'kind': 'capture', 'detector': 'red_object'}}, 'Capture (red_object)'),
-    ({'dwell': {'ms': 500}}, 'Wait 500 ms'),
+    ({'dwell': {'ms': 500}}, 'Dwell 500 ms'),           # TSA 8.10.0 (P0.b, RB6): "Wait" is the machine's now
+    ({'process': {'kind': 'request', 'channel': 'turner'}}, 'Machine request turner'),          # TSA 8.10.0
+    ({'wait': {'channel': 'turner', 'for': 'done', 'timeout_ms': 8000}}, 'Wait for machine turner: done · 8000 ms'),
     ({'detect': {'detector': 'red_object', 'out': 'cubes'}}, 'Detect (red_object) → cubes'),
     ({'release': {'at': 'place'}}, 'Release at place'),
 ])
@@ -207,7 +209,7 @@ def test_the_composer_has_every_section(qapp):
     w = SetupWizard(ctrl)
     w.blocks_page.initializePage()
     shell = w.blocks_page.program_panel
-    assert list(shell.sections) == ['Overview', 'Waypoints', 'Paths', 'Profiles', 'End effector', 'Tasks', 'Data',
-                                   'YAML', 'Program']     # Data: TrainIt D0.8
+    assert list(shell.sections) == ['Overview', 'Waypoints', 'Paths', 'Profiles', 'End effector', 'Machine services',
+                                   'Tasks', 'Data', 'YAML', 'Program']     # Data: TrainIt D0.8; Machine services: TSA 8.10.0
     shell.select('Tasks')
     assert shell.tasks.task == ctrl.project.application.program.main_task

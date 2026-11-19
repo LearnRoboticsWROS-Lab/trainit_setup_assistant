@@ -24,3 +24,7 @@ repositories:
     type: git
     url: https://github.com/LearnRoboticsWROS-Lab/trainit_data.git
     version: main
+  trainit_cell_io:
+    type: git
+    url: https://github.com/LearnRoboticsWROS-Lab/trainit_cell_io.git
+    version: main

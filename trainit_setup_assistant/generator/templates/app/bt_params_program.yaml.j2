@@ -24,6 +24,10 @@
     # fixed for every task program (not authored): no legacy gripper action, the mock process
     # controller (no process events yet), MainTree, and the runtime's trajectory validation on
 {% endif %}
+{% if g.machine_services %}
+    # the machine services ({{ g.machine_services }}): their requests and waits go to the runtime's
+    # machine channels (RequestMachine / WaitForMachine, TMR >= 2.11.0), never to the process controller
+{% endif %}
     gripper_action: "{{ g.gripper_action }}"
     process_controller: "{{ g.process_controller }}"
     bt_tree_id: "{{ g.bt_tree_id }}"

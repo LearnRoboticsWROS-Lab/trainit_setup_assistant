@@ -403,6 +403,55 @@ class Composer:
         self.edit(lambda doc: doc.__setitem__(
             'paths', [p for p in doc.get('paths', []) if p.get('name') != name]))
 
+    # ---- machine services (TSA 8.10.0, P0.b) ---------------------------------------------------
+    def machine_service_ids(self) -> List[str]:
+        """The declared machine services' ids, in declaration order."""
+        return [s.id for s in self.program.machine_services]
+
+    def add_machine_service(self, service_id: str, description: Optional[str] = None) -> None:
+        """Declare a machine service: its LOGICAL id and an optional one-line description -- nothing else of the machine
+        is the program's to say (owner decision 3). The model judges the id (its form; R-P0B-07 a second one)."""
+        def mutate(doc):
+            entry: Dict[str, Any] = {'id': service_id}
+            if description:
+                entry['description'] = description
+            doc.setdefault('machine_services', []).append(entry)
+        self.edit(mutate)
+
+    def set_machine_service_description(self, service_id: str, description: Optional[str]) -> None:
+        """A service's description ('' or None removes it)."""
+        def mutate(doc):
+            s = _service(doc, service_id)
+            if description:
+                s['description'] = description
+            else:
+                s.pop('description', None)
+        self.edit(mutate)
+
+    def remove_machine_service(self, service_id: str) -> None:
+        """Remove a service no request or wait names (a used one is refused, naming its users). The last one removed
+        removes the key: a program without machine services writes none (its file is the one of TSA 8.9.0)."""
+        users = self.machine_service_users(service_id)
+        if users:
+            _refuse(f"R-P0B-01: machine service '{service_id}' is used by {', '.join(users)}: change those first")
+
+        def mutate(doc):
+            _service(doc, service_id)
+            left = [s for s in doc.get('machine_services') or [] if s.get('id') != service_id]
+            if left:
+                doc['machine_services'] = left
+            else:
+                doc.pop('machine_services', None)
+        self.edit(mutate)
+
+    def machine_service_users(self, service_id: str) -> List[str]:
+        """The request and wait steps that name a service, in the validator's terms."""
+        out: List[str] = []
+        for t, label, step in self._steps():
+            if machine_service_of(step) == service_id:
+                out.append(f"task '{t}' step {_text(label)}")
+        return out
+
     # ---- tasks ---------------------------------------------------------------------------------
     def task_names(self) -> List[str]:
         return [t.name for t in self.program.tasks]
@@ -658,6 +707,24 @@ def _task(doc: dict, name: str) -> dict:
     _refuse(f"R-M3-15: no task is named '{name}'")
 
 
+def _service(doc: dict, service_id: str) -> dict:
+    for s in doc.get('machine_services') or []:
+        if isinstance(s, dict) and s.get('id') == service_id:
+            return s
+    _refuse(f"R-P0B-01: no machine service is named '{service_id}'")
+
+
+def machine_service_of(step: dict) -> Optional[str]:
+    """TSA 8.10.0: the machine service a written step names -- a request's or a wait's channel (None otherwise)."""
+    kind = step_kind(step)
+    body = step.get(kind)
+    if not isinstance(body, dict):
+        return None
+    if kind == 'wait' or (kind == 'process' and body.get('kind') == 'request'):
+        return body.get('channel')
+    return None
+
+
 def _slot(task: dict, label: Label) -> Tuple[list, int]:
     """The list a step with ``label`` lives in, and its 0-based index there (which may be the
     list's length: the place after the last step). A control step's number is followed by the
@@ -754,5 +821,5 @@ def _profile_holders(doc: dict):
                 yield body
 
 
-__all__ = ['CONTROL_KINDS', 'Composer', 'ComposerError', 'KEEP_ID', 'Label', 'WAYPOINT_FIELDS', 'step_bodies',
-           'step_kind', 'walk', 'waypoint_refs']
+__all__ = ['CONTROL_KINDS', 'Composer', 'ComposerError', 'KEEP_ID', 'Label', 'WAYPOINT_FIELDS', 'machine_service_of',
+           'step_bodies', 'step_kind', 'walk', 'waypoint_refs']

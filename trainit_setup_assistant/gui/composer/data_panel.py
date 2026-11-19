@@ -229,9 +229,11 @@ class TriggerDialog(QDialog):
         self.setWindowTitle('Recording trigger')
         self.project = project
         from ...generator.data_collection import _tasks
-        from ...composer.overview import process_channels
+        from ...composer.overview import event_channels, process_channels
         self.tasks = _tasks(project) or {}
-        self.channels = process_channels(project)
+        # what the validator accepts: the process channels and (TSA 8.10.0) the machine services the program requests
+        self.channels = event_channels(project)
+        self.requested = [c for c in self.channels if c not in process_channels(project)]
         form = QFormLayout(self)
         self.id = QLineEdit((trigger or {}).get('id', ''))
         self.id.setPlaceholderText('a short name, e.g. before_grasp')
@@ -321,7 +323,9 @@ class TriggerDialog(QDialog):
         self._show(*{'manual': (), 'interval': ('period', 'max'), 'event': ('channel', 'edge'),
                      'application_state': ('task', 'step', 'transition', 'attempt')}[kind])
         self.note.setText({'manual': 'One capture each time Capture is pressed during a session.',
-                           'event': 'Only the process channels the program drives are listed.',
+                           'event': 'Only the process channels the program drives are listed'
+                                    + (', and the machine services it requests (a request fires "changes")'
+                                       if self.requested else '') + '.',
                            'application_state': 'Only the steps that have an id are listed: to name a step here, '
                                                 'give it an id in Tasks (select the step, Id, Apply).'}.get(kind, ''))
         if kind == 'application_state':

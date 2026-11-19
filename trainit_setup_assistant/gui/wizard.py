@@ -397,7 +397,38 @@ def build_and_run_lines(project, out_dir: str, ws: str) -> List[str]:
         lines.append(f'  # or both:       ros2 launch {b.app_package} bringup.launch.py '
                      f'mode:={mode}')
     lines += plc_task_lines(project, ws, sim_time)
+    lines += machine_service_lines(project)
     return lines
+
+
+def used_machine_services(project) -> list:
+    """TSA 8.10.0 (P0.b): the machine services the program's steps request / wait for (none for a project that is not
+    a task program)."""
+    application = getattr(project, 'application', None)
+    if application is None or not application.is_task_program():
+        return []
+    return application.program.used_services()
+
+
+def machine_service_lines(project) -> List[str]:
+    """TSA 8.10.0 (P0.b, P0B_DESIGN §4 / §7): a program that requests and waits for machine services needs the CELL
+    that serves them -- its machine simulation, a cell-level process started apart (TSA never starts it; the bundle
+    never launches it), on the cell's own hand-written file -- and the note for the Isaac plant (the station in Isaac
+    Sim, the robot on mock: the runner on the stage's clock). Nothing for a project without machine services (its
+    lines are those of 8.9.0)."""
+    services = used_machine_services(project)
+    if not services:
+        return []
+    from ..composer import launch_plan
+    return [
+        f'  # machine services ({", ".join(services)}): the CELL serves them -- start its machine simulation FIRST, '
+        'in another terminal',
+        '  #   (TSA never starts it; the bundle never launches the cell), on the cell\'s own file:',
+        f'  #                {launch_plan.cell_io_line()}',
+        f'  #   the public neutral station: config:={launch_plan.NEUTRAL_STATION_CONFIG}',
+        '  # Isaac plant (the station in Isaac Sim, the robot on mock): the SAME application -- start the server or the',
+        '  #   application with use_sim_time:=true (the stage\'s /clock); only the cell\'s file and that flag differ',
+    ]
 
 
 def exported_tasks(project) -> list:
@@ -523,7 +554,22 @@ class GeneratePage(QWizardPage):
 
     def _run_command(self):
         from ..composer import launch_plan
-        return launch_plan.run(self._ws_root(), self.ctrl.project.bundle.app_package, self.run_mode.currentText())
+        ws = self._ws_root()
+        # TSA 8.10.0 (P0.b): a run that requests machine services needs the cell's machine simulation up first
+        self.run_panel.notes['run'] = self._cell_notes(ws)
+        return launch_plan.run(ws, self.ctrl.project.bundle.app_package, self.run_mode.currentText())
+
+    def _cell_notes(self, ws: str) -> List[str]:
+        """TSA 8.10.0 (P0.b): the cell's machine-simulation command, to COPY (TSA never starts it); [] without machine
+        services."""
+        from ..composer import launch_plan
+        services = used_machine_services(self.ctrl.project)
+        if not services:
+            return []
+        return [f'# machine services ({", ".join(services)}): the CELL serves them -- start its machine simulation '
+                f'FIRST, in a terminal (TSA never starts it), on the cell\'s own file (the public neutral station: '
+                f'config:={launch_plan.NEUTRAL_STATION_CONFIG}):',
+                launch_plan.cell_io_command(ws)]
 
     def _server_command(self):
         """TSA 8.9.0 (P0.a, ADR-0032): the robot task server of the generated bundle; the fake PLC's command line is
@@ -542,8 +588,8 @@ class GeneratePage(QWizardPage):
         command = launch_plan.task_server(ws, app, self.run_mode.currentText())
         tasks = ', '.join(f'#{t.export.number} {t.name}' for t in exported)
         # P0.a acceptance finding 2: written when the server SAYS it serves -- after its start-up lines, which
-        # buried it when it was written before the launch
-        self.run_panel.after_ready['server'] = (SERVING, [
+        # buried it when it was written before the launch. TSA 8.10.0 (P0.b): the cell's command first, beside it
+        self.run_panel.after_ready['server'] = (SERVING, self._cell_notes(ws) + [
             f'# serving the exported tasks: {tasks}. The PLC is the requester; to test without one, start the FAKE '
             f'PLC in a terminal (TSA never starts it) with this command:',
             launch_plan.fake_plc_command(ws, app, cell_namespace(project))])
@@ -606,9 +652,12 @@ class GeneratePage(QWizardPage):
         info = manifest.as_dict()
         b = self.ctrl.project.bundle
         ws = self.ctrl._workspace_root(out_dir)
+        from ..composer.machine_waits import machine_waits_line
+        waits = machine_waits_line(self.ctrl.project)      # TSA 8.10.0 (P0.b): the blind-wait report
         lines = [
             f"Generated {info['file_count']} files into {out_dir}",
             f'Bundle: {b.description_package} + {b.moveit_config_package} + {b.app_package}',
+        ] + ([waits] if waits else []) + [
             '',
             'Build & run:',
         ] + build_and_run_lines(self.ctrl.project, out_dir, ws)
@@ -3228,6 +3277,10 @@ class BlocksPage(QWizardPage):
                 [f'  {w_}' for w_ in warnings]
             if not errors:
                 style = 'color:#8a6d3b;'
+        from ..composer.machine_waits import machine_waits_line
+        waits = machine_waits_line(self.ctrl.project)      # TSA 8.10.0 (P0.b): the blind-wait report
+        if waits:
+            body += ['', waits]
         self.program_result.setStyleSheet(style)
         self.program_result.setText('\n'.join(body))
 

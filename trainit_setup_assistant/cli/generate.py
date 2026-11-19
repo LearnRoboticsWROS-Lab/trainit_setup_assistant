@@ -80,6 +80,11 @@ def main(argv=None) -> int:
     print(f"Generated {info['file_count']} files into {out}")
     print(f"  packages: {project.bundle.description_package}, "
           f"{project.bundle.moveit_config_package}, {project.bundle.app_package}")
+    # TSA 8.10.0 (P0.b): how a task program waits for its machines -- the blind-wait report (never a warning)
+    from ..composer.machine_waits import machine_waits_line
+    waits = machine_waits_line(project)
+    if waits:
+        print(f'  {waits}')
     for warning in manifest.local_warnings:        # this machine's paths; the manifest has none
         print(f'  warning: {warning}', file=sys.stderr)
     return 0

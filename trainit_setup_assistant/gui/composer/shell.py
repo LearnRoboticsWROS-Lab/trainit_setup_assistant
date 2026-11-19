@@ -20,6 +20,7 @@ from .data_panel import DataPanel
 from .diagnostics_panel import DiagnosticsPanel
 from .eef_panel import EndEffectorPanel
 from .live_panel import LivePanel
+from .machines_panel import MachinesPanel
 from .overview_panel import OverviewPanel
 from .paths_panel import PathsPanel
 from .profiles_panel import ProfilesPanel
@@ -69,6 +70,9 @@ class ComposerWidget(QWidget):
         # vNext I0 (§34, owner decision 2026-10-26): the end effector, in the same layer as the motion
         self.end_effector = EndEffectorPanel(self.composer, live=live)
         self.add_section('End effector', self.end_effector)
+        # TSA 8.10.0 (P0.b): the logical machine services, declared before the steps that request / wait for them
+        self.machines = MachinesPanel(self.composer)
+        self.add_section('Machine services', self.machines)
         self.tasks = TasksPanel(self.composer)
         self.add_section('Tasks', self.tasks)
         # TrainIt D0.8: the Data section (Capture, Synthetic, Datasets): TSA configures, launches, observes
@@ -121,6 +125,9 @@ class ComposerWidget(QWidget):
             self.profiles.select(loc.name)
         elif loc.kind == 'end_effector':
             self.select('End effector')
+        elif loc.kind == 'machine_service':
+            self.select('Machine services')
+            self.machines.select(loc.name)
         elif loc.kind == 'data':
             self.select('Data')
             self.data.tabs.setCurrentIndex(0)
@@ -140,6 +147,7 @@ class ComposerWidget(QWidget):
         self.waypoints.selected = None
         self.paths.selected = None
         self.profiles.selected = None
+        self.machines.selected = None
         self.tasks.task, self.tasks._edit_label = None, None
         self.edited()
         self.live.refresh()

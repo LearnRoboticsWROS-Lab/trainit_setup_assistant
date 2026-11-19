@@ -149,6 +149,28 @@ def fake_plc_command(ws_root: str, app_package: str, namespace: Optional[str] = 
             f'--ros-args{ns} -p tasks_file:={shlex.quote(tasks)}')
 
 
+# TSA 8.10.0 (P0.b, P0B_DESIGN §4): the CELL's machine simulation (trainit_cell_io) serves the machine services a
+# program requests -- a cell-level process (ADR-0020) the robot bundle never launches. TSA prints its command beside
+# the fake PLC's and never starts it (as it never starts the requester); TSA never imports trainit_cell_io either.
+# The cell's file (cell_io.yaml) is hand-written and the cell's own (owner decision 3): TSA does not know its path.
+CELL_IO_CONFIG = '<your cell_io.yaml>'
+# the public neutral station's mock-plant file, as trainit_cell_io installs it
+NEUTRAL_STATION_CONFIG = ('$(ros2 pkg prefix trainit_cell_io)/share/trainit_cell_io/examples/neutral_station/'
+                          'cell_io_mock.yaml')
+
+
+def cell_io_line(config: str = CELL_IO_CONFIG) -> str:
+    """TSA 8.10.0: the cell's machine simulation, as one ros2 launch line (after sourcing the workspace)."""
+    return f'ros2 launch trainit_cell_io cell_io.launch.py config:={config}'
+
+
+def cell_io_command(ws_root: str, config: str = CELL_IO_CONFIG) -> str:
+    """TSA 8.10.0 (P0.b): the cell's machine simulation for the user to COPY into a terminal and start FIRST -- TSA
+    never starts it (the robot bundle never launches the cell)."""
+    setup = os.path.join(ws_root, 'install', 'setup.bash')
+    return f'source {ROS_SETUP} && source {shlex.quote(setup)} && {cell_io_line(config)}'
+
+
 def workspace_root(output_dir) -> Optional[str]:
     """The colcon workspace ROOT for a package written under ``<ws>/src/...`` (None: not under a src/)."""
     parts = os.path.abspath(str(output_dir)).split(os.sep)
@@ -163,5 +185,6 @@ BT_SUCCESS = 'BT finished: SUCCESS'
 BT_FAILURE = 'BT finished: FAILURE'
 
 
-__all__ = ['BT_FAILURE', 'BT_SUCCESS', 'Command', 'child_environment', 'KINDS', 'OPEN_AND_PLAY', 'ROS_SETUP', 'bringup', 'build',
-           'isaac', 'planning_environment', 'run', 'workspace_root']
+__all__ = ['BT_FAILURE', 'BT_SUCCESS', 'CELL_IO_CONFIG', 'Command', 'child_environment', 'KINDS',
+           'NEUTRAL_STATION_CONFIG', 'OPEN_AND_PLAY', 'ROS_SETUP', 'bringup', 'build', 'cell_io_command', 'cell_io_line',
+           'fake_plc_command', 'isaac', 'planning_environment', 'run', 'task_server', 'workspace_root']

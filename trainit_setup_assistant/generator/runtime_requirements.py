@@ -164,6 +164,10 @@ def _tree_capabilities(root: ET.Element, namespaced: bool, used: Set[str]) -> bo
             used.add('move_waypoint_fault')          # ADR-0022 amendment M2.7: the motion gate
         if tag in ('MoveWaypoint', 'FollowPath') and 'holding' in el.attrib:
             used.add('held_motion_fault')            # ADR-0024 amendment M4.5d: a held part's failed motion
+        if tag == 'RequestMachine':
+            used.add('machine_request')              # TSA 8.10.0 (P0.b): a request on a machine service
+        if tag == 'WaitForMachine':
+            used.add('machine_wait')                 # TSA 8.10.0 (P0.b): the wait for a machine service
         if namespaced and tag in _SCENE_SERVICE_NODES:
             used.add('scene_services_namespace')
     return policy

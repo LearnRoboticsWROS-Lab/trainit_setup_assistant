@@ -49,7 +49,7 @@ from ..model.program import (CHANNEL_KINDS, CONTROL_KINDS, FAULTS_STOP, INDEX_AL
                              ORIENTATION_ALIGN_APPROACH, AnchorWhen, DetectSource,
                              EventKind,
                              GraspExpectation, ProcessEventSpec, RelativeFrame, TaskDataType, TaskProgram,
-                             TaskWaypoint, walk_steps)
+                             TaskWaypoint, WaitFor, WaitStep, walk_steps)
 from .base import ApplicationTemplate, scene_dims_key, scene_pos_key
 from .eef_tree import (canonical_device, close_nodes, continuous_everywhere, eef_attrs, open_nodes,
                        verify_grasp)
@@ -134,7 +134,11 @@ HELD_AT_START_REASONS = ('RELEASE_NOT_CONFIRMED', 'NO_RELEASE_COMMAND')
 # TSA 8.6.2: AttachObject / DetachObject (a planning-scene update move_group refused) and SetWaypointFromCandidate (a
 # configuration refusal) have one since TMR 2.8.1 -- the floor 'scene_fault' / 'candidate_fault' (catalog TMR_FLOORS)
 FAULT_NODES = ('MoveWaypoint', 'FollowPath', 'DetectCandidates', 'DetectObject', 'CloseGripper', 'OpenGripper',
-               'VerifyGrasp', 'CommandActuator', 'AttachObject', 'DetachObject', 'SetWaypointFromCandidate')
+               'VerifyGrasp', 'CommandActuator', 'AttachObject', 'DetachObject', 'SetWaypointFromCandidate',
+               # TSA 8.10.0 (P0.b, decision D3): a machine request / wait that fails writes its machine reason into the
+               # gate (MainTree logs it); the job's STATION code comes from the runtime's own job latch, gate or not.
+               # Two DISTINCT tags (decision D1), never a ProcessEvent: TMR prepares a process channel for every one
+               'RequestMachine', 'WaitForMachine')
 
 
 #: TSA 8.7.0 (vNext M4.5b): the trainit_perception release whose grasp providers publish the objects a presence capture
@@ -295,6 +299,8 @@ class StepPlan:
     reached: str = ''
     # TSA 8.6.1: the fault a failure BEFORE the reached key was set writes into the gate ('' = none: a grasp)
     unreached_fault: str = ''
+    # TSA 8.10.0 (P0.b): a wait step's wait (its service, what for, its timeout)
+    machine: Optional[WaitStep] = None
 
 
 def iter_plans(steps: Sequence[StepPlan]):
@@ -524,6 +530,10 @@ class _Planner:
         # vNext M4.5: the fault policy, and the grasp sites whose grasps attach a payload (their opens detach it)
         self.stops_on_fault = self.program.faults == FAULTS_STOP
         self._payload_sites: set = set()
+        # TSA 8.10.0 (P0.b): a call's effect on its caller's machine requests, per task; the steps already refused as a
+        # second request (a repeat's next-cycle pass reports a step once)
+        self._machine_summaries: Dict[str, Tuple[set, set]] = {}
+        self._second_requests: set = set()
 
     # -- helpers --
     def refuse(self, text: str) -> None:
@@ -1049,6 +1059,8 @@ class _Planner:
             return f'<DetectObject {attrs}/>'
         if k is EventKind.DWELL:
             return f'<Sleep msec="{ev.ms}"/>'
+        if k is EventKind.REQUEST:                   # TSA 8.10.0 (P0.b, decision D1): its own node, never a ProcessEvent
+            return f'<RequestMachine channel="{ev.channel}"/>'
         value = f' value="{ev.value:g}"' if k is EventKind.SET_VALUE else ''
         return f'<ProcessEvent kind="{k.value}" channel="{ev.channel}"{value}/>'
 
@@ -1854,9 +1866,254 @@ class _Planner:
                 f"track whether a part is held (that needs application.faults: stop and a step that grips): a "
                 f"CANCEL from the PLC then always ends FAILED CANCELLED_HOLD_UNKNOWN (309) and the robot needs a "
                 f"RESET, never CANCELLED (200)")
+        self._check_machine()                        # TSA 8.10.0 (P0.b): machine services, requests and waits
         if self.problems:
             raise ProgramRefusals(self.problems)
         return self._assemble(paths, tasks, moves, running)
+
+    # -- machine services (TSA 8.10.0, P0.b, P0B_DESIGN §3.1) --
+    @staticmethod
+    def _machine_where(task: str, label: str, step) -> str:
+        """A request / wait step as a refusal names it: ``task 't' step 3 (wait for done on 'turner')``."""
+        if step.wait is not None:
+            return f"task '{task}' step {label} (wait for {step.wait.for_.value} on '{step.wait.channel}')"
+        return f"task '{task}' step {label} (request on '{step.process.channel}')"
+
+    def _check_machine(self) -> None:
+        """The machine rules over the WHOLE program (every task, running or not):
+
+        R-P0B-01  a request / wait names a DECLARED machine service (a typo never becomes a new channel)
+        R-P0B-06  no request / wait inside a retry body or a fallback alternative -- directly, or in a task called
+                  from there: only a task's own sequence and a repeat body hold them in this version
+        R-P0B-04  a ``wait for: done`` is DOMINATED by a request on its service: an earlier step of the same sequence
+                  or of an enclosing one (a request inside a body, or in a called task, dominates nothing after it)
+        R-P0B-05  between two requests on a service, a ``wait for: done`` on it -- across a repeat's cycles and the
+                  tasks a step calls too
+        W-P0B-01  an exported task's wait timeouts add up to its timeout_s or more (bounded repeats multiply, the tasks
+                  it calls included): the job's TASK_TIMEOUT (302) would fire before the machine's STATION_TIMEOUT
+        W-P0B-02  a declared service no request or wait names
+        W-P0B-03  a request nothing after it in its task (or in a task called after it) waits for"""
+        program = self.program
+        declared = program.service_ids()
+        for task in program.tasks:
+            for label, step in walk_steps(task.steps):
+                service = step.machine_service()
+                if service is not None and service not in declared:
+                    self.refuse(f"R-P0B-01: {self._machine_where(task.name, label, step)}: no machine service is "
+                                f"named '{service}' (machine_services: {', '.join(declared) or 'none declared'}) -- "
+                                'declare it in application.machine_services, or name a declared service')
+        for task in program.tasks:
+            self._machine_composites(task, task.steps, '', '')
+        for task in program.tasks:
+            self._machine_flow(task, task.steps, '', set(), set(), '')
+        self._unwaited_requests()
+        for task in program.exported():
+            total = self._wait_budget(task.steps, {task.name})
+            if total and total >= task.export.timeout_ms():
+                self.warnings.append(
+                    f"W-P0B-01: task '{task.name}' (PLC task #{task.export.number}): its machine waits add up to "
+                    f'{total} ms (each wait\'s timeout_ms, a bounded repeat\'s cycles multiplied, the tasks it calls '
+                    f'included), at or above its timeout_s {task.export.timeout_s:g} s: the job\'s TASK_TIMEOUT (302) '
+                    "would end it before a machine wait's own STATION_TIMEOUT (305) names the machine -- raise "
+                    "export.timeout_s above the waits plus the robot's motion, or shorten the waits")
+        used = program.used_services()
+        for service in declared:
+            if service not in used:
+                self.warnings.append(f"W-P0B-02: machine service '{service}' is declared and never used: no request "
+                                     'or wait step names it -- remove it from machine_services, or use it')
+
+    def _machine_reached(self, name: str, seen: set) -> Optional[Tuple[str, str, object]]:
+        """The first request / wait task ``name`` runs, in its own steps or in a task it calls (directly or not), as
+        (task, label, step); None when it runs none."""
+        task = self._tasks.get(name)
+        if task is None or name in seen:
+            return None
+        seen.add(name)
+        for label, step in walk_steps(task.steps):
+            if step.machine_service() is not None:
+                return name, label, step
+        for _label, callee in task.calls():
+            found = self._machine_reached(callee, seen)
+            if found is not None:
+                return found
+        return None
+
+    def _machine_composites(self, task, steps, prefix: str, inside: str) -> None:
+        """R-P0B-06: a request / wait in a retry body or a fallback alternative (``inside`` names it), directly or in a
+        task called from there."""
+        why = ('a retry or a fallback runs its steps again or abandons them half-way: a second request while the '
+               'first is still owed, or a wait for a request it does not own -- in this version a request and a wait '
+               "stand in the task's own sequence or in a repeat body")
+        for i, step in enumerate(steps, start=1):
+            label = f'{prefix}.{i}' if prefix else str(i)
+            if inside:
+                if step.machine_service() is not None:
+                    self.refuse(f'R-P0B-06: {self._machine_where(task.name, label, step)}: inside {inside}: {why}')
+                elif step.task is not None:
+                    found = self._machine_reached(step.task, set())
+                    if found is not None:
+                        callee, at, inner = found
+                        what = (f"waits for '{inner.wait.channel}'" if inner.wait is not None else
+                                f"requests '{inner.process.channel}'")
+                        self.refuse(f"R-P0B-06: task '{task.name}' step {label} (task '{step.task}'): inside {inside}, "
+                                    f"it runs task '{callee}', which {what} (step {at}): {why}")
+            if step.fallback is not None:
+                for b, body in enumerate(step.fallback.bodies, start=1):
+                    self._machine_composites(task, body, f'{label}.{b}', inside or
+                                             f'the fallback at step {label} (alternative {b})')
+            elif step.retry is not None:
+                self._machine_composites(task, step.retry.body, label, inside or f'the retry at step {label}')
+            elif step.repeat is not None:
+                self._machine_composites(task, step.repeat.body, label, inside)
+
+    def _machine_summary(self, name: str, stack: Tuple[str, ...] = ()) -> Tuple[set, set]:
+        """What a CALL to task ``name`` does to its caller's machine requests: (the services it requests, itself or in a
+        task it calls; the services it may leave requested and not waited for done at its end)."""
+        if name in self._machine_summaries:
+            return self._machine_summaries[name]
+        task = self._tasks.get(name)
+        if task is None or name in stack:                # unknown or a call cycle: refused already (R-M3-15)
+            return set(), set()
+        requests: set = set()
+        for _label, step in walk_steps(task.steps):
+            if step.process is not None and step.process.kind is EventKind.REQUEST:
+                requests.add(step.process.channel)
+        for _label, callee in task.calls():
+            requests |= self._machine_summary(callee, stack + (name,))[0]
+        left = self._machine_effect(task.steps, set(), stack + (name,))
+        self._machine_summaries[name] = (requests, left)
+        return requests, left
+
+    def _machine_effect(self, steps, outstanding: set, stack: Tuple[str, ...]) -> set:
+        """The services that may be requested and not waited for done after ``steps`` (no refusal: a call summary)."""
+        out = set(outstanding)
+        for step in steps:
+            if step.process is not None and step.process.kind is EventKind.REQUEST:
+                out.add(step.process.channel)
+            elif step.wait is not None and step.wait.for_ is WaitFor.DONE:
+                out.discard(step.wait.channel)
+            elif step.task is not None:
+                out |= self._machine_summary(step.task, stack)[1]
+            elif step.repeat is not None:
+                body = step.repeat.body
+                after = self._machine_effect(body, out, stack)
+                if step.repeat.cycles != 1:
+                    after = self._machine_effect(body, after, stack)
+                if step.repeat.until is not None:         # it may end part-way through a cycle
+                    after |= out | self._requested_in(body, stack)
+                out = after
+        return out
+
+    def _requested_in(self, steps, stack: Tuple[str, ...] = ()) -> set:
+        """Every service a list of steps requests, in its bodies and the tasks it calls included."""
+        out = set()
+        for _label, step in walk_steps(steps):
+            if step.process is not None and step.process.kind is EventKind.REQUEST:
+                out.add(step.process.channel)
+            elif step.task is not None:
+                out |= self._machine_summary(step.task, stack)[0]
+        return out
+
+    def _machine_flow(self, task, steps, prefix: str, requested: set, outstanding: set, cycle: str) -> None:
+        """R-P0B-04 and R-P0B-05 along one sequence. ``requested``: the services an earlier step of this sequence or of
+        an enclosing one requested (the dominators); ``outstanding`` (updated): the services that may be requested and
+        not yet waited for done. ``cycle``: '' on a first run, else the repeat whose NEXT cycle this pass checks."""
+        requested = set(requested)
+        for i, step in enumerate(steps, start=1):
+            label = f'{prefix}.{i}' if prefix else str(i)
+            if step.process is not None and step.process.kind is EventKind.REQUEST:
+                service = step.process.channel
+                if service in outstanding and (task.name, label) not in self._second_requests:
+                    self._second_requests.add((task.name, label))
+                    when = (f' (in the next cycle of the repeat at step {cycle}: the request of the cycle before is '
+                            'not waited for done)' if cycle else '')
+                    self.refuse(f"R-P0B-05: {self._machine_where(task.name, label, step)}: a second request on "
+                                f"'{service}' before a wait for done on it{when}: the machine takes one request at a "
+                                'time -- a request while it is busy, or while the earlier one is not yet taken, is '
+                                f"refused at run time (STATION_BUSY 313); add a 'wait: {{channel: {service}, for: done, "
+                                "timeout_ms: <ms>}' between them")
+                requested.add(service)
+                outstanding.add(service)
+            elif step.wait is not None and step.wait.for_ is WaitFor.DONE:
+                service = step.wait.channel
+                if service not in requested:
+                    self.refuse(f"R-P0B-04: {self._machine_where(task.name, label, step)}: no request on '{service}' "
+                                'comes before it in its sequence or an enclosing one: a wait for done waits for the '
+                                'DONE of a request of its own task (a request inside a repeat, retry or fallback body, '
+                                f"or in a called task, does not count) -- add '{{id: <id>, process: {{kind: request, "
+                                f"channel: {service}}}}}' before it, or wait 'for: ready'")
+                outstanding.discard(service)
+            elif step.task is not None:
+                requests, left = self._machine_summary(step.task)
+                for service in sorted(outstanding & requests):
+                    self.refuse(f"R-P0B-05: task '{task.name}' step {label} (task '{step.task}'): it requests "
+                                f"'{service}' while this task's earlier request on '{service}' may not be waited for "
+                                f"done: the machine takes one request at a time -- add a 'wait: {{channel: {service}, "
+                                "for: done, timeout_ms: <ms>}' before the call")
+                outstanding |= left
+            elif step.repeat is not None:
+                body, before = step.repeat.body, set(outstanding)
+                first = set(outstanding)
+                self._machine_flow(task, body, label, requested, first, cycle)
+                after = first
+                if step.repeat.cycles != 1:
+                    after = set(first)
+                    self._machine_flow(task, body, label, requested, after, label)
+                if step.repeat.until is not None:         # it may end part-way through a cycle
+                    after |= before | self._requested_in(body)
+                outstanding.clear()
+                outstanding.update(after)
+            # a retry body or a fallback alternative holds no request / wait (R-P0B-06): nothing to follow
+
+    def _unwaited_requests(self) -> None:
+        """W-P0B-03: a request that no LATER step of its task waits for (done or ready), there or in a task called after
+        it."""
+        def waits(name: str, seen: set) -> set:
+            t = self._tasks.get(name)
+            if t is None or name in seen:
+                return set()
+            seen.add(name)
+            out = {s.wait.channel for _, s in walk_steps(t.steps) if s.wait is not None}
+            for _label, callee in t.calls():
+                out |= waits(callee, seen)
+            return out
+
+        for task in self.program.tasks:
+            steps = list(walk_steps(task.steps))
+            for k, (label, step) in enumerate(steps):
+                if step.process is None or step.process.kind is not EventKind.REQUEST:
+                    continue
+                service = step.process.channel
+                later = set()
+                for _l, s in steps[k + 1:]:
+                    if s.wait is not None:
+                        later.add(s.wait.channel)
+                    elif s.task is not None:
+                        later |= waits(s.task, {task.name})
+                if service not in later:
+                    self.warnings.append(
+                        f"W-P0B-03: {self._machine_where(task.name, label, step)}: nothing after it in the task waits "
+                        f"for machine service '{service}': its cycle runs, but no step knows whether it ended, and the "
+                        f"next request on '{service}' is refused while the machine is still busy (STATION_BUSY 313) -- "
+                        f"add 'wait: {{channel: {service}, for: done, timeout_ms: <ms>}}' after it")
+
+    def _wait_budget(self, steps, seen: set) -> int:
+        """W-P0B-01: the milliseconds a list of steps may spend in machine waits -- each wait's timeout, a bounded repeat
+        or a retry multiplied (an unbounded repeat counted once: the job's timeout bounds its cycles), every fallback
+        alternative, the tasks it calls (each once per call)."""
+        total = 0
+        for step in steps:
+            if step.wait is not None:
+                total += step.wait.timeout_ms
+            elif step.repeat is not None:
+                total += max(step.repeat.cycles, 1) * self._wait_budget(step.repeat.body, seen)
+            elif step.retry is not None:
+                total += step.retry.attempts * self._wait_budget(step.retry.body, seen)
+            elif step.fallback is not None:
+                total += sum(self._wait_budget(body, seen) for body in step.fallback.bodies)
+            elif step.task is not None and step.task in self._tasks and step.task not in seen:
+                total += self._wait_budget(self._tasks[step.task].steps, seen | {step.task})
+        return total
 
     # -- composition (vNext M3.7) --
     @property
@@ -2063,6 +2320,10 @@ class _Planner:
             elif kind == 'dwell':
                 ms = step.dwell.ms
                 out.append(StepPlan('dwell', f'<Sleep msec="{ms}"/>', dwell_ms=ms, label=index))
+            elif kind == 'wait':                     # TSA 8.10.0 (P0.b): the wait for a machine service
+                w = step.wait
+                out.append(StepPlan('wait', f'<WaitForMachine channel="{w.channel}" for="{w.for_.value}" '
+                                            f'timeout_ms="{w.timeout_ms}"/>', machine=w, label=index))
             elif kind == 'task':
                 out.append(self._plan_call(task, index, step.task, flow))
             elif kind in CONTROL_KINDS:
@@ -2641,6 +2902,9 @@ def program_overview(program: TaskProgram) -> str:
                  + (', '.join(p.name for p in program.paths) or 'none'))
     lines.append(f'Motion profiles ({len(program.motion_profiles)}): '
                  + (', '.join(program.motion_profiles) or 'none'))
+    if program.machine_services:                     # TSA 8.10.0 (P0.b): the logical machine services, by id
+        lines.append(f'Machine services ({len(program.machine_services)}): ' + ', '.join(
+            s.id + (f' -- {s.description}' if s.description else '') for s in program.machine_services))
     chosen = []
     if program.providers is not None:
         chosen = [f'{k}={getattr(program.providers, k).value}'
@@ -2686,10 +2950,15 @@ def _overview_steps(program: TaskProgram, steps, prefix: str, pad: int) -> List[
             lines.append(f'{sp}{n}  path  {step.path:<21} {shape}')
             for ev in (path.events if path is not None else []):
                 lines.append(f'{sp}       {ev.at.describe()}: {ev.describe().replace("`", "")}')
+        elif step.process is not None and step.process.kind is EventKind.REQUEST:     # TSA 8.10.0 (P0.b)
+            lines.append(f'{sp}{n}  request machine service {step.process.channel}')
         elif step.process is not None:
             lines.append(f'{sp}{n}  process {step.process.describe().replace("`", "")}')
         elif step.dwell is not None:
             lines.append(f'{sp}{n}  dwell {step.dwell.ms} ms')
+        elif step.wait is not None:                                                   # TSA 8.10.0 (P0.b)
+            w = step.wait
+            lines.append(f'{sp}{n}  wait for machine service {w.channel}: {w.for_.value}, at most {w.timeout_ms} ms')
         elif step.detect is not None:
             d = step.detect
             lines.append(f'{sp}{n}  detect {d.source.value} of {d.detector} -> {d.out} (keep {d.keep})')
@@ -2723,11 +2992,13 @@ def _overview_steps(program: TaskProgram, steps, prefix: str, pad: int) -> List[
         elif step.retry is not None:
             lines.append(f'{sp}{n}  retry, {step.retry.attempts} tries at most:')
             lines += _overview_steps(program, step.retry.body, label, pad + 4)
-        else:
+        elif step.fallback is not None:
             lines.append(f'{sp}{n}  fallback, the first alternative that succeeds:')
             for b, body in enumerate(step.fallback.bodies, start=1):
                 lines.append(f'{sp}      alternative {b}:')
                 lines += _overview_steps(program, body, f'{label}.{b}', pad + 8)
+        else:                                       # a kind this overview does not describe: named, never a crash
+            lines.append(f'{sp}{n}  {step.kind()}')
     return lines
 
 

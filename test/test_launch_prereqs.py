@@ -165,3 +165,13 @@ def test_the_other_tiers_import_no_ros_module_beyond_the_probe_s():
                               if isinstance(f, ast.FunctionDef)))
         # what a fixture or a test imports at run time, beyond TSA and this directory's helpers
         assert inner - helpers <= set(CL.PROBE_MODULES), (module, sorted(inner - helpers))
+
+
+def test_the_p0b_recorder_module_list_is_the_imports_it_makes():
+    """The P0.b launch tiers' recorder (p0b_machine_harness.Recorder) imports exactly what its fixture asks
+    launch_prereqs for: a new import there would fail a fresh machine after minutes of building, unnamed."""
+    import p0b_machine_harness as H
+    tree = ast.parse((HERE / 'p0b_machine_harness.py').read_text())
+    method = {f'{c.name}.{f.name}': f for c in tree.body if isinstance(c, ast.ClassDef)
+              for f in c.body if isinstance(f, ast.FunctionDef)}
+    assert sorted(H.RECORDER_MODULES) == sorted(_imports(method['Recorder.__init__']))
